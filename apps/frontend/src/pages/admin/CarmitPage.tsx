@@ -67,7 +67,7 @@ export const CarmitPage = () => {
   const { data: metrics } = useQuery({
     queryKey: ['carmit-kpi'],
     queryFn: async () => {
-      const response = await fetch('/api/admin/carmit/kpi-summary');
+      const response = await fetch('/admin/agent-matching/carmit/kpi-summary');
       if (!response.ok) throw new Error('Failed to fetch KPI');
       return response.json() as Promise<KPIMetrics>;
     },
@@ -81,7 +81,7 @@ export const CarmitPage = () => {
       const params = new URLSearchParams();
       if (filterAgent !== 'all') params.append('filter_agent', filterAgent);
       params.append('sort', sortBy);
-      const response = await fetch(`/api/admin/carmit/pending-review?${params}`);
+      const response = await fetch(`/admin/carmit/pending-review?${params}`);
       if (!response.ok) throw new Error('Failed to fetch matches');
       return response.json() as Promise<{ matches: Match[]; total: number }>;
     },
@@ -92,7 +92,7 @@ export const CarmitPage = () => {
   const { data: jobsData, isLoading: jobsLoading } = useQuery({
     queryKey: ['carmit-jobs-to-route'],
     queryFn: async () => {
-      const response = await fetch('/api/admin/carmit/jobs-to-route');
+      const response = await fetch('/admin/agent-matching/carmit/jobs-to-route');
       if (!response.ok) throw new Error('Failed to fetch jobs');
       return response.json() as Promise<{ jobs: Job[]; total: number }>;
     },
@@ -128,7 +128,7 @@ export const CarmitPage = () => {
   // Mutation to approve match
   const approveMutation = useMutation({
     mutationFn: async (matchId: string) => {
-      const response = await fetch(`/api/admin/carmit/review-match/${matchId}`, {
+      const response = await fetch(`/admin/carmit/review-match/${matchId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ force_approve: true }),
@@ -147,7 +147,7 @@ export const CarmitPage = () => {
   // Mutation to reject match
   const rejectMutation = useMutation({
     mutationFn: async (matchId: string) => {
-      const response = await fetch(`/api/admin/carmit/review-match/${matchId}`, {
+      const response = await fetch(`/admin/carmit/review-match/${matchId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -170,7 +170,7 @@ export const CarmitPage = () => {
   // Mutation to route job
   const routeJobMutation = useMutation({
     mutationFn: async (jobId: string) => {
-      const response = await fetch(`/api/admin/carmit/route-job/${jobId}`, {
+      const response = await fetch(`/admin/agent-matching/carmit/route-job/${jobId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });
