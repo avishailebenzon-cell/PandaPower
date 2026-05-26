@@ -1,0 +1,147 @@
+═══════════════════════════════════════════════════════════════════════════════
+                         PANDAPOWER CLOUD DEPLOYMENT
+                             Vercel + Render Setup
+═══════════════════════════════════════════════════════════════════════════════
+
+📋 CHECKLIST - DO THIS IN ORDER:
+
+☐ STEP 1: GitHub Setup (5 minutes)
+   1. Go to https://github.com/new
+   2. Create repository: "pandapower"
+   3. Copy the commands from GitHub
+   4. Run locally:
+      
+      git branch -M main
+      git remote add origin https://github.com/YOUR-USERNAME/pandapower.git
+      git push -u origin main
+   
+   ✅ Verify: Check your GitHub repo has the code
+
+☐ STEP 2: Deploy Frontend to Vercel (10 minutes)
+   1. Go to https://vercel.com
+   2. Sign in with GitHub
+   3. Import your "pandapower" repository
+   4. Choose: Framework = "Other"
+   5. Root directory = "apps/frontend"
+   6. Build command = "npm run build"
+   7. Output directory = "dist"
+   8. Click Deploy
+   
+   ✅ You'll get a URL: https://pandapower-frontend-xxx.vercel.app
+
+☐ STEP 3: Set Frontend Environment Variables (2 minutes)
+   1. Go to Vercel dashboard → pandapower-frontend project
+   2. Settings → Environment Variables
+   3. Add new variable:
+      Key: VITE_API_URL
+      Value: https://pandapower-backend.onrender.com
+   4. Redeploy
+
+☐ STEP 4: Deploy Backend to Render (25 minutes)
+   1. Go to https://render.com
+   2. Sign in with GitHub
+   3. Click "New" → "Web Service"
+   4. Select: pandapower repository
+   5. Configure:
+      - Name: pandapower-backend
+      - Root Directory: apps/backend
+      - Build Command: pip install -r requirements.txt
+      - Start Command: python -m uvicorn pandapower.main:app --host 0.0.0.0 --port $PORT
+      - Plan: Free (for now)
+   6. Add Environment Variables:
+      PYTHONPATH=/opt/render/project/apps/backend/src
+      SUPABASE_URL=<from your .env>
+      SUPABASE_KEY=<from your .env>
+      SUPABASE_JWT_SECRET=<from your .env>
+      ANTHROPIC_API_KEY=<from your .env>
+      RESEND_API_KEY=<from your .env>
+   7. Click "Create Web Service"
+   
+   ⏳ Wait 10-15 minutes for deployment
+   
+   ✅ You'll get a URL: https://pandapower-backend.onrender.com
+
+☐ STEP 5: Deploy Celery Worker (5 minutes)
+   1. In Render: New → Background Worker
+   2. Configure:
+      - Name: pandapower-worker
+      - Root Directory: apps/backend
+      - Build Command: pip install -r requirements.txt
+      - Start Command: celery -A pandapower.workers.celery_app worker -l info
+   3. Add same environment variables as Web Service
+   4. Click "Create Background Worker"
+   
+   ⏳ Wait 5 minutes
+
+☐ STEP 6: Deploy Celery Beat Scheduler (5 minutes)
+   1. In Render: New → Cron Job
+   2. Configure:
+      - Name: pandapower-beat
+      - Schedule: 0 * * * * (every hour)
+      - Root Directory: apps/backend
+      - Build Command: pip install -r requirements.txt
+      - Start Command: celery -A pandapower.workers.celery_app beat -l info
+   3. Add same environment variables
+   4. Click "Create Cron Job"
+   
+   ⏳ Wait 5 minutes
+
+═══════════════════════════════════════════════════════════════════════════════
+
+✅ VERIFICATION (After all deployments complete)
+
+Test Frontend:
+  curl -I https://pandapower-frontend-xxx.vercel.app
+  (Should show: HTTP/2 200)
+
+Test Backend Health:
+  curl https://pandapower-backend.onrender.com/health
+  (Should show: {"status":"ok","service":"pandapower-backend"})
+
+Test System Status:
+  curl https://pandapower-backend.onrender.com/admin/agent-matching/system-status
+  (Should show: Full system status with 7 agents)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+📊 EXPECTED DEPLOYMENT TIME: 45-60 minutes total
+
+⏱️ Timeline:
+  • GitHub setup: 5 min
+  • Vercel frontend: 10 min
+  • Vercel env vars: 2 min
+  • Render backend: 15 min
+  • Celery worker: 5 min
+  • Celery beat: 5 min
+  • Verification: 5 min
+  ────────────────────
+  Total: ~47 minutes
+
+═══════════════════════════════════════════════════════════════════════════════
+
+💡 IMPORTANT NOTES:
+
+1. Keep your .env file values safe - don't commit to git
+2. Frontend will auto-update when you push to GitHub (if using auto-deploy)
+3. Backend needs manual redeployment after git push
+   - In Render dashboard, click "Manual Deploy"
+4. Celery Beat runs hourly - you can adjust the schedule
+5. Free tier on Render gets 750 free hours/month (~30 hours/day)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🔗 USEFUL LINKS:
+
+GitHub: https://github.com/YOUR-USERNAME/pandapower
+Vercel: https://vercel.com/dashboard
+Render: https://dashboard.render.com
+Supabase: https://supabase.com/dashboard
+
+═══════════════════════════════════════════════════════════════════════════════
+
+❓ NEED HELP?
+
+See detailed guide at:
+  /Users/Avishai/Documents/Claude/Projects/PandaPower/VERCEL_RENDER_DEPLOYMENT.md
+
+═══════════════════════════════════════════════════════════════════════════════

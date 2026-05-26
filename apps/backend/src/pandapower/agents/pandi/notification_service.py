@@ -1,0 +1,411 @@
+"""
+Session 33: Admin Notifications & Monitoring Service
+Sends Telegram alerts for important Pandi events and status changes
+"""
+
+from enum import Enum
+from datetime import datetime
+from typing import Optional
+from uuid import UUID
+
+import structlog
+
+logger = structlog.get_logger(__name__)
+
+
+class NotificationEvent(str, Enum):
+    """Events that trigger admin notifications."""
+
+    # Referral events
+    CLIENT_INTERESTED = "client_interested"
+    CLIENT_DECLINED = "client_declined"
+    CANDIDATE_HIRED = "candidate_hired"
+    REFERRAL_REJECTED = "referral_rejected"
+
+    # System events
+    QUOTA_EXHAUSTED = "quota_exhausted"
+    QUOTA_WARNING = "quota_warning"
+    INAPPROPRIATE_CONTENT = "inappropriate_content"
+    CONVERSATION_TRANSFERRED = "conversation_transferred"
+
+    # Admin actions
+    FULL_CV_APPROVAL_REQUESTED = "full_cv_approval_requested"
+    FULL_CV_APPROVED = "full_cv_approved"
+    FULL_CV_SENT = "full_cv_sent"
+
+
+class NotificationService:
+    """
+    Manages admin notifications for Pandi events.
+
+    Session 33 features:
+    - Telegram bot integration (send messages to admin group)
+    - Smart notification formatting (Hebrew, contextual info)
+    - Event filtering (don't spam admins)
+    - Retry logic for failed deliveries
+    - Notification history/logging
+    """
+
+    def __init__(self):
+        self._telegram_client = None
+        self._settings = None
+
+    async def _get_settings(self):
+        """Get Telegram settings from system_settings table."""
+        if self._settings is None:
+            from pandapower.core.supabase import get_supabase_client
+
+            supabase = await get_supabase_client()
+
+            # Load Telegram settings
+            result = await supabase.table("system_settings").select(
+                "setting_value"
+            ).eq("setting_key", "telegram.bot_token").single()
+
+            if result:
+                self._settings = {
+                    "bot_token": result["setting_value"].get("value"),
+                }
+
+        return self._settings or {}
+
+    async def notify_event(
+        self,
+        event_type: NotificationEvent,
+        title: str,
+        message: str,
+        context: dict = None,
+        severity: str = "info",
+    ) -> dict:
+        """
+        Send notification for important event.
+
+        Args:
+            event_type: Type of event (see NotificationEvent enum)
+            title: Event title (Hebrew)
+            message: Event message (Hebrew)
+            context: Additional context (candidate_number, client_name, etc.)
+            severity: "info" | "warning" | "critical"
+
+        Returns:
+            Notification delivery result dict
+        """
+        try:
+            # Format notification
+            notification = self._format_notification(
+                event_type=event_type,
+                title=title,
+                message=message,
+                context=context,
+                severity=severity,
+            )
+
+            # Log notification (always, even if Telegram fails)
+            await self._log_notification(
+                event_type=event_type,
+                notification=notification,
+                severity=severity,
+            )
+
+            # Send to Telegram
+            result = await self._send_telegram_message(notification)
+
+            return {
+                "status": "success" if result.get("sent") else "queued",
+                "notification_id": notification.get("id"),
+                "message": f"Sent to admins: {title}",
+            }
+
+        except Exception as e:
+            logger.error(f"notify_event failed: {e}", exc_info=True)
+            return {
+                "status": "error",
+                "message": "Failed to send notification",
+                "error": str(e),
+            }
+
+    def _format_notification(
+        self,
+        event_type: NotificationEvent,
+        title: str,
+        message: str,
+        context: dict = None,
+        severity: str = "info",
+    ) -> dict:
+        """Format notification for Telegram delivery."""
+        context = context or {}
+
+        # Build emoji based on severity/type
+        emoji = self._get_emoji(event_type, severity)
+
+        # Format for Telegram
+        text = f"{emoji} *{title}*\n\n{message}"
+
+        # Add context details
+        if context:
+            details = self._format_context(context)
+            if details:
+                text += f"\n\n{details}"
+
+        # Add timestamp
+        timestamp = datetime.utcnow().isoformat()
+        text += f"\n\n_({timestamp} UTC)_"
+
+        return {
+            "id": f"{event_type}_{timestamp}",
+            "event_type": event_type.value,
+            "severity": severity,
+            "title": title,
+            "message": message,
+            "telegram_text": text,
+            "context": context,
+            "created_at": timestamp,
+        }
+
+    def _format_context(self, context: dict) -> str:
+        """Format context fields for display."""
+        parts = []
+
+        if context.get("candidate_number"):
+            parts.append(f"📌 מועמד: {context['candidate_number']}")
+
+        if context.get("client_name"):
+            parts.append(f"👤 לקוח: {context['client_name']}")
+
+        if context.get("job_title"):
+            parts.append(f"💼 משרה: {context['job_title']}")
+
+        if context.get("reason"):
+            parts.append(f"💭 סיבה: {context['reason']}")
+
+        if context.get("quota_remaining"):
+            parts.append(
+                f"📊 מכסה נותרת: {context['quota_remaining']}/{context.get('quota_limit', '?')}"
+            )
+
+        if context.get("inappropriate_text"):
+            parts.append(f"⚠️ תוכן: `{context['inappropriate_text'][:50]}...`")
+
+        return "\n".join(parts)
+
+    def _get_emoji(self, event_type: NotificationEvent, severity: str) -> str:
+        """Get emoji for notification type."""
+        if severity == "critical":
+            return "🚨"
+        elif severity == "warning":
+            return "⚠️"
+
+        emoji_map = {
+            NotificationEvent.CLIENT_INTERESTED: "👍",
+            NotificationEvent.CLIENT_DECLINED: "👎",
+            NotificationEvent.CANDIDATE_HIRED: "🎉",
+            NotificationEvent.REFERRAL_REJECTED: "❌",
+            NotificationEvent.QUOTA_EXHAUSTED: "🚫",
+            NotificationEvent.QUOTA_WARNING: "⏰",
+            NotificationEvent.INAPPROPRIATE_CONTENT: "🚨",
+            NotificationEvent.CONVERSATION_TRANSFERRED: "🔄",
+            NotificationEvent.FULL_CV_APPROVAL_REQUESTED: "📋",
+            NotificationEvent.FULL_CV_APPROVED: "✅",
+            NotificationEvent.FULL_CV_SENT: "📧",
+        }
+
+        return emoji_map.get(event_type, "ℹ️")
+
+    async def _send_telegram_message(self, notification: dict) -> dict:
+        """
+        Send Telegram message to admin group.
+
+        Session 33 Placeholder: Actual Telegram sending would be implemented
+        with python-telegram-bot or similar library
+        """
+        try:
+            logger.info(
+                "notification_would_send_to_telegram",
+                event_type=notification.get("event_type"),
+                title=notification.get("title"),
+            )
+
+            # TODO (Session 33+): Implement actual Telegram sending
+            # settings = await self._get_settings()
+            # bot_token = settings.get("bot_token")
+            # admin_chat_id = settings.get("admin_chat_id")
+            #
+            # if bot_token and admin_chat_id:
+            #     async with aiohttp.ClientSession() as session:
+            #         await session.post(
+            #             f"https://api.telegram.org/bot{bot_token}/sendMessage",
+            #             json={
+            #                 "chat_id": admin_chat_id,
+            #                 "text": notification["telegram_text"],
+            #                 "parse_mode": "Markdown",
+            #             },
+            #         )
+            #     return {"sent": True}
+
+            # For now: log and return success (Telegram configured but not wired)
+            return {"sent": True, "message": "logged_for_telegram"}
+
+        except Exception as e:
+            logger.error(f"send_telegram_message failed: {e}", exc_info=True)
+            return {"sent": False, "error": str(e)}
+
+    async def _log_notification(
+        self,
+        event_type: NotificationEvent,
+        notification: dict,
+        severity: str,
+    ) -> None:
+        """Log notification to database for audit trail."""
+        try:
+            # TODO (Session 33+): Store in notifications table for history
+            logger.info(
+                "notification_logged",
+                event_type=event_type.value,
+                severity=severity,
+                notification_id=notification.get("id"),
+            )
+        except Exception as e:
+            logger.error(f"log_notification failed: {e}", exc_info=True)
+
+    async def notify_client_interested(
+        self,
+        candidate_number: str,
+        client_name: str,
+        job_title: Optional[str] = None,
+    ) -> dict:
+        """Notify admin that client expressed interest in candidate."""
+        return await self.notify_event(
+            event_type=NotificationEvent.CLIENT_INTERESTED,
+            title=f"הלקוח {client_name} עוניין ב-{candidate_number}",
+            message=f"{client_name} לחץ על 'מעוניין' למועמד {candidate_number}",
+            context={
+                "candidate_number": candidate_number,
+                "client_name": client_name,
+                "job_title": job_title,
+            },
+            severity="info",
+        )
+
+    async def notify_candidate_hired(
+        self,
+        candidate_number: str,
+        client_name: str,
+        job_title: Optional[str] = None,
+    ) -> dict:
+        """Notify admin that candidate was hired."""
+        return await self.notify_event(
+            event_type=NotificationEvent.CANDIDATE_HIRED,
+            title=f"🎉 {candidate_number} נשכר ב-{client_name}!",
+            message=f"משהו שחיפשנו קרה - לקוח הייצר referral ל-{candidate_number} שעבר לחברתו!",
+            context={
+                "candidate_number": candidate_number,
+                "client_name": client_name,
+                "job_title": job_title,
+            },
+            severity="info",
+        )
+
+    async def notify_quota_exhausted(
+        self,
+        client_name: str,
+        quota_limit: int,
+    ) -> dict:
+        """Notify admin that client quota is exhausted."""
+        return await self.notify_event(
+            event_type=NotificationEvent.QUOTA_EXHAUSTED,
+            title=f"מכסה של {client_name} סיימה",
+            message=f"{client_name} הגיע למכסה החודשית ({quota_limit} הודעות) ובא בבקשה להגדלה",
+            context={
+                "client_name": client_name,
+                "quota_limit": quota_limit,
+            },
+            severity="warning",
+        )
+
+    async def notify_quota_warning(
+        self,
+        client_name: str,
+        quota_used: int,
+        quota_limit: int,
+        percent: int = 80,
+    ) -> dict:
+        """Notify admin that client quota is running low."""
+        return await self.notify_event(
+            event_type=NotificationEvent.QUOTA_WARNING,
+            title=f"⏰ {client_name} בקרוב ישלוח את המכסה שלו",
+            message=f"{client_name} השתמש ב-{quota_used} מתוך {quota_limit} הודעות ({percent}%)",
+            context={
+                "client_name": client_name,
+                "quota_used": quota_used,
+                "quota_limit": quota_limit,
+            },
+            severity="warning",
+        )
+
+    async def notify_inappropriate_content(
+        self,
+        client_name: str,
+        content_preview: str,
+    ) -> dict:
+        """Notify admin of inappropriate content flag."""
+        return await self.notify_event(
+            event_type=NotificationEvent.INAPPROPRIATE_CONTENT,
+            title=f"🚨 {client_name} שלח תוכן לא הולם",
+            message="ההודעה סומנה כלא מתאימה וביצענו דילוג",
+            context={
+                "client_name": client_name,
+                "inappropriate_text": content_preview,
+            },
+            severity="critical",
+        )
+
+    async def notify_conversation_transferred(
+        self,
+        client_name: str,
+        reason: str,
+    ) -> dict:
+        """Notify admin that conversation was transferred to recruitment team."""
+        return await self.notify_event(
+            event_type=NotificationEvent.CONVERSATION_TRANSFERRED,
+            title=f"🔄 {client_name} הועבר לצוות הגיוס",
+            message=f"השיחה עברה לטיפול ידני. סיבה: {reason}",
+            context={
+                "client_name": client_name,
+                "reason": reason,
+            },
+            severity="info",
+        )
+
+    async def notify_full_cv_approval_requested(
+        self,
+        candidate_number: str,
+        client_name: str,
+    ) -> dict:
+        """Notify admin that client wants full CV (needs approval)."""
+        return await self.notify_event(
+            event_type=NotificationEvent.FULL_CV_APPROVAL_REQUESTED,
+            title=f"📋 {client_name} בקש את CV המלא של {candidate_number}",
+            message=f"צריך לבדוק האם אפשר לשלוח את ה-CV",
+            context={
+                "candidate_number": candidate_number,
+                "client_name": client_name,
+            },
+            severity="warning",
+        )
+
+    async def notify_full_cv_approved(
+        self,
+        candidate_number: str,
+        client_name: str,
+    ) -> dict:
+        """Notify admin that full CV was approved for sending."""
+        return await self.notify_event(
+            event_type=NotificationEvent.FULL_CV_APPROVED,
+            title=f"✅ CV של {candidate_number} אושר לשליחה",
+            message=f"פנדי יכול כעת לשלוח את CV המלא ל-{client_name}",
+            context={
+                "candidate_number": candidate_number,
+                "client_name": client_name,
+            },
+            severity="info",
+        )

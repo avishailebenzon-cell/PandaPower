@@ -1,0 +1,55 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║                         SCHEMA FIX REQUIRED                                ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+ISSUE FOUND:
+The contacts table in Supabase is missing required columns for Pipedrive sync.
+
+Current columns in database:
+  - id, name, email, phone, organization_id, created_at
+  - pipedrive_person_id, pipedrive_org_id
+
+Missing columns (preventing sync):
+  ✗ contact_status (required for sync)
+  ✗ professional_domain
+  ✗ security_clearance_level  
+  ✗ pipedrive_last_synced_at
+  ✗ updated_at
+  ✗ Column name needs to be: "full_name" (currently "name")
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+SOLUTION - Execute this SQL in Supabase Console:
+
+1. Go to https://app.supabase.com
+2. Log in and select the PandaPower project
+3. Navigate to SQL Editor → New Query
+4. Paste the following SQL and click Run:
+
+---BEGIN SQL---
+ALTER TABLE contacts RENAME COLUMN IF EXISTS name TO full_name;
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS contact_status TEXT;
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS professional_domain TEXT;
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS security_clearance_level TEXT;
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS pipedrive_last_synced_at TIMESTAMPTZ;
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+CREATE INDEX IF NOT EXISTS idx_contacts_status ON contacts(contact_status);
+CREATE INDEX IF NOT EXISTS idx_contacts_domain ON contacts(professional_domain);
+CREATE INDEX IF NOT EXISTS idx_contacts_synced ON contacts(pipedrive_last_synced_at);
+---END SQL---
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+AFTER FIXING:
+
+The Pipedrive sync will be able to:
+✓ Write contacts with contact_status (employee/client/potential_client)
+✓ Track sync timestamps in pipedrive_last_synced_at
+✓ Store professional domain and security clearance info
+✓ Maintain update tracking with updated_at
+
+Then run the sync again:
+  curl -X POST http://localhost:8000/admin/pipedrive/sync-now/persons
+
+The backend code is already prepared for these columns.

@@ -1,0 +1,419 @@
+import logging
+from datetime import datetime
+from typing import Any, Optional
+
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
+
+# Response models
+class GateResult(BaseModel):
+    passed: bool
+    reason: Optional[str] = None
+
+
+class MatchReviewResult(BaseModel):
+    match_id: str
+    new_state: str
+    decision: str  # 'approved' or 'rejected'
+    gate_results: dict[str, GateResult]
+    reasoning: str
+    timestamp: str
+
+
+class JobRoutingResult(BaseModel):
+    job_id: str
+    assigned_agent_code: str
+    assigned_agent_name: str
+    confidence: float
+    reasoning: str
+    timestamp: str
+
+
+class PendingMatchResponse(BaseModel):
+    id: str
+    candidate_name: str
+    job_title: str
+    match_score: float
+    agent_code: str
+    created_at: str
+
+
+class RoutingDecision(BaseModel):
+    job_id: str
+    assigned_agent_code: str
+    assigned_agent_name: str
+    confidence: float
+    reasoning: str
+    timestamp: str
+
+
+class ReviewHistoryEntry(BaseModel):
+    match_id: str
+    decision: str  # 'approved' or 'rejected'
+    reasoning: str
+    timestamp: str
+
+
+# Request models
+class OverrideRoutingRequest(BaseModel):
+    override_agent_code: Optional[str] = None
+
+
+class OverrideReviewRequest(BaseModel):
+    force_approve: Optional[bool] = None
+    override_reason: Optional[str] = None
+
+
+# Create router
+router = APIRouter(prefix="/admin/carmit", tags=["admin", "carmit"])
+
+
+def get_supabase():
+    """Get Supabase client from dependency injection."""
+    # This will be injected by FastAPI dependency system
+    # Import here to avoid circular imports
+    from pandapower.core.supabase_manager import get_supabase_client
+    return get_supabase_client()
+
+
+def get_claude():
+    """Get Claude client from dependency injection."""
+    from pandapower.integrations.claude_api import AnthropicClient
+    from pandapower.core.config import get_settings
+
+    settings = get_settings()
+    return AnthropicClient(settings.ANTHROPIC_API_KEY)
+
+
+def get_pipedrive():
+    """Get Pipedrive client from dependency injection."""
+    from pandapower.integrations.pipedrive import PipedriveClient
+    from pandapower.core.config import get_settings
+
+    settings = get_settings()
+    return PipedriveClient(settings.PIPEDRIVE_API_TOKEN, settings.PIPEDRIVE_API_DOMAIN)
+
+
+# ==================== Endpoints ====================
+
+@router.post("/route-job/{job_id}", response_model=JobRoutingResult)
+async def route_job_manual(
+    job_id: str,
+    request: OverrideRoutingRequest = None,
+):
+    """Manually trigger job routing for a specific job.
+
+    Args:
+        job_id: Job ID to route
+        request: Optional override agent code
+
+    Returns:
+        Routing decision details
+    """
+    try:
+        logger.info(f"Manual job routing triggered for job_id={job_id}")
+
+        from pandapower.workers.carmit import CarmitOrchestrator
+        from pandapower.core.config import get_settings
+
+        supabase = get_supabase()
+        claude = get_claude()
+        pipedrive = get_pipedrive()
+        settings = get_settings()
+
+        # Create orchestrator instance
+        orchestrator = CarmitOrchestrator(
+            supabase_client=supabase,
+            anthropic_client=claude,
+            pipedrive_client=pipedrive,
+            settings=settings,
+        )
+
+        # Route job
+        result = await orchestrator.route_job_to_agent(job_id)
+
+        # Handle override if provided
+        if request and request.override_agent_code:
+            logger.info(f"Overriding agent assignment to {request.override_agent_code}")
+            result["assigned_agent_code"] = request.override_agent_code
+            result["assigned_agent_name"] = orchestrator.agent_specialties.get(
+                request.override_agent_code, {}
+            ).get("name", "Unknown")
+            # Update job in database
+            await supabase.table("jobs").update({
+                "assigned_agent_code": request.override_agent_code,
+            }).eq("id", job_id).execute()
+
+        return JobRoutingResult(**result)
+
+    except Exception as e:
+        logger.error(f"Manual job routing failed: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Job routing failed: {str(e)}")
+
+
+@router.post("/review-match/{match_id}", response_model=MatchReviewResult)
+async def review_match_manual(
+    match_id: str,
+    request: OverrideReviewRequest = None,
+):
+    """Manually trigger match review for a specific match.
+
+    Args:
+        match_id: Match ID to review
+        request: Optional override force_approve or custom reason
+
+    Returns:
+        Match review results with gate outcomes
+    """
+    try:
+        logger.info(f"Manual match review triggered for match_id={match_id}")
+
+        from pandapower.workers.carmit import CarmitOrchestrator
+        from pandapower.core.config import get_settings
+
+        supabase = get_supabase()
+        claude = get_claude()
+        pipedrive = get_pipedrive()
+        settings = get_settings()
+
+        # Create orchestrator instance
+        orchestrator = CarmitOrchestrator(
+            supabase_client=supabase,
+            anthropic_client=claude,
+            pipedrive_client=pipedrive,
+            settings=settings,
+        )
+
+        # Review match
+        result = await orchestrator.review_match(match_id)
+
+        # Handle override if provided
+        if request and request.force_approve is not None:
+            if request.force_approve:
+                logger.info(f"Forcing match approval for {match_id}")
+                result["new_state"] = "carmit_approved"
+                result["decision"] = "approved"
+                result["reasoning"] = "Manually approved by admin: " + (
+                    request.override_reason or "No reason provided"
+                )
+                # Update match in database
+                await supabase.table("matches").update({
+                    "current_state": "carmit_approved",
+                }).eq("id", match_id).execute()
+            else:
+                logger.info(f"Forcing match rejection for {match_id}")
+                result["new_state"] = "carmit_rejected"
+                result["decision"] = "rejected"
+                result["reasoning"] = "Manually rejected by admin: " + (
+                    request.override_reason or "No reason provided"
+                )
+                # Update match in database
+                await supabase.table("matches").update({
+                    "current_state": "carmit_rejected",
+                }).eq("id", match_id).execute()
+
+        return MatchReviewResult(**result)
+
+    except Exception as e:
+        logger.error(f"Manual match review failed: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Match review failed: {str(e)}")
+
+
+@router.get("/pending-review")
+async def get_pending_review(
+    filter_agent: Optional[str] = Query(None),
+    filter_state: Optional[str] = Query("found"),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    """Get matches awaiting Carmit review.
+
+    Args:
+        filter_agent: Optional agent code to filter by
+        filter_state: Match state to filter by (default: 'found')
+        limit: Number of matches to return
+        offset: Pagination offset
+
+    Returns:
+        List of pending matches with metadata
+    """
+    try:
+        supabase = get_supabase()
+
+        # Build query
+        query = supabase.table("matches").select(
+            "id, candidates(name), jobs(job_title), match_score, matched_by_agent_code, created_at"
+        ).eq("current_state", filter_state or "found")
+
+        if filter_agent:
+            query = query.eq("matched_by_agent_code", filter_agent)
+
+        # Execute query with pagination
+        response = query.range(offset, offset + limit - 1).execute()
+
+        # Format response
+        matches = []
+        for match in response.data or []:
+            matches.append({
+                "id": match["id"],
+                "candidate_name": match["candidates"].get("name", "Unknown") if match.get("candidates") else "Unknown",
+                "job_title": match["jobs"].get("title", "Unknown") if match.get("jobs") else "Unknown",
+                "match_score": match.get("match_score", 0.0),
+                "agent_code": match.get("matched_by_agent_code", ""),
+                "created_at": match.get("created_at", ""),
+            })
+
+        return {
+            "matches": matches,
+            "total": len(matches),
+            "offset": offset,
+            "limit": limit,
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get pending matches: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch pending matches: {str(e)}")
+
+
+@router.get("/routing-history")
+async def get_routing_history(
+    agent_code: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    """Get audit trail of job routing decisions.
+
+    Args:
+        agent_code: Optional agent code to filter by
+        limit: Number of decisions to return
+        offset: Pagination offset
+
+    Returns:
+        List of routing decisions
+    """
+    try:
+        supabase = get_supabase()
+
+        # Query agent_logs for routing decisions
+        query = supabase.table("agent_logs").select("*").eq(
+            "log_type", "job_routing"
+        ).order("created_at", desc=True)
+
+        if agent_code:
+            query = query.eq("agent_code", agent_code)
+
+        # Execute query with pagination
+        response = query.range(offset, offset + limit - 1).execute()
+
+        # Format response
+        decisions = []
+        for log in response.data or []:
+            details = log.get("details", {})
+            decisions.append({
+                "job_id": log.get("job_id", ""),
+                "assigned_agent_code": log.get("agent_code", ""),
+                "confidence": details.get("confidence", 0.0),
+                "reasoning": details.get("reasoning", ""),
+                "timestamp": details.get("timestamp") or log.get("created_at", ""),
+            })
+
+        return {
+            "decisions": decisions,
+            "total": len(decisions),
+            "offset": offset,
+            "limit": limit,
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get routing history: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch routing history: {str(e)}")
+
+
+@router.get("/review-history")
+async def get_review_history(
+    state: Optional[str] = Query(None),  # 'approved' or 'rejected'
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    """Get audit trail of match review decisions.
+
+    Args:
+        state: Filter by decision state ('approved' or 'rejected')
+        limit: Number of reviews to return
+        offset: Pagination offset
+
+    Returns:
+        List of match review decisions
+    """
+    try:
+        supabase = get_supabase()
+
+        # Query match_state_history for review decisions
+        query = supabase.table("match_state_history").select("*").in_(
+            "to_state", ["carmit_approved", "carmit_rejected"]
+        ).order("created_at", desc=True)
+
+        # Execute query with pagination
+        response = query.range(offset, offset + limit - 1).execute()
+
+        # Format response
+        reviews = []
+        for entry in response.data or []:
+            details = entry.get("details", {})
+            to_state = entry.get("to_state", "")
+
+            # Filter by state if specified
+            if state == "approved" and to_state != "carmit_approved":
+                continue
+            if state == "rejected" and to_state != "carmit_rejected":
+                continue
+
+            reviews.append({
+                "match_id": entry.get("match_id", ""),
+                "decision": "approved" if to_state == "carmit_approved" else "rejected",
+                "reasoning": details.get("decision_reasoning", ""),
+                "timestamp": details.get("timestamp") or entry.get("created_at", ""),
+            })
+
+        return {
+            "reviews": reviews,
+            "total": len(reviews),
+            "offset": offset,
+            "limit": limit,
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get review history: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch review history: {str(e)}")
+
+
+@router.get("/status")
+async def get_carmit_status():
+    """Get Carmit orchestrator status and stats.
+
+    Returns:
+        Current status and metrics
+    """
+    try:
+        supabase = get_supabase()
+
+        # Get counts
+        pending_matches_response = supabase.table("matches").select("id").eq("current_state", "found").execute()
+        approved_response = supabase.table("matches").select("id").eq("current_state", "carmit_approved").execute()
+        rejected_response = supabase.table("matches").select("id").eq("current_state", "carmit_rejected").execute()
+        routed_jobs_response = supabase.table("jobs").select("id").eq("status", "assigned_agent").execute()
+
+        return {
+            "status": "operational",
+            "pending_review_count": len(pending_matches_response.data or []),
+            "approved_count": len(approved_response.data or []),
+            "rejected_count": len(rejected_response.data or []),
+            "routed_jobs_count": len(routed_jobs_response.data or []),
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get Carmit status: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch status: {str(e)}")

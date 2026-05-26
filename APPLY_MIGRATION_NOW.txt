@@ -1,0 +1,121 @@
+================================================================================
+CRITICAL: Apply This SQL Migration to Supabase BEFORE Testing Override Feature
+================================================================================
+
+⏱️  TAKES: < 5 minutes
+📍 WHERE: Supabase SQL Editor
+🔗 URL: https://app.supabase.com
+
+STEP-BY-STEP INSTRUCTIONS:
+==========================
+
+1. Open Supabase Console: https://app.supabase.com
+
+2. Select your PandaPower project
+
+3. In the left sidebar, click: SQL Editor
+
+4. Click: New Query (top left, green button)
+
+5. Clear any existing text in the editor
+
+6. COPY and PASTE the SQL below (everything between the dashed lines):
+
+================================================================================
+
+-- Migration: Add RPC function for overriding job assignments
+-- Date: 2026-05-25
+-- Description: Creates a stored procedure to handle job assignment overrides,
+-- bypassing schema cache issues
+
+-- Create the function to override job assignment
+CREATE OR REPLACE FUNCTION override_job_assignment(
+    p_job_id UUID,
+    p_new_agent_code TEXT,
+    p_updated_at TIMESTAMPTZ DEFAULT NOW()
+) RETURNS TABLE (
+    success BOOLEAN,
+    message TEXT,
+    old_agent_code TEXT,
+    new_agent_code TEXT
+) AS $$
+DECLARE
+    v_old_agent_code TEXT;
+BEGIN
+    -- Get the current agent code before updating
+    SELECT assigned_agent_code INTO v_old_agent_code
+    FROM jobs
+    WHERE id = p_job_id;
+
+    -- Check if job exists
+    IF v_old_agent_code IS NULL AND NOT EXISTS (SELECT 1 FROM jobs WHERE id = p_job_id) THEN
+        RETURN QUERY SELECT false, 'Job not found'::TEXT, NULL::TEXT, p_new_agent_code;
+        RETURN;
+    END IF;
+
+    -- Update the job assignment
+    UPDATE jobs
+    SET assigned_agent_code = p_new_agent_code,
+        updated_at = p_updated_at
+    WHERE id = p_job_id;
+
+    -- Return success
+    RETURN QUERY SELECT true, 'Job assignment updated successfully'::TEXT, v_old_agent_code, p_new_agent_code;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Add comment for documentation
+COMMENT ON FUNCTION override_job_assignment(UUID, TEXT, TIMESTAMPTZ) IS
+'Updates job assignment to a new agent. Bypasses schema cache issues by using stored procedure.
+Returns: success (boolean), message (text), old_agent_code (text), new_agent_code (text)';
+
+================================================================================
+
+7. Click: RUN button (top right, blue button)
+
+8. You should see: "Success. No rows returned" (or similar success message)
+
+9. That's it! The migration is applied.
+
+VERIFY IT WORKED:
+=================
+
+Run this simple query to verify the function was created:
+
+    \df override_job_assignment
+
+You should see:
+    override_job_assignment | public | function | text |
+
+NEXT STEPS:
+===========
+
+1. Restart your backend server
+2. Go to Carmit page: http://localhost:5173/admin/carmit
+3. Click "⚙️ עדכן" button on any job
+4. Select a new agent and test the override feature
+
+TROUBLESHOOTING:
+================
+
+ERROR: "function "override_job_assignment" already exists"
+→ This is OK! It means the migration was already applied.
+→ Just close the error and continue.
+
+ERROR: "syntax error in SQL"
+→ Make sure you copied the ENTIRE SQL block above
+→ No extra characters at the beginning or end
+→ Try copying again more carefully
+
+NEED HELP?
+==========
+
+Check these files:
+- OVERRIDE_FEATURE_COMPLETE.md - Full feature documentation
+- MIGRATION_INSTRUCTIONS.md - Detailed migration guide
+
+Questions? Check the backend logs:
+    docker logs backend (if using Docker)
+    or journalctl -u pandapower (if using systemd)
+
+================================================================================

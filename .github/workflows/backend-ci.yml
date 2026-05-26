@@ -1,0 +1,43 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/backend/**'
+      - '.github/workflows/backend-ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/backend/**'
+      - '.github/workflows/backend-ci.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        working-directory: apps/backend
+        run: uv sync
+
+      - name: Lint with ruff
+        working-directory: apps/backend
+        run: uv run ruff check .
+
+      - name: Type check with mypy
+        working-directory: apps/backend
+        run: uv run mypy src
+
+      - name: Run tests
+        working-directory: apps/backend
+        run: uv run pytest

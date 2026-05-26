@@ -1,0 +1,14 @@
+.git
+.gitignore
+README.md
+node_modules
+.next
+.venv
+__pycache__
+*.pyc
+.env.local
+.env.*.local
+apps/backend
+apps/docs
+.claude
+*.db

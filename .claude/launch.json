@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dev-server",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd apps/frontend && npm run dev -- --host"],
+      "port": 5173
+    }
+  ]
+}
