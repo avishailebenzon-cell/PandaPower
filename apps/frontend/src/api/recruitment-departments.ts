@@ -44,6 +44,12 @@ export interface AssignedJob {
   found_count: number;
   organization_name?: string;
   contact_person_name?: string;
+  // ISO timestamps
+  created_at?: string;        // תאריך הגעת המשרה
+  assigned_at?: string;       // תאריך ההקצאה (≈ jobs.updated_at — best proxy)
+  deadline?: string;          // דדליין (מ-Pipedrive)
+  pipedrive_org_id?: number;
+  pipedrive_person_id?: number;
 }
 
 export interface DepartmentStats {

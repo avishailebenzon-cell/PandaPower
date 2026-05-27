@@ -30,6 +30,25 @@ interface DepartmentJob {
   approvedCount: number;
 }
 
+/** Format an ISO timestamp as a short Hebrew date (he-IL: dd.mm.yyyy). */
+function formatDateHe(iso?: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return null;
+  return d.toLocaleDateString("he-IL", { day: "2-digit", month: "2-digit", year: "numeric" });
+}
+
+/** Days remaining until a deadline. Negative = overdue. null = no deadline. */
+function daysUntil(iso?: string | null): number | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  d.setHours(0, 0, 0, 0);
+  return Math.round((d.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+}
+
 export const RecruitmentDepartment: React.FC = () => {
   const { departmentCode } = useParams<{ departmentCode: string }>();
   const [activeTab, setActiveTab] = useState<TabType>('active');
@@ -356,40 +375,91 @@ export const RecruitmentDepartment: React.FC = () => {
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {assignedJobsData.map((job) => (
-                <div
-                  key={job.id}
-                  className={`rounded-lg p-4 border-l-4 cursor-pointer transition ${
-                    filterJob === job.id
-                      ? 'bg-blue-900 border-blue-400 shadow-lg'
-                      : 'bg-gray-700 border-blue-500 hover:bg-gray-650'
-                  }`}
-                  onClick={() => setFilterJob(filterJob === job.id ? 'all' : job.id)}
-                >
-                  <div className="flex items-start justify-between mb-2">
-                    <div className={`text-xs font-bold px-2 py-1 rounded ${
-                      job.priority === 1 ? 'bg-red-600 text-white' :
-                      job.priority === 2 ? 'bg-orange-600 text-white' :
-                      job.priority === 3 ? 'bg-yellow-600 text-white' :
-                      'bg-gray-600 text-gray-300'
-                    }`}>
-                      Priority {job.priority}
+              {assignedJobsData.map((job) => {
+                const createdLabel = formatDateHe(job.created_at);
+                const assignedLabel = formatDateHe(job.assigned_at);
+                const deadlineLabel = formatDateHe(job.deadline);
+                const dl = daysUntil(job.deadline);
+                // Color the deadline badge by urgency
+                const deadlineCls =
+                  dl === null
+                    ? ''
+                    : dl < 0
+                    ? 'bg-red-900 text-red-200 border-red-700'
+                    : dl <= 7
+                    ? 'bg-yellow-900 text-yellow-200 border-yellow-700'
+                    : 'bg-emerald-900 text-emerald-200 border-emerald-700';
+
+                return (
+                  <div
+                    key={job.id}
+                    className={`rounded-lg p-4 border-l-4 cursor-pointer transition ${
+                      filterJob === job.id
+                        ? 'bg-blue-900 border-blue-400 shadow-lg'
+                        : 'bg-gray-700 border-blue-500 hover:bg-gray-650'
+                    }`}
+                    onClick={() => setFilterJob(filterJob === job.id ? 'all' : job.id)}
+                  >
+                    {/* Header row: priority + deadline */}
+                    <div className="flex items-start justify-between mb-2 gap-2">
+                      <div
+                        className={`text-xs font-bold px-2 py-1 rounded ${
+                          job.priority === 1
+                            ? 'bg-red-600 text-white'
+                            : job.priority === 2
+                            ? 'bg-orange-600 text-white'
+                            : job.priority === 3
+                            ? 'bg-yellow-600 text-white'
+                            : 'bg-gray-600 text-gray-300'
+                        }`}
+                      >
+                        Priority {job.priority}
+                      </div>
+                      {deadlineLabel && (
+                        <div
+                          className={`text-xs px-2 py-1 rounded border ${deadlineCls}`}
+                          title={dl !== null ? (dl < 0 ? `עברו ${Math.abs(dl)} ימים` : `${dl} ימים נותרו`) : ''}
+                        >
+                          ⏳ דדליין: {deadlineLabel}
+                          {dl !== null && (
+                            <span className="opacity-75 mr-1">
+                              ({dl < 0 ? `איחור ${Math.abs(dl)}י׳` : `עוד ${dl}י׳`})
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Title */}
+                    <h3 className="font-bold text-white text-right">{job.job_title}</h3>
+
+                    {/* Org + contact */}
+                    <div className="mt-2 space-y-0.5">
+                      {job.organization_name && (
+                        <p className="text-sm text-gray-300 text-right">🏢 {job.organization_name}</p>
+                      )}
+                      {job.contact_person_name && (
+                        <p className="text-sm text-gray-300 text-right">👤 {job.contact_person_name}</p>
+                      )}
+                    </div>
+
+                    {/* Dates row */}
+                    {(createdLabel || assignedLabel) && (
+                      <div className="mt-2 flex items-center justify-end gap-3 text-xs text-gray-400 flex-wrap">
+                        {createdLabel && <span title="תאריך הגעת המשרה למערכת">📥 הגיע: {createdLabel}</span>}
+                        {assignedLabel && <span title="תאריך ההקצאה למחלקה">👉 הוקצה: {assignedLabel}</span>}
+                      </div>
+                    )}
+
+                    {/* Match counters */}
+                    <div className="flex justify-between items-center text-right mt-3 gap-2 text-sm">
+                      <span className="text-blue-300 font-semibold">{job.match_count} התאמות</span>
+                      <span className="text-green-300">{job.found_count} חדשות</span>
+                      <span className="text-cyan-300">{job.approved_count} אושרו</span>
                     </div>
                   </div>
-                  <h3 className="font-bold text-white text-right">{job.job_title}</h3>
-                  {job.organization_name && (
-                    <p className="text-sm text-gray-300 text-right mt-2">🏢 {job.organization_name}</p>
-                  )}
-                  {job.contact_person_name && (
-                    <p className="text-sm text-gray-300 text-right">👤 {job.contact_person_name}</p>
-                  )}
-                  <div className="flex justify-between items-center text-right mt-3 gap-2 text-sm">
-                    <span className="text-blue-300 font-semibold">{job.match_count} התאמות</span>
-                    <span className="text-green-300">{job.found_count} חדשות</span>
-                    <span className="text-cyan-300">{job.approved_count} אושרו</span>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

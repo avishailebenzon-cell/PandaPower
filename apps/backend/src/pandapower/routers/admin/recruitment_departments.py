@@ -159,6 +159,16 @@ class AssignedJob(BaseModel):
     found_count: int
     organization_name: Optional[str] = None
     contact_person_name: Optional[str] = None
+    # When the job first arrived in the system (jobs.created_at).
+    created_at: Optional[str] = None
+    # Best proxy we have for "assigned to this agent at" — no separate audit log,
+    # so we surface jobs.updated_at (changes when assigned_agent_code is set/changed).
+    assigned_at: Optional[str] = None
+    # Deadline from Pipedrive sync (jobs.deadline). Often null — UI hides if null.
+    deadline: Optional[str] = None
+    # Pipedrive numeric IDs — useful as fallback labels when names aren't synced.
+    pipedrive_org_id: Optional[int] = None
+    pipedrive_person_id: Optional[int] = None
 
 
 @router.get("/{department_code}/assigned-jobs", response_model=List[AssignedJob])
@@ -183,19 +193,37 @@ async def get_assigned_jobs(
         if not jobs_result.data:
             return []
 
-        assigned_jobs = []
+        # First pass: keep only this department's open jobs.
+        # We do this so we can batch-load contact names by pipedrive_person_id below
+        # (avoids an N+1 lookup per job).
+        relevant_jobs = []
         for job in jobs_result.data:
-            # Check both assigned_agent_code and agent_code
             agent_code = job.get("assigned_agent_code") or job.get("agent_code")
-
-            # Only include jobs assigned to this department/agent
             if agent_code != department_code:
                 continue
-
-            # Only include open jobs
             if job.get("status") != "open":
                 continue
+            relevant_jobs.append(job)
 
+        # Batch-resolve contact names: contacts.pipedrive_person_id BIGINT -> full_name.
+        # (jobs.person_id holds the Pipedrive numeric id, not contacts.id UUID.)
+        contact_name_by_pid: dict[int, str] = {}
+        person_ids = sorted({int(j["person_id"]) for j in relevant_jobs if j.get("person_id")})
+        if person_ids:
+            try:
+                contacts_resp = await supabase.table("contacts").select(
+                    "pipedrive_person_id, full_name"
+                ).in_("pipedrive_person_id", person_ids).execute()
+                for c in contacts_resp.data or []:
+                    pid = c.get("pipedrive_person_id")
+                    if pid is not None and c.get("full_name"):
+                        contact_name_by_pid[int(pid)] = c["full_name"]
+            except Exception as ce:
+                logger.warning(f"Failed to batch-resolve contact names: {ce}")
+
+        assigned_jobs = []
+        for job in relevant_jobs:
+            agent_code = job.get("assigned_agent_code") or job.get("agent_code")
             job_id = str(job.get("id", ""))
 
             # Get match counts for this job from this agent (who found them)
@@ -220,6 +248,23 @@ async def get_assigned_jobs(
                 except (ValueError, TypeError):
                     priority = 5
 
+            # Resolve organization name: prefer denormalized column, else show
+            # the Pipedrive ID as a recognisable fallback ("ארגון #1880"). We
+            # can't join organizations.pipedrive_org_id because the column doesn't
+            # exist in the deployed schema.
+            org_name = job.get("organization_name")
+            org_pid = job.get("org_id")
+            if not org_name and org_pid:
+                org_name = f"ארגון #{org_pid}"
+
+            # Resolve contact name: prefer denormalized column, else look up
+            # the batched dict by pipedrive person id.
+            person_pid_raw = job.get("person_id")
+            person_pid = int(person_pid_raw) if person_pid_raw is not None else None
+            contact_name = job.get("contact_person_name")
+            if not contact_name and person_pid is not None:
+                contact_name = contact_name_by_pid.get(person_pid)
+
             assigned_jobs.append(
                 AssignedJob(
                     id=job_id,
@@ -231,8 +276,13 @@ async def get_assigned_jobs(
                     match_count=match_count,
                     approved_count=approved_count,
                     found_count=found_count,
-                    organization_name=job.get("organization_name"),  # ארגון
-                    contact_person_name=job.get("contact_person_name"),  # איש קשר
+                    organization_name=org_name,  # ארגון
+                    contact_person_name=contact_name,  # איש קשר
+                    created_at=job.get("created_at"),  # תאריך הגעת המשרה
+                    assigned_at=job.get("updated_at"),  # best proxy for date-of-assignment
+                    deadline=job.get("deadline"),  # דדליין (Pipedrive)
+                    pipedrive_org_id=int(org_pid) if org_pid is not None else None,
+                    pipedrive_person_id=person_pid,
                 )
             )
 
