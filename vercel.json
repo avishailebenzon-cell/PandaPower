@@ -1,13 +1,10 @@
 {
-  "buildCommand": "npm run build",
-  "outputDirectory": "dist",
+  "buildCommand": "cd apps/frontend && npm run build",
+  "outputDirectory": "apps/frontend/dist",
   "framework": "vite",
-  "env": [
-    {
-      "key": "VITE_API_URL",
-      "value": "https://pandapower-backend.onrender.com"
-    }
-  ],
+  "env": {
+    "VITE_API_URL": "https://pandapower-backend.onrender.com"
+  },
   "rewrites": [
     {
       "source": "/api/:path*",
