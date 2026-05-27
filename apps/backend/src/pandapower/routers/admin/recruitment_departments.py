@@ -14,17 +14,30 @@ router = APIRouter(prefix="/admin/departments", tags=["admin", "departments"])
 
 
 # Hebrew security-clearance hierarchy (low -> high).
-# Used to compare candidate clearance vs job requirement.
+# Verified against real values in the production jobs.job_security_clearance
+# column: {'ללא', 'ללא סווג', 'רמה 1', 'רמה 3', 'רמה 1 + שוס'}.
+# Higher rank = higher clearance.
 _CLEARANCE_RANK = {
+    # "No clearance" variants — anything goes
     "ללא": 0,
-    "none": 0,
+    "ללא סווג": 0,
     "ללא סיווג": 0,
+    "none": 0,
+    # Level 1 (basic confidential)
+    "רמה 1": 1,
     "סודי": 1,
     "secret": 1,
+    # Level 2
+    "רמה 2": 2,
     "סודי ביותר": 2,
     "top secret": 2,
     "ts": 2,
     "טופ סיקרט": 2,
+    # Level 3 (top secret + polygraph or higher)
+    "רמה 3": 3,
+    "רמה 1 + שוס": 3,
+    "רמה 2 + שוס": 3,
+    "רמה 3 + שוס": 3,
 }
 
 
@@ -38,7 +51,19 @@ def _clearance_rank(value: Optional[str]) -> Optional[int]:
     norm = _normalize_clearance(value)
     if norm is None:
         return None
-    return _CLEARANCE_RANK.get(norm)
+    # Direct lookup
+    if norm in _CLEARANCE_RANK:
+        return _CLEARANCE_RANK[norm]
+    # Fallback heuristics for free-text values we haven't enumerated
+    # "ללא X" / "no X" → no requirement (rank 0)
+    if norm.startswith("ללא") or norm.startswith("none"):
+        return 0
+    # "רמה N" or "level N" → use the number if we can parse it
+    import re as _re
+    m = _re.search(r"\b(\d)\b", norm)
+    if m and ("רמה" in norm or "level" in norm):
+        return int(m.group(1))
+    return None
 
 
 def _compute_clearance_match(candidate_clearance: Optional[str], required_clearance: Optional[str]) -> str:
