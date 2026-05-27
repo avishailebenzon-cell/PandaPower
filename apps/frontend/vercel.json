@@ -11,7 +11,10 @@
     {
       "source": "/api/:path*",
       "destination": "https://pandapower-backend.onrender.com/:path*"
+    },
+    {
+      "source": "/:path*",
+      "destination": "/index.html"
     }
-  ],
-  "cleanUrls": true
+  ]
 }
