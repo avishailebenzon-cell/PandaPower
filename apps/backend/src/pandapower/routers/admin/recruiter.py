@@ -63,38 +63,39 @@ async def get_recruiter_status(
     Returns counts of matches in each recruiter workflow stage.
     """
     try:
-        # Query matches by state
-        # Using match_state_history to get current state
+        # All .execute() calls below MUST be awaited — the async Supabase
+        # client returns a coroutine and forgetting `await` causes `.data`
+        # to be missing and the whole endpoint to 500.
 
         # Get Tal-related matches
-        tal_pending_result = supabase.table("matches").select("id").eq(
+        tal_pending_result = await supabase.table("matches").select("id").eq(
             "current_state", "sent_to_tal"
         ).execute()
         pending_tal = len(tal_pending_result.data) if tal_pending_result.data else 0
 
-        tal_conversation_result = supabase.table("matches").select("id").eq(
+        tal_conversation_result = await supabase.table("matches").select("id").eq(
             "current_state", "tal_conversation"
         ).execute()
         in_conversation_tal = len(tal_conversation_result.data) if tal_conversation_result.data else 0
 
         # Get Elad-related matches
-        awaiting_elad_result = supabase.table("matches").select("id").eq(
+        awaiting_elad_result = await supabase.table("matches").select("id").eq(
             "current_state", "sent_to_elad"
         ).execute()
         awaiting_elad = len(awaiting_elad_result.data) if awaiting_elad_result.data else 0
 
-        elad_conversation_result = supabase.table("matches").select("id").eq(
+        elad_conversation_result = await supabase.table("matches").select("id").eq(
             "current_state", "elad_conversation"
         ).execute()
         in_conversation_elad = len(elad_conversation_result.data) if elad_conversation_result.data else 0
 
         # Final outcomes
-        hired_result = supabase.table("matches").select("id").eq(
+        hired_result = await supabase.table("matches").select("id").eq(
             "current_state", "hired"
         ).execute()
         hired = len(hired_result.data) if hired_result.data else 0
 
-        failed_result = supabase.table("matches").select("id").isin(
+        failed_result = await supabase.table("matches").select("id").in_(
             "current_state", ["tal_rejected", "elad_rejected", "placement_failed"]
         ).execute()
         failed = len(failed_result.data) if failed_result.data else 0
@@ -142,36 +143,45 @@ async def get_recruiter_matches(
         else:
             raise HTTPException(status_code=400, detail="Invalid tab parameter")
 
-        # Query matches with related data
+        # Query matches with related data.
+        # NOTE: .isin() is the (deprecated) old name; .in_() is current. Also
+        # note we filter by is_valid so Phase-4 invalidations don't show up.
         query = supabase.table("matches").select(
-            "id, candidate_id, job_id, current_state, match_score, created_at, updated_at, candidates(name), jobs(job_title, organization_id), organizations(name)"
-        ).isin("current_state", states).order("created_at", desc=True)
+            "id, candidate_id, job_id, current_state, match_score, created_at, updated_at, "
+            "candidates(name), jobs(job_title)"
+        ).in_("current_state", states).eq("is_valid", True).order("created_at", desc=True)
 
-        # Get total count
-        total_result = supabase.table("matches").select("id", count="exact").isin(
+        # Get total count (separate query, awaited)
+        total_result = await supabase.table("matches").select("id", count="exact").in_(
             "current_state", states
-        ).execute()
-        total = total_result.count if hasattr(total_result, 'count') else 0
+        ).eq("is_valid", True).execute()
+        total = total_result.count if hasattr(total_result, "count") else 0
 
         # Get paginated results
-        result = query.range(offset, offset + limit - 1).execute()
+        result = await query.range(offset, offset + limit - 1).execute()
 
         matches = []
         if result.data:
             for row in result.data:
-                candidate = row.get("candidates", {})
-                job = row.get("jobs", {})
-                org = row.get("organizations", {})
+                candidate = row.get("candidates") or {}
+                job = row.get("jobs") or {}
 
-                # Calculate days in stage
-                created_at = datetime.fromisoformat(row["created_at"].replace('Z', '+00:00'))
-                days_in_stage = (datetime.now(created_at.tzinfo) - created_at).days
+                # Calculate days in stage (defensive against missing/invalid timestamps)
+                try:
+                    created_at_dt = datetime.fromisoformat(row["created_at"].replace("Z", "+00:00"))
+                    days_in_stage = (datetime.now(created_at_dt.tzinfo) - created_at_dt).days
+                except Exception:
+                    days_in_stage = 0
 
                 match_info = MatchInfo(
                     id=row["id"],
                     candidate_name=candidate.get("name", "Unknown") if isinstance(candidate, dict) else "Unknown",
-                    job_title=job.get("title", "Unknown") if isinstance(job, dict) else "Unknown",
-                    company=org.get("name", "Unknown") if isinstance(org, dict) else "Unknown",
+                    # DB column is job_title, NOT title (matches the rest of the codebase).
+                    job_title=job.get("job_title", "Unknown") if isinstance(job, dict) else "Unknown",
+                    # Organization name isn't joinable in production schema (see
+                    # recruitment_departments.py for the same caveat); leave blank
+                    # rather than ship fake data.
+                    company="",
                     match_score=row.get("match_score", 0.0),
                     status=row.get("current_state", "unknown"),
                     state=row.get("current_state", "unknown"),
@@ -179,7 +189,7 @@ async def get_recruiter_matches(
                     last_activity=row.get("updated_at"),
                     candidate_id=row["candidate_id"],
                     job_id=row["job_id"],
-                    days_in_stage=days_in_stage
+                    days_in_stage=days_in_stage,
                 )
                 matches.append(match_info)
 

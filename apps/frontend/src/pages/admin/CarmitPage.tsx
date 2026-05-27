@@ -6,6 +6,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import KPICard from '@/components/KPICard';
+import { RecruiterMatchesPanel } from '@/components/RecruiterMatchesPanel';
 
 interface GateResult {
   passed: boolean;
@@ -76,7 +77,9 @@ const AGENTS = [
 
 export const CarmitPage = () => {
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<'decisions' | 'routing' | 'all-jobs'>('decisions');
+  const [activeTab, setActiveTab] = useState<
+    'decisions' | 'routing' | 'all-jobs' | 'sent-to-tal' | 'sent-to-elad'
+  >('decisions');
   const [selectedMatch, setSelectedMatch] = useState<CarmitDecision | null>(null);
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [decisionFilter, setDecisionFilter] = useState<'all' | 'approved' | 'rejected'>('all');
@@ -272,6 +275,28 @@ export const CarmitPage = () => {
           }`}
         >
           📊 כל המשרות
+        </button>
+        <button
+          onClick={() => setActiveTab('sent-to-tal')}
+          className={`px-6 py-3 font-semibold transition whitespace-nowrap ${
+            activeTab === 'sent-to-tal'
+              ? 'text-blue-400 border-b-2 border-blue-400'
+              : 'text-gray-400 hover:text-gray-200'
+          }`}
+          title="התאמות שכרמית העבירה לטל לשיחה עם המועמד"
+        >
+          📤 העברתי לטל (לדבר עם מועמד)
+        </button>
+        <button
+          onClick={() => setActiveTab('sent-to-elad')}
+          className={`px-6 py-3 font-semibold transition whitespace-nowrap ${
+            activeTab === 'sent-to-elad'
+              ? 'text-blue-400 border-b-2 border-blue-400'
+              : 'text-gray-400 hover:text-gray-200'
+          }`}
+          title="התאמות שעברו לאלעד לשיחה עם הלקוח"
+        >
+          📤 העברתי לאלעד (לדבר עם לקוח)
         </button>
       </div>
 
@@ -554,6 +579,39 @@ export const CarmitPage = () => {
           ) : (
             <div className="text-center py-8 text-gray-400">אין משרות</div>
           )}
+        </div>
+      )}
+
+      {/* === העברתי לטל === */}
+      {/* All matches that have crossed Tal's stage of the state machine.
+          Sub-tabs: queue (sent_to_tal + tal_conversation) vs history
+          (tal_approved + tal_rejected). Shared component is also used on
+          /recruiting/tal so both views always stay in sync. */}
+      {activeTab === 'sent-to-tal' && (
+        <div className="space-y-4">
+          <div>
+            <h2 className="text-2xl font-bold text-white">📤 העברתי לטל</h2>
+            <p className="text-sm text-gray-400">
+              התאמות שכרמית העבירה לטל לסינון ראשוני (שיחה עם המועמד). מבוסס על מכונת המצבים.
+            </p>
+          </div>
+          <RecruiterMatchesPanel recruiter="tal" />
+        </div>
+      )}
+
+      {/* === העברתי לאלעד === */}
+      {/* All matches that have reached Elad's stage (client-side placement).
+          Sub-tabs: queue (sent_to_elad + elad_conversation) vs history
+          (elad_approved + hired + placement_failed). */}
+      {activeTab === 'sent-to-elad' && (
+        <div className="space-y-4">
+          <div>
+            <h2 className="text-2xl font-bold text-white">📤 העברתי לאלעד</h2>
+            <p className="text-sm text-gray-400">
+              התאמות שעברו לאלעד להשמה אצל הלקוח (שיחה עם הלקוח). מבוסס על מכונת המצבים.
+            </p>
+          </div>
+          <RecruiterMatchesPanel recruiter="elad" />
         </div>
       )}
 
