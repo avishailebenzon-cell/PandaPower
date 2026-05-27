@@ -22,14 +22,17 @@ useAuth.ts). When public auth is added, mask these on the GET response.
 
 from __future__ import annotations
 
+import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from pandapower.core.config import settings
 from pandapower.core.supabase import get_supabase_client
+from pandapower.integrations.claude_api import AnthropicClient
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin/whatsapp-agents", tags=["admin", "whatsapp"])
@@ -199,3 +202,421 @@ async def save_whatsapp_agent_config(
     # Return the freshly-saved state so the UI can re-render confidently.
     settings, last_updated = await _fetch_settings_dict(supabase, agent_code)
     return _build_config(agent_code, settings, last_updated)
+
+
+# ============================================================================
+#  Per-bot CONVERSATIONS + DASHBOARD + BEHAVIOR + PLAYGROUND
+# ----------------------------------------------------------------------------
+#  Everything below is scoped by `{agent_code}/` and uses the bot's own data:
+#    • conversations & messages → pandi_conversations / pandi_messages tables,
+#      filtered by bot_code (column added once webhook handlers populate it).
+#      Until real per-bot message ingestion lands, Tal/Elad surfaces return
+#      empty data — this is honest, not a bug.
+#    • behavior (system-prompt addendum + predefined Q&A) → system_settings
+#      using bot-namespaced keys, so the 3 bots NEVER share rules.
+#    • playground → runs the bot's full prompt through Claude and returns
+#      the reply, without ever touching WhatsApp.
+# ============================================================================
+
+
+class ConversationListItem(BaseModel):
+    id: str
+    started_at: Optional[str] = None
+    last_message_at: Optional[str] = None
+    status: str = "active"
+    contact_name: Optional[str] = None
+    contact_phone: Optional[str] = None
+    message_count: int = 0
+
+
+class ConversationsResponse(BaseModel):
+    bot_code: str
+    total: int
+    conversations: list[ConversationListItem]
+
+
+class MessageItem(BaseModel):
+    id: str
+    direction: str          # "inbound" | "outbound"
+    message_type: str = "text"
+    text: Optional[str] = None
+    created_at: Optional[str] = None
+    llm_invoked: bool = False
+
+
+class MessagesResponse(BaseModel):
+    bot_code: str
+    conversation_id: str
+    messages: list[MessageItem]
+
+
+class DashboardResponse(BaseModel):
+    bot_code: str
+    total_conversations: int = 0
+    active_conversations: int = 0
+    messages_today: int = 0
+    messages_this_week: int = 0
+    inbound_this_week: int = 0
+    outbound_this_week: int = 0
+    avg_response_minutes: Optional[float] = None
+    is_configured: bool = False
+
+
+class QAPair(BaseModel):
+    question: str = Field(..., min_length=1, max_length=500)
+    answer: str = Field(..., min_length=1, max_length=2000)
+
+
+class BehaviorConfig(BaseModel):
+    bot_code: str
+    name: str
+    role: str
+    system_prompt_addendum: str = ""
+    qa_pairs: list[QAPair] = []
+
+
+class BehaviorUpdate(BaseModel):
+    system_prompt_addendum: str = Field(default="", max_length=4000)
+    qa_pairs: list[QAPair] = []
+
+
+class PlaygroundRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=2000)
+    include_qa: bool = True
+
+
+class PlaygroundResponse(BaseModel):
+    bot_code: str
+    user_message: str
+    bot_reply: str
+    duration_ms: int
+    tokens_used: int
+    matched_qa: Optional[str] = None       # if a Q&A pair was triggered
+    used_system_prompt: str                # what we actually sent to Claude
+
+
+# --- helper: does the pandi_messages table exist? -----------------------------
+async def _has_messages_table(supabase) -> bool:
+    """We don't always have pandi_messages in production — be defensive."""
+    try:
+        await supabase.table("pandi_messages").select("id").limit(1).execute()
+        return True
+    except Exception:
+        return False
+
+
+class _EmptyResp:
+    """Sentinel returned when a query can't run (schema mismatch / table miss)."""
+    data: list = []
+
+
+async def _filtered_conversations_query(supabase, bot_code: str):
+    """A query that respects per-bot scoping when the column exists.
+
+    The production pandi_conversations table has fewer columns than the
+    migration defines (no bot_code, sometimes no started_at). We try the
+    most-specific query first and fall back progressively:
+       1) filtered by bot_code + ordered by started_at
+       2) filtered by bot_code only
+       3) for the legacy "pandi" bot: unfiltered (legacy rows)
+       4) empty response for tal/elad if filters fail
+    Each attempt is wrapped in try/except so a schema gap can't 500 us.
+    """
+    # Step 1 & 2: try with bot_code filter
+    for use_order in (True, False):
+        try:
+            q = supabase.table("pandi_conversations").select("*").eq("bot_code", bot_code).limit(100)
+            if use_order:
+                q = q.order("started_at", desc=True)
+            return await q.execute()
+        except Exception:
+            continue
+
+    # Step 3: for legacy `pandi` data, drop the filter
+    if bot_code == "pandi":
+        for use_order in (True, False):
+            try:
+                q = supabase.table("pandi_conversations").select("*").limit(100)
+                if use_order:
+                    q = q.order("started_at", desc=True)
+                return await q.execute()
+            except Exception:
+                continue
+
+    # Step 4: give up and return an empty response. Tal/Elad land here until
+    # per-bot ingestion is wired.
+    return _EmptyResp()
+
+
+@router.get("/{agent_code}/conversations", response_model=ConversationsResponse)
+async def list_conversations(
+    agent_code: str,
+    supabase=Depends(get_supabase_client),
+) -> ConversationsResponse:
+    if agent_code not in SUPPORTED_AGENTS:
+        raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_code}")
+
+    convs_resp = await _filtered_conversations_query(supabase, agent_code)
+    rows = convs_resp.data or []
+
+    has_msg_table = await _has_messages_table(supabase)
+
+    out: list[ConversationListItem] = []
+    for r in rows:
+        conv_id = str(r.get("id", ""))
+        message_count = 0
+        if has_msg_table:
+            try:
+                cnt = await (
+                    supabase.table("pandi_messages")
+                    .select("id", count="exact")
+                    .eq("conversation_id", conv_id)
+                    .execute()
+                )
+                message_count = cnt.count or 0
+            except Exception:
+                pass
+        out.append(
+            ConversationListItem(
+                id=conv_id,
+                started_at=r.get("started_at"),
+                last_message_at=r.get("last_message_at"),
+                status=r.get("status") or "active",
+                contact_name=r.get("contact_name"),
+                contact_phone=r.get("contact_phone"),
+                message_count=message_count,
+            )
+        )
+    return ConversationsResponse(bot_code=agent_code, total=len(out), conversations=out)
+
+
+@router.get(
+    "/{agent_code}/conversations/{conversation_id}/messages",
+    response_model=MessagesResponse,
+)
+async def get_conversation_messages(
+    agent_code: str,
+    conversation_id: str,
+    supabase=Depends(get_supabase_client),
+) -> MessagesResponse:
+    if agent_code not in SUPPORTED_AGENTS:
+        raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_code}")
+    if not await _has_messages_table(supabase):
+        return MessagesResponse(bot_code=agent_code, conversation_id=conversation_id, messages=[])
+    resp = await (
+        supabase.table("pandi_messages")
+        .select("*")
+        .eq("conversation_id", conversation_id)
+        .order("created_at", desc=False)
+        .execute()
+    )
+    msgs = [
+        MessageItem(
+            id=str(m.get("id", "")),
+            direction=m.get("direction") or "inbound",
+            message_type=m.get("message_type") or "text",
+            text=m.get("text"),
+            created_at=m.get("created_at"),
+            llm_invoked=bool(m.get("llm_invoked")),
+        )
+        for m in (resp.data or [])
+    ]
+    return MessagesResponse(bot_code=agent_code, conversation_id=conversation_id, messages=msgs)
+
+
+@router.get("/{agent_code}/dashboard", response_model=DashboardResponse)
+async def get_dashboard(
+    agent_code: str,
+    supabase=Depends(get_supabase_client),
+) -> DashboardResponse:
+    if agent_code not in SUPPORTED_AGENTS:
+        raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_code}")
+
+    convs_resp = await _filtered_conversations_query(supabase, agent_code)
+    conv_rows = convs_resp.data or []
+    total = len(conv_rows)
+    active = sum(1 for c in conv_rows if (c.get("status") or "active") == "active")
+
+    settings_dict, _ = await _fetch_settings_dict(supabase, agent_code)
+    is_configured = bool(settings_dict.get("instance_id") and settings_dict.get("token"))
+
+    out = DashboardResponse(
+        bot_code=agent_code,
+        total_conversations=total,
+        active_conversations=active,
+        is_configured=is_configured,
+    )
+
+    if await _has_messages_table(supabase):
+        try:
+            now = datetime.utcnow()
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+            week_start = (now - timedelta(days=7)).isoformat()
+
+            # Pull this week's messages once and bucket locally — fewer round trips.
+            week_resp = await (
+                supabase.table("pandi_messages")
+                .select("direction, created_at")
+                .gte("created_at", week_start)
+                .execute()
+            )
+            week_rows = week_resp.data or []
+            out.messages_this_week = len(week_rows)
+            out.messages_today = sum(1 for m in week_rows if (m.get("created_at") or "") >= today_start)
+            out.inbound_this_week = sum(1 for m in week_rows if m.get("direction") == "inbound")
+            out.outbound_this_week = sum(1 for m in week_rows if m.get("direction") == "outbound")
+        except Exception as e:
+            logger.warning(f"Dashboard message stats failed for {agent_code}: {e}")
+
+    return out
+
+
+# ---------------- BEHAVIOR (Q&A + prompt addendum) --------------------------
+
+def _qa_key(agent_code: str) -> str:
+    return f"{agent_code}.qa_pairs"
+
+
+def _prompt_addendum_key(agent_code: str) -> str:
+    return f"{agent_code}.system_prompt_addendum"
+
+
+@router.get("/{agent_code}/behavior", response_model=BehaviorConfig)
+async def get_behavior(
+    agent_code: str,
+    supabase=Depends(get_supabase_client),
+) -> BehaviorConfig:
+    if agent_code not in SUPPORTED_AGENTS:
+        raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_code}")
+    label = AGENT_LABELS.get(agent_code, {"name": agent_code, "role": ""})
+
+    # Read both rows in one query for efficiency
+    keys = [_qa_key(agent_code), _prompt_addendum_key(agent_code)]
+    resp = await (
+        supabase.table("system_settings")
+        .select("setting_key, setting_value")
+        .in_("setting_key", keys)
+        .execute()
+    )
+    rows = {r["setting_key"]: r.get("setting_value") or "" for r in (resp.data or [])}
+
+    qa_raw = rows.get(_qa_key(agent_code), "")
+    qa_pairs: list[QAPair] = []
+    if qa_raw:
+        try:
+            parsed = json.loads(qa_raw)
+            if isinstance(parsed, list):
+                qa_pairs = [QAPair(**item) for item in parsed if isinstance(item, dict)]
+        except Exception:
+            logger.warning(f"Could not parse stored Q&A for {agent_code}; treating as empty.")
+
+    return BehaviorConfig(
+        bot_code=agent_code,
+        name=label["name"],
+        role=label.get("role", ""),
+        system_prompt_addendum=rows.get(_prompt_addendum_key(agent_code), ""),
+        qa_pairs=qa_pairs,
+    )
+
+
+@router.post("/{agent_code}/behavior", response_model=BehaviorConfig)
+async def save_behavior(
+    agent_code: str,
+    body: BehaviorUpdate,
+    supabase=Depends(get_supabase_client),
+) -> BehaviorConfig:
+    if agent_code not in SUPPORTED_AGENTS:
+        raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_code}")
+    qa_json = json.dumps([qa.model_dump() for qa in body.qa_pairs], ensure_ascii=False)
+    await _upsert_setting(supabase, _prompt_addendum_key(agent_code), body.system_prompt_addendum)
+    await _upsert_setting(supabase, _qa_key(agent_code), qa_json)
+    return await get_behavior(agent_code=agent_code, supabase=supabase)
+
+
+# ---------------- PLAYGROUND -------------------------------------------------
+
+# Default-empty per-bot personas. Admins customise via behavior tab.
+_DEFAULT_PERSONA = {
+    "tal": "אתה טל, סוכן גיוס AI שמשוחח עם מועמדים בעברית בעזרת WhatsApp. דבר ידידותי ומקצועי, התמקד באיסוף מידע חשוב על הניסיון והציפיות של המועמד.",
+    "elad": "אתה אלעד, סוכן הצבות AI שמשוחח עם לקוחות בעברית. דבר באופן עניני, ברור ואסרטיבי, מתמקד באיתור צרכי הלקוח עבור איוש משרה.",
+    "pandi": "את פנדי, סוכנת קליטה AI של פנדה-טק. תפקידך לקלוט בקשות מלקוחות חדשים בעברית דרך WhatsApp ולעזור להם למצוא מועמד מתאים.",
+}
+
+
+def _try_match_qa(user_text: str, qa_pairs: list[QAPair]) -> Optional[QAPair]:
+    """Very-light fuzzy match: substring on the question, case-insensitive."""
+    t = (user_text or "").strip().lower()
+    if not t:
+        return None
+    for qa in qa_pairs:
+        q = (qa.question or "").strip().lower()
+        if not q:
+            continue
+        # Match if the user text contains the question text, or vice versa
+        if q in t or t in q:
+            return qa
+    return None
+
+
+@router.post("/{agent_code}/playground", response_model=PlaygroundResponse)
+async def run_playground(
+    agent_code: str,
+    body: PlaygroundRequest,
+    supabase=Depends(get_supabase_client),
+) -> PlaygroundResponse:
+    """Send a fake user message to the bot — Claude runs with the bot's
+    full configured persona + addendum + Q&A. No WhatsApp involved."""
+    if agent_code not in SUPPORTED_AGENTS:
+        raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_code}")
+
+    behavior = await get_behavior(agent_code=agent_code, supabase=supabase)
+
+    # 1. Fast-path: predefined Q&A
+    matched: Optional[QAPair] = _try_match_qa(body.message, behavior.qa_pairs) if body.include_qa else None
+    if matched:
+        return PlaygroundResponse(
+            bot_code=agent_code,
+            user_message=body.message,
+            bot_reply=matched.answer,
+            duration_ms=0,
+            tokens_used=0,
+            matched_qa=matched.question,
+            used_system_prompt="(fast-path: predefined Q&A)",
+        )
+
+    # 2. Otherwise call Claude with persona + addendum
+    persona = _DEFAULT_PERSONA.get(agent_code, "")
+    sys_prompt_parts = [persona]
+    if behavior.system_prompt_addendum.strip():
+        sys_prompt_parts.append("\nתוספות מינהליות:\n" + behavior.system_prompt_addendum.strip())
+    if behavior.qa_pairs:
+        # Surface Q&A as reference (don't force-quote)
+        ref = "\n".join(f"- שאלה: {q.question}\n  תשובה: {q.answer}" for q in behavior.qa_pairs[:10])
+        sys_prompt_parts.append("\nשאלות־ותשובות לדוגמה:\n" + ref)
+    system_prompt = "\n".join(p for p in sys_prompt_parts if p).strip()
+
+    prompt = f"{system_prompt}\n\nהודעת המשתמש:\n{body.message}\n\nכתוב את התשובה שלך עכשיו (תשובה אחת בלבד, בעברית, קצרה ועניינית)."
+
+    claude = AnthropicClient(api_key=settings.ANTHROPIC_API_KEY)
+    start = datetime.utcnow()
+    try:
+        resp = await claude.match_score_with_json(
+            prompt=prompt + "\n\nהחזר JSON בלבד: {\"reply\":\"<התשובה שלך>\"}",
+            model="claude-sonnet-4-5",
+        )
+        reply = (resp.get("parsed") or {}).get("reply", "").strip() or "(הסוכן לא החזיר תשובה)"
+        tokens = int(resp.get("tokens_used") or 0)
+    except Exception as e:
+        logger.error(f"Playground call to Claude failed for {agent_code}: {e}")
+        raise HTTPException(status_code=500, detail=f"Bot inference failed: {e}")
+
+    duration_ms = int((datetime.utcnow() - start).total_seconds() * 1000)
+    return PlaygroundResponse(
+        bot_code=agent_code,
+        user_message=body.message,
+        bot_reply=reply,
+        duration_ms=duration_ms,
+        tokens_used=tokens,
+        matched_qa=None,
+        used_system_prompt=system_prompt,
+    )
