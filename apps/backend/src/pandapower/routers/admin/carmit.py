@@ -514,6 +514,8 @@ async def get_jobs_to_route():
                 "description": job.get("description", ""),
                 "priority": job.get("priority", 5),
                 "candidateCount": 0,  # Placeholder - can be computed from matches if needed
+                "organization_name": job.get("organization_name"),  # ארגון
+                "contact_person_name": job.get("contact_person_name"),  # איש קשר
                 "createdAt": job.get("created_at"),
             })
 

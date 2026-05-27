@@ -133,6 +133,8 @@ async def get_assigned_jobs(
                     match_count=match_count,
                     approved_count=approved_count,
                     found_count=found_count,
+                    organization_name=job.get("organization_name"),  # ארגון
+                    contact_person_name=job.get("contact_person_name"),  # איש קשר
                 )
             )
 
