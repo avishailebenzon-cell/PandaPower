@@ -425,17 +425,19 @@ async def get_carmit_status():
         supabase = await get_supabase_client()
 
         # Get counts
-        pending_matches_response = await supabase.table("matches").select("id").eq("current_state", "found").execute()
-        approved_response = await supabase.table("matches").select("id").eq("current_state", "carmit_approved").execute()
-        rejected_response = await supabase.table("matches").select("id").eq("current_state", "carmit_rejected").execute()
-        routed_jobs_response = await supabase.table("jobs").select("id").eq("status", "assigned_agent").execute()
+        pending_matches_response = await supabase.table("matches").select("id").eq("current_state", "found").eq("is_valid", True).execute()
+        approved_response = await supabase.table("matches").select("id").eq("current_state", "carmit_approved").eq("is_valid", True).execute()
+        rejected_response = await supabase.table("matches").select("id").eq("current_state", "carmit_rejected").eq("is_valid", True).execute()
+        # Count jobs with assigned agents
+        routed_jobs_response = await supabase.table("jobs").select("*").eq("is_active", True).execute()
+        routed_jobs = [j for j in routed_jobs_response.data if j.get("assigned_agent_code")]
 
         return {
             "status": "operational",
             "pending_review_count": len(pending_matches_response.data or []),
             "approved_count": len(approved_response.data or []),
             "rejected_count": len(rejected_response.data or []),
-            "routed_jobs_count": len(routed_jobs_response.data or []),
+            "routed_jobs_count": len(routed_jobs),
             "timestamp": datetime.utcnow().isoformat(),
         }
 
