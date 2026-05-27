@@ -7,6 +7,44 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import KPICard from '@/components/KPICard';
 import { RecruiterMatchesPanel } from '@/components/RecruiterMatchesPanel';
+import { MatchDetailModal } from '@/components/MatchDetailModal';
+import type { DepartmentMatch, ClearanceMatch } from '@/api/recruitment-departments';
+
+// Shape of each row from GET /admin/carmit/agent-matches.
+// The backend returns enough candidate + match detail to populate both
+// the table row and the two modals (candidate profile / match detail)
+// without a follow-up fetch per click.
+interface AgentMatchRow {
+  id: string;
+  candidate_id: string;
+  candidate_name: string;
+  candidate_email: string | null;
+  candidate_phone: string | null;
+  candidate_location: string | null;
+  candidate_clearance: string | null;
+  candidate_years: number | null;
+  candidate_key_skills: string[];
+  // top_education is a JSONB dict in DB (institution / degree / field / …) —
+  // typed as `unknown` so the renderer must coerce it to a display string.
+  candidate_top_education: unknown;
+  candidate_experiences: unknown[];
+  candidate_language: string | null;
+  candidate_recommendation_score: number | null;
+  job_id: string;
+  job_title: string;
+  job_description: string | null;
+  required_clearance: string | null;
+  clearance_match: ClearanceMatch;
+  agent_code: string;
+  match_score: number;
+  current_state: string;
+  match_reasoning: string;
+  reasoning_preview: string;
+  strengths: string[];
+  gaps: string[];
+  created_at: string;
+  updated_at: string;
+}
 
 interface GateResult {
   passed: boolean;
@@ -83,6 +121,11 @@ export const CarmitPage = () => {
   // Pagination state for the new "agent-matches" tab (≥70% from all 8 agents).
   const [agentMatchesPage, setAgentMatchesPage] = useState(0);
   const AGENT_MATCHES_PAGE_SIZE = 25;
+  // Modal state for the agent-matches table:
+  //  • selectedAgentMatchForDetail → match-detail modal (click on score %)
+  //  • selectedAgentCandidate     → candidate-profile modal (click on name)
+  const [selectedAgentMatchForDetail, setSelectedAgentMatchForDetail] = useState<DepartmentMatch | null>(null);
+  const [selectedAgentCandidate, setSelectedAgentCandidate] = useState<AgentMatchRow | null>(null);
   const [selectedMatch, setSelectedMatch] = useState<CarmitDecision | null>(null);
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [decisionFilter, setDecisionFilter] = useState<'all' | 'approved' | 'rejected'>('all');
@@ -138,21 +181,7 @@ export const CarmitPage = () => {
       const r = await fetch(url);
       if (!r.ok) throw new Error('Failed to fetch agent matches');
       return r.json() as Promise<{
-        matches: Array<{
-          id: string;
-          candidate_id: string;
-          candidate_name: string;
-          candidate_clearance: string | null;
-          job_id: string;
-          job_title: string;
-          required_clearance: string | null;
-          agent_code: string;
-          match_score: number;
-          current_state: string;
-          reasoning_preview: string;
-          created_at: string;
-          updated_at: string;
-        }>;
+        matches: AgentMatchRow[];
         total: number;
         offset: number;
         limit: number;
@@ -506,14 +535,58 @@ export const CarmitPage = () => {
                             : pct >= 80
                             ? 'bg-emerald-900 text-emerald-200'
                             : 'bg-yellow-900 text-yellow-200';
+                        // Map backend clearance_match → indicator config.
+                        const clrCfg: Record<ClearanceMatch, { icon: string; label: string; cls: string }> = {
+                          match:    { icon: '🟢', label: 'תואם',     cls: 'border-green-700 text-green-200' },
+                          partial:  { icon: '🟡', label: 'חלקי',     cls: 'border-yellow-700 text-yellow-200' },
+                          mismatch: { icon: '🔴', label: 'לא תואם',  cls: 'border-red-700 text-red-200' },
+                          unknown:  { icon: '⚪', label: 'לא ידוע',  cls: 'border-gray-600 text-gray-300' },
+                        };
+                        const cfg = clrCfg[m.clearance_match] || clrCfg.unknown;
+                        // Build a DepartmentMatch-shaped object for the existing
+                        // MatchDetailModal (it's the same modal used in agent screens).
+                        const toDepartmentMatch = (): DepartmentMatch => ({
+                          id: m.id,
+                          candidateName: m.candidate_name,
+                          candidateId: m.candidate_id,
+                          jobId: m.job_id,
+                          jobTitle: m.job_title,
+                          company: 'Unknown Company',
+                          phone: m.candidate_phone || undefined,
+                          email: m.candidate_email || undefined,
+                          status: m.current_state,
+                          matchScore: m.match_score,
+                          dateAdded: m.created_at,
+                          lastActivity: m.updated_at,
+                          matchReasoning: m.match_reasoning,
+                          strengths: m.strengths,
+                          gaps: m.gaps,
+                          candidateClearance: m.candidate_clearance || undefined,
+                          requiredClearance: m.required_clearance || undefined,
+                          clearanceMatch: m.clearance_match,
+                        });
                         return (
                           <tr key={m.id} className="border-b border-gray-700 hover:bg-gray-750 transition">
+                            {/* Match score — clickable, opens MatchDetailModal */}
                             <td className="px-4 py-3">
-                              <span className={`inline-block px-2 py-1 rounded text-xs font-bold ${scoreCls}`}>
+                              <button
+                                onClick={() => setSelectedAgentMatchForDetail(toDepartmentMatch())}
+                                title="לפרטי ההתאמה (חוזקות, פערים, הסבר)"
+                                className={`inline-block px-2 py-1 rounded text-xs font-bold cursor-pointer hover:ring-2 hover:ring-offset-1 hover:ring-offset-gray-800 hover:ring-white/40 transition ${scoreCls}`}
+                              >
                                 {pct}%
-                              </span>
+                              </button>
                             </td>
-                            <td className="px-4 py-3 text-white font-semibold">{m.candidate_name}</td>
+                            {/* Candidate name — clickable, opens candidate profile modal */}
+                            <td className="px-4 py-3">
+                              <button
+                                onClick={() => setSelectedAgentCandidate(m)}
+                                title="לפרופיל המועמד"
+                                className="text-white font-semibold hover:text-blue-300 hover:underline transition text-right"
+                              >
+                                {m.candidate_name}
+                              </button>
+                            </td>
                             <td className="px-4 py-3 text-gray-300">{m.job_title}</td>
                             <td className="px-4 py-3 text-gray-300">
                               <span className="px-2 py-0.5 rounded bg-indigo-900/40 border border-indigo-700 text-indigo-200 text-xs font-semibold">
@@ -539,18 +612,32 @@ export const CarmitPage = () => {
                                   hired: { label: '🎉 הושמה', cls: 'bg-emerald-700 text-white' },
                                   placement_failed: { label: 'כשלון השמה', cls: 'bg-red-900 text-red-200' },
                                 };
-                                const cfg = STATE_BADGES[m.current_state] || { label: m.current_state, cls: 'bg-gray-700 text-gray-300' };
+                                const stateCfg = STATE_BADGES[m.current_state] || { label: m.current_state, cls: 'bg-gray-700 text-gray-300' };
                                 return (
-                                  <span className={`px-2 py-0.5 rounded text-xs font-semibold ${cfg.cls}`}>
-                                    {cfg.label}
+                                  <span className={`px-2 py-0.5 rounded text-xs font-semibold ${stateCfg.cls}`}>
+                                    {stateCfg.label}
                                   </span>
                                 );
                               })()}
                             </td>
-                            <td className="px-4 py-3 text-xs text-gray-400">
-                              <span className="opacity-70">{m.candidate_clearance || '—'}</span>
-                              {' / '}
-                              <span>{m.required_clearance || 'ללא דרישה'}</span>
+                            {/* Clearance column — two clearly labelled rows + outcome badge
+                                so the user can tell at a glance what the candidate
+                                has vs. what the job requires. */}
+                            <td className="px-4 py-3 text-xs">
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-1 text-gray-300">
+                                  <span className="text-gray-500">👤 מועמד:</span>
+                                  <span className="font-semibold">{m.candidate_clearance || 'לא צוין'}</span>
+                                </div>
+                                <div className="flex items-center gap-1 text-gray-300">
+                                  <span className="text-gray-500">📋 נדרש:</span>
+                                  <span className="font-semibold">{m.required_clearance || 'ללא דרישה'}</span>
+                                </div>
+                                <div className={`mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-bold ${cfg.cls}`} title={`סטטוס סיווג: ${cfg.label}`}>
+                                  <span>{cfg.icon}</span>
+                                  <span>{cfg.label}</span>
+                                </div>
+                              </div>
                             </td>
                             <td className="px-4 py-3 text-xs text-gray-500">
                               {m.created_at ? new Date(m.created_at).toLocaleDateString('he-IL', {
@@ -737,6 +824,235 @@ export const CarmitPage = () => {
             </p>
           </div>
           <RecruiterMatchesPanel recruiter="elad" />
+        </div>
+      )}
+
+      {/* Match-detail modal — opened by clicking the score % in the
+          התאמות-מסוכני-הגיוס tab. Reuses the same modal the per-agent
+          screens use so the UX is consistent across dashboards. */}
+      <MatchDetailModal
+        match={selectedAgentMatchForDetail}
+        onClose={() => setSelectedAgentMatchForDetail(null)}
+      />
+
+      {/* Candidate-profile modal — opened by clicking the candidate name
+          in the התאמות-מסוכני-הגיוס tab. All fields come straight from
+          the agent-matches payload (no extra fetch). */}
+      {selectedAgentCandidate && (
+        <div
+          className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => setSelectedAgentCandidate(null)}
+        >
+          <div
+            className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+            dir="rtl"
+          >
+            <div className="sticky top-0 bg-gray-900 border-b border-gray-700 px-6 py-4 flex items-start justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-white">👤 {selectedAgentCandidate.candidate_name}</h2>
+                <p className="text-sm text-gray-400 mt-1">פרופיל מועמד</p>
+              </div>
+              <button
+                onClick={() => setSelectedAgentCandidate(null)}
+                className="text-gray-400 hover:text-white text-2xl leading-none px-2"
+                aria-label="סגור"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="px-6 py-5 space-y-5 text-sm">
+              {/* Quick facts row */}
+              <div className="grid grid-cols-2 gap-3">
+                {selectedAgentCandidate.candidate_years != null && (
+                  <div className="bg-gray-800 border border-gray-700 rounded p-3">
+                    <div className="text-xs text-gray-400">שנות ניסיון</div>
+                    <div className="text-white font-bold text-lg mt-1">{selectedAgentCandidate.candidate_years}</div>
+                  </div>
+                )}
+                {selectedAgentCandidate.candidate_location && (
+                  <div className="bg-gray-800 border border-gray-700 rounded p-3">
+                    <div className="text-xs text-gray-400">מיקום</div>
+                    <div className="text-white font-semibold mt-1">📍 {selectedAgentCandidate.candidate_location}</div>
+                  </div>
+                )}
+                {selectedAgentCandidate.candidate_clearance && (
+                  <div className="bg-gray-800 border border-gray-700 rounded p-3">
+                    <div className="text-xs text-gray-400">סיווג ביטחוני</div>
+                    <div className="text-white font-semibold mt-1">🔒 {selectedAgentCandidate.candidate_clearance}</div>
+                  </div>
+                )}
+                {selectedAgentCandidate.candidate_language && (
+                  <div className="bg-gray-800 border border-gray-700 rounded p-3">
+                    <div className="text-xs text-gray-400">שפה</div>
+                    <div className="text-white font-semibold mt-1">{selectedAgentCandidate.candidate_language}</div>
+                  </div>
+                )}
+              </div>
+
+              {/* Contact */}
+              {(selectedAgentCandidate.candidate_email || selectedAgentCandidate.candidate_phone) && (
+                <section>
+                  <h3 className="text-sm font-semibold text-gray-300 mb-2">פרטי קשר</h3>
+                  <div className="bg-gray-800 border border-gray-700 rounded p-3 space-y-1 text-gray-200">
+                    {selectedAgentCandidate.candidate_email && <div>📧 {selectedAgentCandidate.candidate_email}</div>}
+                    {selectedAgentCandidate.candidate_phone && <div>📱 {selectedAgentCandidate.candidate_phone}</div>}
+                  </div>
+                </section>
+              )}
+
+              {/* Skills */}
+              {selectedAgentCandidate.candidate_key_skills.length > 0 && (
+                <section>
+                  <h3 className="text-sm font-semibold text-gray-300 mb-2">
+                    כישורים מרכזיים ({selectedAgentCandidate.candidate_key_skills.length})
+                  </h3>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedAgentCandidate.candidate_key_skills.map((skill, i) => (
+                      <span
+                        key={i}
+                        className="px-2 py-1 rounded bg-blue-900/40 border border-blue-700 text-blue-200 text-xs font-semibold"
+                      >
+                        {skill}
+                      </span>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {/* Education — top_education is a JSONB dict
+                  (institution / degree / field / start_year / end_year …).
+                  We coerce it to display-friendly text here. */}
+              {(() => {
+                const raw = selectedAgentCandidate.candidate_top_education;
+                if (!raw) return null;
+                if (typeof raw === 'string') {
+                  return (
+                    <section>
+                      <h3 className="text-sm font-semibold text-gray-300 mb-2">🎓 השכלה</h3>
+                      <p className="bg-gray-800 border border-gray-700 rounded p-3 text-gray-200">{raw}</p>
+                    </section>
+                  );
+                }
+                if (typeof raw === 'object') {
+                  const e = raw as Record<string, unknown>;
+                  const degree = e.degree ? String(e.degree) : '';
+                  const field = e.field ? String(e.field) : '';
+                  const institution = e.institution ? String(e.institution) : '';
+                  const years = [e.start_year, e.end_year].filter(Boolean).join('–');
+                  const line1 = [degree, field].filter(Boolean).join(' ב-');
+                  const line2 = [institution, years].filter(Boolean).join(' · ');
+                  if (!line1 && !line2) return null;
+                  return (
+                    <section>
+                      <h3 className="text-sm font-semibold text-gray-300 mb-2">🎓 השכלה</h3>
+                      <div className="bg-gray-800 border border-gray-700 rounded p-3 text-gray-200">
+                        {line1 && <div className="font-semibold">{line1}</div>}
+                        {line2 && <div className="text-sm text-gray-400">{line2}</div>}
+                      </div>
+                    </section>
+                  );
+                }
+                return null;
+              })()}
+
+              {/* Experience — each item is a JSONB dict with keys
+                  position, company, duration, start_date, end_date,
+                  description, location … We pick a few and render a card. */}
+              {selectedAgentCandidate.candidate_experiences.length > 0 && (
+                <section>
+                  <h3 className="text-sm font-semibold text-gray-300 mb-2">
+                    💼 ניסיון ({selectedAgentCandidate.candidate_experiences.length})
+                  </h3>
+                  <ul className="space-y-2">
+                    {selectedAgentCandidate.candidate_experiences.slice(0, 5).map((exp, i) => {
+                      if (typeof exp === 'string') {
+                        return (
+                          <li key={i} className="bg-gray-800 border border-gray-700 rounded p-3 text-gray-200">
+                            {exp}
+                          </li>
+                        );
+                      }
+                      const e = (exp || {}) as Record<string, unknown>;
+                      const position = e.position ? String(e.position) : (e.title ? String(e.title) : '');
+                      const company = e.company ? String(e.company) : '';
+                      const duration = e.duration
+                        ? String(e.duration)
+                        : [e.start_date, e.end_date].filter(Boolean).join('–');
+                      const description = e.description ? String(e.description) : '';
+                      return (
+                        <li key={i} className="bg-gray-800 border border-gray-700 rounded p-3 text-gray-200">
+                          <div className="font-semibold">
+                            {position || '—'}
+                            {company && <span className="text-gray-400 font-normal"> · {company}</span>}
+                          </div>
+                          {duration && <div className="text-xs text-gray-500 mt-0.5">{duration}</div>}
+                          {description && <div className="text-sm text-gray-300 mt-1">{description}</div>}
+                        </li>
+                      );
+                    })}
+                    {selectedAgentCandidate.candidate_experiences.length > 5 && (
+                      <li className="text-xs text-gray-500 italic">
+                        ועוד {selectedAgentCandidate.candidate_experiences.length - 5}…
+                      </li>
+                    )}
+                  </ul>
+                </section>
+              )}
+
+              {/* The match this candidate is shown under — quick link to detail modal */}
+              <section className="bg-gray-800/50 border border-gray-700 rounded p-3">
+                <div className="text-xs text-gray-400 mb-1">בהתאמה זו</div>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-gray-200">
+                    <span className="font-semibold">{selectedAgentCandidate.job_title}</span>
+                    <span className="text-gray-500 mx-2">·</span>
+                    <span className="text-gray-400">סוכן: {selectedAgentCandidate.agent_code}</span>
+                  </div>
+                  <button
+                    onClick={() => {
+                      // Switch from candidate modal → match-detail modal
+                      const m = selectedAgentCandidate;
+                      setSelectedAgentCandidate(null);
+                      setSelectedAgentMatchForDetail({
+                        id: m.id,
+                        candidateName: m.candidate_name,
+                        candidateId: m.candidate_id,
+                        jobId: m.job_id,
+                        jobTitle: m.job_title,
+                        company: 'Unknown Company',
+                        phone: m.candidate_phone || undefined,
+                        email: m.candidate_email || undefined,
+                        status: m.current_state,
+                        matchScore: m.match_score,
+                        dateAdded: m.created_at,
+                        lastActivity: m.updated_at,
+                        matchReasoning: m.match_reasoning,
+                        strengths: m.strengths,
+                        gaps: m.gaps,
+                        candidateClearance: m.candidate_clearance || undefined,
+                        requiredClearance: m.required_clearance || undefined,
+                        clearanceMatch: m.clearance_match,
+                      });
+                    }}
+                    className="text-xs bg-blue-700 hover:bg-blue-600 text-white px-3 py-1.5 rounded font-semibold"
+                  >
+                    לפרטי ההתאמה →
+                  </button>
+                </div>
+              </section>
+            </div>
+
+            <div className="sticky bottom-0 bg-gray-900 border-t border-gray-700 px-6 py-3 flex justify-end">
+              <button
+                onClick={() => setSelectedAgentCandidate(null)}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded transition text-sm"
+              >
+                סגור
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

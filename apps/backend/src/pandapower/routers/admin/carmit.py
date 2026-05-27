@@ -740,15 +740,18 @@ async def get_agent_matches(
         total = getattr(count_resp, "count", None) or len(count_resp.data or [])
 
         # ── page of rows + joined related data ─────────────────────────────
-        # candidates and jobs tables both use a small projection — only what
-        # the row needs to render so we don't bloat the response.
+        # Wide projection: the UI shows clickable rows that open a candidate
+        # modal AND a match-detail modal, both need richer fields than the
+        # table itself — pulling them here avoids per-row round-trips.
         resp = await (
             supabase.table("matches")
             .select(
                 "id, candidate_id, job_id, matched_by_agent_code, match_score, "
                 "current_state, match_reasoning, created_at, updated_at, "
-                "candidates(id,name,clearance_level), "
-                "jobs(id,job_title,job_security_clearance)"
+                "candidates(id,name,email,phone,location,clearance_level,"
+                "years_of_experience,key_skills,top_education,experiences,"
+                "detected_language,recommendation_score), "
+                "jobs(id,job_title,job_security_clearance,job_description)"
             )
             .eq("is_valid", True)
             .gte("match_score", min_score)
@@ -759,25 +762,78 @@ async def get_agent_matches(
             .execute()
         )
 
+        # ── Batch-load strengths/gaps from agent_logs.output_payload ───────
+        # The agent_matching worker writes them as JSONB under action="find_match".
+        # Mirroring the pattern already in routers/admin/recruitment_departments.py.
+        rows = resp.data or []
+        match_ids = [str(r.get("id")) for r in rows if r.get("id")]
+        strengths_by_match: dict[str, list[str]] = {}
+        gaps_by_match: dict[str, list[str]] = {}
+        if match_ids:
+            try:
+                logs_resp = await (
+                    supabase.table("agent_logs")
+                    .select("related_match_id, output_payload")
+                    .in_("related_match_id", match_ids)
+                    .eq("action", "find_match")
+                    .execute()
+                )
+                for log in logs_resp.data or []:
+                    mid = str(log.get("related_match_id") or "")
+                    payload = log.get("output_payload") or {}
+                    if isinstance(payload, dict):
+                        s = payload.get("strengths") or []
+                        g = payload.get("gaps") or []
+                        if isinstance(s, list) and s and mid not in strengths_by_match:
+                            strengths_by_match[mid] = [str(x) for x in s]
+                        if isinstance(g, list) and g and mid not in gaps_by_match:
+                            gaps_by_match[mid] = [str(x) for x in g]
+            except Exception as log_err:
+                # Non-fatal — table-row rendering doesn't need strengths/gaps,
+                # only the modal does, and the modal degrades gracefully.
+                logger.warning(f"agent_matches: strengths/gaps lookup failed: {log_err}")
+
+        # ── Clearance comparison helper (computed match/partial/mismatch) ──
+        # Reuse the same logic the per-agent screens use so the badge is
+        # consistent across all dashboards.
+        from pandapower.routers.admin.recruitment_departments import (
+            _compute_clearance_match,
+        )
+
         out = []
-        for row in resp.data or []:
+        for row in rows:
             cand = row.get("candidates") or {}
             job = row.get("jobs") or {}
             reasoning = row.get("match_reasoning") or ""
+            match_id = str(row.get("id") or "")
+            cand_clearance = cand.get("clearance_level")
+            req_clearance = job.get("job_security_clearance")
             out.append({
-                "id": str(row.get("id") or ""),
+                "id": match_id,
                 "candidate_id": str(row.get("candidate_id") or ""),
                 "candidate_name": cand.get("name") or "ללא שם",
-                "candidate_clearance": cand.get("clearance_level"),
+                "candidate_email": cand.get("email"),
+                "candidate_phone": cand.get("phone"),
+                "candidate_location": cand.get("location"),
+                "candidate_clearance": cand_clearance,
+                "candidate_years": cand.get("years_of_experience"),
+                "candidate_key_skills": cand.get("key_skills") or [],
+                "candidate_top_education": cand.get("top_education"),
+                "candidate_experiences": cand.get("experiences") or [],
+                "candidate_language": cand.get("detected_language"),
+                "candidate_recommendation_score": cand.get("recommendation_score"),
                 "job_id": str(row.get("job_id") or ""),
                 "job_title": job.get("job_title") or "ללא תפקיד",
-                "required_clearance": job.get("job_security_clearance"),
+                "job_description": job.get("job_description"),
+                "required_clearance": req_clearance,
+                "clearance_match": _compute_clearance_match(cand_clearance, req_clearance),
                 "agent_code": row.get("matched_by_agent_code") or "",
                 "match_score": float(row.get("match_score") or 0.0),
                 "current_state": row.get("current_state") or "found",
-                # Preview the reasoning for the table; the modal already
-                # shows the full text + strengths/gaps.
+                "match_reasoning": reasoning,  # full text — modal renders it
                 "reasoning_preview": (reasoning[:140] + "…") if len(reasoning) > 140 else reasoning,
+                "strengths": strengths_by_match.get(match_id, []),
+                "gaps": gaps_by_match.get(match_id, []),
                 "created_at": row.get("created_at"),
                 "updated_at": row.get("updated_at"),
             })
