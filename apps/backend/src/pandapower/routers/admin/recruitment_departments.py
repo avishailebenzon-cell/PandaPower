@@ -112,13 +112,23 @@ async def get_assigned_jobs(
             approved_count = sum(1 for m in matches if m["current_state"] in ["carmit_approved", "sent_to_tal", "tal_approved"])
             found_count = sum(1 for m in matches if m["current_state"] == "found")
 
+            # Ensure priority is a valid integer (default to 5 if None or invalid)
+            priority = job.get("priority")
+            if priority is None:
+                priority = 5
+            else:
+                try:
+                    priority = int(priority)
+                except (ValueError, TypeError):
+                    priority = 5
+
             assigned_jobs.append(
                 AssignedJob(
                     id=job_id,
                     job_title=job.get("job_title", "Unknown"),
                     job_description=job.get("job_description"),
                     assigned_agent_code=agent_code or "",
-                    priority=job.get("priority", 5),
+                    priority=priority,
                     status=job.get("status", "open"),
                     match_count=match_count,
                     approved_count=approved_count,
