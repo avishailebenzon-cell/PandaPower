@@ -115,6 +115,11 @@ export function AdminLayout() {
                 ניהול סוכנים מיוחדים
               </a>
             </li>
+            <li>
+              <a href="/admin/whatsapp-agents" className="block px-3 py-2 rounded text-slate-300 hover:bg-slate-800 transition">
+                📞 הגדרות WhatsApp (טל / אלעד / פנדי)
+              </a>
+            </li>
 
             {/* Reports & Analytics */}
             <div className="pt-4 pb-1 px-3 font-semibold text-emerald-400 border-t border-slate-700">

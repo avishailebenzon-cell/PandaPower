@@ -55,8 +55,8 @@ async def generate_pandi_invite(
         Invite URL and instructions
     """
     try:
-        # Get contact details
-        contact_result = supabase.table("contacts").select("*").eq(
+        # Get contact details — async Supabase client; await mandatory.
+        contact_result = await supabase.table("contacts").select("*").eq(
             "id", str(request.contact_id)
         ).execute()
 
@@ -67,7 +67,7 @@ async def generate_pandi_invite(
         contact_name = contact.get("name", "Unknown")
 
         # Check if pandi_client already exists for this contact
-        client_result = supabase.table("pandi_clients").select("*").eq(
+        client_result = await supabase.table("pandi_clients").select("*").eq(
             "contact_id", str(request.contact_id)
         ).execute()
 
@@ -88,7 +88,7 @@ async def generate_pandi_invite(
                 "created_at": datetime.utcnow().isoformat()
             }
 
-            client_result = supabase.table("pandi_clients").insert(client_data).execute()
+            client_result = await supabase.table("pandi_clients").insert(client_data).execute()
             if not client_result.data:
                 raise HTTPException(status_code=500, detail="Failed to create pandi client")
 
@@ -157,7 +157,10 @@ async def list_pandi_clients(
             # Filter by is_active (would need custom view or join)
             pass
 
-        result = query.range(offset, offset + limit - 1).execute()
+        # `.execute()` MUST be awaited on the async Supabase client — otherwise
+        # `.data` is missing on the returned coroutine and the handler 500s as
+        # "Failed to list clients". Same pattern bit recruiter.py and others.
+        result = await query.range(offset, offset + limit - 1).execute()
 
         if not result.data:
             return []
@@ -199,8 +202,8 @@ async def get_pandi_client(
         Client details with conversation history
     """
     try:
-        # Get client
-        client_result = supabase.table("pandi_clients").select("*").eq(
+        # Async Supabase — every .execute() MUST be awaited.
+        client_result = await supabase.table("pandi_clients").select("*").eq(
             "id", client_id
         ).execute()
 
@@ -210,18 +213,18 @@ async def get_pandi_client(
         client = client_result.data[0]
 
         # Get contact and org
-        contact_result = supabase.table("contacts").select("*").eq(
+        contact_result = await supabase.table("contacts").select("*").eq(
             "id", client["contact_id"]
         ).execute()
         contact = contact_result.data[0] if contact_result.data else {}
 
-        org_result = supabase.table("organizations").select("*").eq(
+        org_result = await supabase.table("organizations").select("*").eq(
             "id", contact.get("organization_id")
         ).execute()
         org = org_result.data[0] if org_result.data else {}
 
         # Get conversations (limit 10 recent)
-        conv_result = supabase.table("pandi_conversations").select("*").eq(
+        conv_result = await supabase.table("pandi_conversations").select("*").eq(
             "pandi_client_id", client_id
         ).order("started_at", desc=True).limit(10).execute()
         conversations = conv_result.data or []
