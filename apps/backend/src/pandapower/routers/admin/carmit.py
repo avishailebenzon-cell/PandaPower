@@ -689,3 +689,108 @@ async def get_carmit_decisions(
     except Exception as e:
         logger.error(f"Failed to get Carmit decisions: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to fetch Carmit decisions: {str(e)}")
+
+
+# ============================================================================
+#  /admin/carmit/agent-matches
+#  --------------------------------------------------------------------------
+#  Single feed for the Carmit "התאמות מסוכני הגיוס" tab: every still-valid
+#  match (Phase-4 is_valid=true) from any of the 8 recruitment agents,
+#  scored at 70% or better. Paginated, ordered by score desc then date desc.
+#  Excludes Tal/Elad/Pandi etc. — only candidates the recruitment agents
+#  themselves flagged.
+# ============================================================================
+
+# Single source of truth: who counts as a "recruitment agent" for this feed.
+RECRUITMENT_AGENT_CODES = ("naama", "alik", "dganit", "ofir", "itai", "lior", "gc", "mani")
+
+
+@router.get("/agent-matches")
+async def get_agent_matches(
+    limit: int = Query(25, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    min_score: float = Query(0.70, ge=0.0, le=1.0),
+):
+    """Carmit's "all high-quality agent matches" view.
+
+    Args:
+        limit:     page size (default 25, max 200)
+        offset:    rows to skip (page = offset / limit)
+        min_score: lower-bound score, 0.0–1.0 (default 0.70 — the "70%+ only"
+                   filter the user asked for; exposed in case we ever want to
+                   relax it for diagnostics)
+
+    Returns: paginated matches with candidate name, job title, agent code,
+             score, current state, reasoning preview, security clearance,
+             and the timestamps used by the UI.
+    """
+    try:
+        supabase = await get_supabase_client()
+
+        # ── total count, for pagination UI ─────────────────────────────────
+        # Note: postgrest returns count separately when count="exact".
+        count_resp = await (
+            supabase.table("matches")
+            .select("id", count="exact")
+            .eq("is_valid", True)
+            .gte("match_score", min_score)
+            .in_("matched_by_agent_code", list(RECRUITMENT_AGENT_CODES))
+            .execute()
+        )
+        total = getattr(count_resp, "count", None) or len(count_resp.data or [])
+
+        # ── page of rows + joined related data ─────────────────────────────
+        # candidates and jobs tables both use a small projection — only what
+        # the row needs to render so we don't bloat the response.
+        resp = await (
+            supabase.table("matches")
+            .select(
+                "id, candidate_id, job_id, matched_by_agent_code, match_score, "
+                "current_state, match_reasoning, created_at, updated_at, "
+                "candidates(id,name,clearance_level), "
+                "jobs(id,job_title,job_security_clearance)"
+            )
+            .eq("is_valid", True)
+            .gte("match_score", min_score)
+            .in_("matched_by_agent_code", list(RECRUITMENT_AGENT_CODES))
+            .order("match_score", desc=True)
+            .order("created_at", desc=True)
+            .range(offset, offset + limit - 1)
+            .execute()
+        )
+
+        out = []
+        for row in resp.data or []:
+            cand = row.get("candidates") or {}
+            job = row.get("jobs") or {}
+            reasoning = row.get("match_reasoning") or ""
+            out.append({
+                "id": str(row.get("id") or ""),
+                "candidate_id": str(row.get("candidate_id") or ""),
+                "candidate_name": cand.get("name") or "ללא שם",
+                "candidate_clearance": cand.get("clearance_level"),
+                "job_id": str(row.get("job_id") or ""),
+                "job_title": job.get("job_title") or "ללא תפקיד",
+                "required_clearance": job.get("job_security_clearance"),
+                "agent_code": row.get("matched_by_agent_code") or "",
+                "match_score": float(row.get("match_score") or 0.0),
+                "current_state": row.get("current_state") or "found",
+                # Preview the reasoning for the table; the modal already
+                # shows the full text + strengths/gaps.
+                "reasoning_preview": (reasoning[:140] + "…") if len(reasoning) > 140 else reasoning,
+                "created_at": row.get("created_at"),
+                "updated_at": row.get("updated_at"),
+            })
+
+        return {
+            "matches": out,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "min_score": min_score,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get Carmit agent matches: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch agent matches: {e}")

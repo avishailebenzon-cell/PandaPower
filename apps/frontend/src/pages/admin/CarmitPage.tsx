@@ -78,8 +78,11 @@ const AGENTS = [
 export const CarmitPage = () => {
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<
-    'decisions' | 'routing' | 'all-jobs' | 'sent-to-tal' | 'sent-to-elad'
+    'decisions' | 'agent-matches' | 'all-jobs' | 'sent-to-tal' | 'sent-to-elad'
   >('decisions');
+  // Pagination state for the new "agent-matches" tab (≥70% from all 8 agents).
+  const [agentMatchesPage, setAgentMatchesPage] = useState(0);
+  const AGENT_MATCHES_PAGE_SIZE = 25;
   const [selectedMatch, setSelectedMatch] = useState<CarmitDecision | null>(null);
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [decisionFilter, setDecisionFilter] = useState<'all' | 'approved' | 'rejected'>('all');
@@ -122,6 +125,41 @@ export const CarmitPage = () => {
       return response.json() as Promise<{ jobs: Job[]; total: number }>;
     },
     refetchInterval: 20000, // 20 seconds
+  });
+
+  // Fetch the high-quality (≥70%) matches across ALL 8 recruitment agents
+  // for the "התאמות מסוכני הגיוס" tab. Paginated via local agentMatchesPage state.
+  const API_BASE = import.meta.env.VITE_API_URL || '';
+  const { data: agentMatchesData, isLoading: agentMatchesLoading, error: agentMatchesError } = useQuery({
+    queryKey: ['carmit-agent-matches', agentMatchesPage],
+    queryFn: async () => {
+      const offset = agentMatchesPage * AGENT_MATCHES_PAGE_SIZE;
+      const url = `${API_BASE}/admin/carmit/agent-matches?limit=${AGENT_MATCHES_PAGE_SIZE}&offset=${offset}&min_score=0.70`;
+      const r = await fetch(url);
+      if (!r.ok) throw new Error('Failed to fetch agent matches');
+      return r.json() as Promise<{
+        matches: Array<{
+          id: string;
+          candidate_id: string;
+          candidate_name: string;
+          candidate_clearance: string | null;
+          job_id: string;
+          job_title: string;
+          required_clearance: string | null;
+          agent_code: string;
+          match_score: number;
+          current_state: string;
+          reasoning_preview: string;
+          created_at: string;
+          updated_at: string;
+        }>;
+        total: number;
+        offset: number;
+        limit: number;
+        min_score: number;
+      }>;
+    },
+    refetchInterval: 30000,
   });
 
   // Fetch all jobs with assignments
@@ -257,14 +295,15 @@ export const CarmitPage = () => {
           ✅ החלטות כרמית
         </button>
         <button
-          onClick={() => setActiveTab('routing')}
+          onClick={() => setActiveTab('agent-matches')}
           className={`px-6 py-3 font-semibold transition whitespace-nowrap ${
-            activeTab === 'routing'
+            activeTab === 'agent-matches'
               ? 'text-blue-400 border-b-2 border-blue-400'
               : 'text-gray-400 hover:text-gray-200'
           }`}
+          title="כל ההתאמות (70%+) מכל 8 סוכני הגיוס"
         >
-          🎯 ניתוב משרות
+          🎯 התאמות מסוכני הגיוס
         </button>
         <button
           onClick={() => setActiveTab('all-jobs')}
@@ -413,69 +452,155 @@ export const CarmitPage = () => {
         </div>
       )}
 
-      {/* Jobs Routing Tab */}
-      {activeTab === 'routing' && (
+      {/* === התאמות מסוכני הגיוס === */}
+      {/* All valid matches scored 70%+ from any of the 8 recruitment agents
+          (Naama / Alik / Dganit / Ofir / Itai / Lior / GC / Mani). Sorted
+          by score desc, paginated. Replaces the previous "ניתוב משרות" tab. */}
+      {activeTab === 'agent-matches' && (
         <div className="space-y-4">
-          {jobsLoading ? (
-            <div className="text-center py-8 text-gray-400">טוען...</div>
-          ) : (jobsData?.jobs.length || 0) > 0 ? (
-            <div className="grid gap-4">
-              {jobsData?.jobs.map((job) => (
-                <div
-                  key={job.id}
-                  className="bg-gray-800 border border-gray-700 rounded-lg p-6 hover:border-purple-500 transition"
-                >
-                  <div className="flex justify-between items-start mb-4">
-                    <div className="flex-1">
-                      <h3 className="text-lg font-semibold text-white">{job.title}</h3>
-                      <p className="text-sm text-gray-400 mt-2">{job.description}</p>
-                      <div className="mt-3 flex gap-4 text-sm text-gray-400">
-                        <span>👥 {job.candidateCount} מועמדים זמינים</span>
-                        {job.assignedAgent && (
-                          <>
-                            <span>📌 סוכן מוקצה: {job.assignedAgent}</span>
-                            {job.routingConfidence && (
-                              <span>
-                                📊 ביטחון: {(job.routingConfidence * 100).toFixed(0)}%
-                              </span>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  </div>
+          <div className="flex items-end justify-between flex-wrap gap-3">
+            <div>
+              <h2 className="text-2xl font-bold text-white">🎯 התאמות מסוכני הגיוס</h2>
+              <p className="text-sm text-gray-400">
+                כל ההתאמות במצב תקף (≥70%) מ-8 הסוכנים (נעמה / אליק / דגנית / אופיר / איתי / ליאור / כללי / מני).
+                ממוין לפי ציון יורד.
+              </p>
+            </div>
+            <div className="text-sm text-gray-400">
+              סה״כ {agentMatchesData?.total ?? 0} התאמות
+            </div>
+          </div>
 
-                  {/* Actions */}
-                  <div className="flex gap-2">
-                    {!job.assignedAgent ? (
-                      <button
-                        onClick={() => {
-                          setSelectedJob(job);
-                          routeJobMutation.mutate(job.id);
-                        }}
-                        className="flex-1 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded font-semibold transition text-sm"
-                        disabled={routeJobMutation.isPending}
-                      >
-                        🎯 ניתוב לסוכן
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => {
-                          setSelectedJob(job);
-                          routeJobMutation.mutate(job.id);
-                        }}
-                        className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded font-semibold transition text-sm"
-                        disabled={routeJobMutation.isPending}
-                      >
-                        🔄 ניתוב מחדש
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
+          {agentMatchesLoading ? (
+            <div className="text-center py-12 text-gray-400">טוען…</div>
+          ) : agentMatchesError ? (
+            <div className="bg-red-900/30 border border-red-700 rounded-lg p-4 text-red-200">
+              שגיאה: {String((agentMatchesError as Error).message)}
+            </div>
+          ) : (agentMatchesData?.matches.length ?? 0) === 0 ? (
+            <div className="bg-gray-800 border border-gray-700 rounded-lg p-8 text-center text-gray-300">
+              אין כרגע התאמות ב-70% ומעלה.
             </div>
           ) : (
-            <div className="text-center py-8 text-gray-400">אין משרות לניתוב</div>
+            <>
+              <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-right text-sm">
+                    <thead className="bg-gray-700 border-b border-gray-600 text-gray-200">
+                      <tr>
+                        <th className="px-4 py-3 font-semibold">ציון</th>
+                        <th className="px-4 py-3 font-semibold">מועמד</th>
+                        <th className="px-4 py-3 font-semibold">משרה</th>
+                        <th className="px-4 py-3 font-semibold">סוכן</th>
+                        <th className="px-4 py-3 font-semibold">מצב</th>
+                        <th className="px-4 py-3 font-semibold">סיווג ביטחוני</th>
+                        <th className="px-4 py-3 font-semibold">נוצר</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {agentMatchesData!.matches.map((m) => {
+                        const pct = Math.round(m.match_score * 100);
+                        const scoreCls =
+                          pct >= 90
+                            ? 'bg-green-900 text-green-200'
+                            : pct >= 80
+                            ? 'bg-emerald-900 text-emerald-200'
+                            : 'bg-yellow-900 text-yellow-200';
+                        return (
+                          <tr key={m.id} className="border-b border-gray-700 hover:bg-gray-750 transition">
+                            <td className="px-4 py-3">
+                              <span className={`inline-block px-2 py-1 rounded text-xs font-bold ${scoreCls}`}>
+                                {pct}%
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-white font-semibold">{m.candidate_name}</td>
+                            <td className="px-4 py-3 text-gray-300">{m.job_title}</td>
+                            <td className="px-4 py-3 text-gray-300">
+                              <span className="px-2 py-0.5 rounded bg-indigo-900/40 border border-indigo-700 text-indigo-200 text-xs font-semibold">
+                                {m.agent_code}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3">
+                              {(() => {
+                                // Tiny inline state-badge. Kept local because the
+                                // identical lookup in RecruiterMatchesPanel isn't
+                                // exported and the badge is only used here.
+                                const STATE_BADGES: Record<string, { label: string; cls: string }> = {
+                                  found: { label: 'נמצא', cls: 'bg-gray-700 text-gray-200' },
+                                  carmit_approved: { label: 'אושר ע״י כרמית', cls: 'bg-cyan-900 text-cyan-200' },
+                                  carmit_rejected: { label: 'נדחה ע״י כרמית', cls: 'bg-red-900 text-red-200' },
+                                  sent_to_tal: { label: 'ממתינה לטל', cls: 'bg-blue-900 text-blue-200' },
+                                  tal_conversation: { label: 'בשיחה עם טל', cls: 'bg-indigo-900 text-indigo-200' },
+                                  tal_approved: { label: 'אושר ע״י טל', cls: 'bg-green-900 text-green-200' },
+                                  tal_rejected: { label: 'נדחה ע״י טל', cls: 'bg-red-900 text-red-200' },
+                                  sent_to_elad: { label: 'ממתינה לאלעד', cls: 'bg-purple-900 text-purple-200' },
+                                  elad_conversation: { label: 'בשיחה עם אלעד', cls: 'bg-fuchsia-900 text-fuchsia-200' },
+                                  elad_approved: { label: 'אושר ע״י אלעד', cls: 'bg-emerald-900 text-emerald-200' },
+                                  hired: { label: '🎉 הושמה', cls: 'bg-emerald-700 text-white' },
+                                  placement_failed: { label: 'כשלון השמה', cls: 'bg-red-900 text-red-200' },
+                                };
+                                const cfg = STATE_BADGES[m.current_state] || { label: m.current_state, cls: 'bg-gray-700 text-gray-300' };
+                                return (
+                                  <span className={`px-2 py-0.5 rounded text-xs font-semibold ${cfg.cls}`}>
+                                    {cfg.label}
+                                  </span>
+                                );
+                              })()}
+                            </td>
+                            <td className="px-4 py-3 text-xs text-gray-400">
+                              <span className="opacity-70">{m.candidate_clearance || '—'}</span>
+                              {' / '}
+                              <span>{m.required_clearance || 'ללא דרישה'}</span>
+                            </td>
+                            <td className="px-4 py-3 text-xs text-gray-500">
+                              {m.created_at ? new Date(m.created_at).toLocaleDateString('he-IL', {
+                                day: '2-digit',
+                                month: '2-digit',
+                                year: 'numeric',
+                              }) : '—'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Pagination footer */}
+              {(() => {
+                const total = agentMatchesData!.total;
+                const totalPages = Math.max(1, Math.ceil(total / AGENT_MATCHES_PAGE_SIZE));
+                const firstIdx = agentMatchesPage * AGENT_MATCHES_PAGE_SIZE + 1;
+                const lastIdx = Math.min(total, firstIdx + AGENT_MATCHES_PAGE_SIZE - 1);
+                return (
+                  <div className="flex items-center justify-between bg-gray-800 border border-gray-700 rounded-lg px-4 py-3">
+                    <div className="text-sm text-gray-400">
+                      מציג {firstIdx}–{lastIdx} מתוך {total}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setAgentMatchesPage((p) => Math.max(0, p - 1))}
+                        disabled={agentMatchesPage === 0}
+                        className="px-3 py-1.5 rounded text-sm font-semibold bg-gray-700 hover:bg-gray-600 text-white disabled:bg-gray-800 disabled:text-gray-600 disabled:cursor-not-allowed transition"
+                      >
+                        ◀ קודם
+                      </button>
+                      <span className="text-sm text-gray-300 px-3">
+                        עמוד {agentMatchesPage + 1} מתוך {totalPages}
+                      </span>
+                      <button
+                        onClick={() => setAgentMatchesPage((p) => p + 1)}
+                        disabled={agentMatchesPage >= totalPages - 1}
+                        className="px-3 py-1.5 rounded text-sm font-semibold bg-gray-700 hover:bg-gray-600 text-white disabled:bg-gray-800 disabled:text-gray-600 disabled:cursor-not-allowed transition"
+                      >
+                        הבא ▶
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
+            </>
           )}
         </div>
       )}
