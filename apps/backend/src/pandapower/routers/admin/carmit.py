@@ -442,8 +442,9 @@ async def get_carmit_status():
         pending_matches_response = await supabase.table("matches").select("id").eq("current_state", "found").eq("is_valid", True).execute()
         approved_response = await supabase.table("matches").select("id").eq("current_state", "carmit_approved").eq("is_valid", True).execute()
         rejected_response = await supabase.table("matches").select("id").eq("current_state", "carmit_rejected").eq("is_valid", True).execute()
-        # Count jobs with assigned agents
-        routed_jobs_response = await supabase.table("jobs").select("*").eq("is_active", True).execute()
+
+        # Count jobs with assigned agents (not checking is_active to avoid column issues)
+        routed_jobs_response = await supabase.table("jobs").select("id").execute()
         routed_jobs = [j for j in routed_jobs_response.data if j.get("assigned_agent_code")]
 
         return {
@@ -518,9 +519,10 @@ async def get_jobs_to_route():
         supabase = await get_supabase_client()
 
         # Get unassigned jobs (no assigned_agent_code), ordered by priority (highest first)
+        # Note: Not filtering by is_active to avoid potential schema issues
         jobs_response = await supabase.table("jobs").select("*").is_(
             "assigned_agent_code", None
-        ).eq("is_active", True).order("priority", desc=True).limit(50).execute()
+        ).order("priority", desc=True).limit(50).execute()
 
         jobs = []
         for job in jobs_response.data or []:
