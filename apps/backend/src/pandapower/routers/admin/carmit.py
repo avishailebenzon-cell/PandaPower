@@ -70,12 +70,8 @@ class OverrideReviewRequest(BaseModel):
 router = APIRouter(prefix="/admin/carmit", tags=["admin", "carmit"])
 
 
-def get_supabase():
-    """Get Supabase client from dependency injection."""
-    # This will be injected by FastAPI dependency system
-    # Import here to avoid circular imports
-    from pandapower.core.supabase_manager import get_supabase_client
-    return get_supabase_client()
+# Import Supabase client for use in endpoints
+from pandapower.core.supabase import get_supabase_client
 
 
 def get_claude():
@@ -118,7 +114,7 @@ async def route_job_manual(
         from pandapower.workers.carmit import CarmitOrchestrator
         from pandapower.core.config import get_settings
 
-        supabase = get_supabase()
+        supabase = await get_supabase_client()
         claude = get_claude()
         pipedrive = get_pipedrive()
         settings = get_settings()
@@ -173,7 +169,7 @@ async def review_match_manual(
         from pandapower.workers.carmit import CarmitOrchestrator
         from pandapower.core.config import get_settings
 
-        supabase = get_supabase()
+        supabase = await get_supabase_client()
         claude = get_claude()
         pipedrive = get_pipedrive()
         settings = get_settings()
@@ -240,7 +236,7 @@ async def get_pending_review(
         List of pending matches with metadata
     """
     try:
-        supabase = get_supabase()
+        supabase = await get_supabase_client()
 
         # Build query
         query = supabase.table("matches").select(
@@ -251,7 +247,7 @@ async def get_pending_review(
             query = query.eq("matched_by_agent_code", filter_agent)
 
         # Execute query with pagination
-        response = query.range(offset, offset + limit - 1).execute()
+        response = await query.range(offset, offset + limit - 1).execute()
 
         # Format response
         matches = []
@@ -294,7 +290,7 @@ async def get_routing_history(
         List of routing decisions
     """
     try:
-        supabase = get_supabase()
+        supabase = await get_supabase_client()
 
         # Query agent_logs for routing decisions
         query = supabase.table("agent_logs").select("*").eq(
@@ -305,7 +301,7 @@ async def get_routing_history(
             query = query.eq("agent_code", agent_code)
 
         # Execute query with pagination
-        response = query.range(offset, offset + limit - 1).execute()
+        response = await query.range(offset, offset + limit - 1).execute()
 
         # Format response
         decisions = []
@@ -348,7 +344,7 @@ async def get_review_history(
         List of match review decisions
     """
     try:
-        supabase = get_supabase()
+        supabase = await get_supabase_client()
 
         # Query match_state_history for review decisions
         query = supabase.table("match_state_history").select("*").in_(
@@ -356,7 +352,7 @@ async def get_review_history(
         ).order("created_at", desc=True)
 
         # Execute query with pagination
-        response = query.range(offset, offset + limit - 1).execute()
+        response = await query.range(offset, offset + limit - 1).execute()
 
         # Format response
         reviews = []
@@ -397,13 +393,13 @@ async def get_carmit_status():
         Current status and metrics
     """
     try:
-        supabase = get_supabase()
+        supabase = await get_supabase_client()
 
         # Get counts
-        pending_matches_response = supabase.table("matches").select("id").eq("current_state", "found").execute()
-        approved_response = supabase.table("matches").select("id").eq("current_state", "carmit_approved").execute()
-        rejected_response = supabase.table("matches").select("id").eq("current_state", "carmit_rejected").execute()
-        routed_jobs_response = supabase.table("jobs").select("id").eq("status", "assigned_agent").execute()
+        pending_matches_response = await supabase.table("matches").select("id").eq("current_state", "found").execute()
+        approved_response = await supabase.table("matches").select("id").eq("current_state", "carmit_approved").execute()
+        rejected_response = await supabase.table("matches").select("id").eq("current_state", "carmit_rejected").execute()
+        routed_jobs_response = await supabase.table("jobs").select("id").eq("status", "assigned_agent").execute()
 
         return {
             "status": "operational",
