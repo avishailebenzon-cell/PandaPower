@@ -1,8 +1,7 @@
 import logging
 from typing import Any
 
-from supabase._async.client import AsyncClient
-from supabase import create_client
+from supabase import AsyncClient, create_client
 
 from pandapower.core.config import settings
 
