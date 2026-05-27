@@ -21,6 +21,9 @@ export interface WhatsAppAgentConfig {
   webhook_secret: string;
   last_updated_at: string | null;
   is_configured: boolean;
+  // Per-agent webhook URL the admin pastes into the Green API console.
+  webhook_url: string;
+  webhook_url_with_token: string;
 }
 
 export interface WhatsAppAgentConfigUpdate {

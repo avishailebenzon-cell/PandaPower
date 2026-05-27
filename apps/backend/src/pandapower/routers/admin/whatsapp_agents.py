@@ -27,7 +27,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from pandapower.core.config import settings
@@ -69,6 +69,14 @@ class WhatsAppAgentConfig(BaseModel):
     # are set, i.e. enough to reach Green API. The phone-number field is
     # informational only (so the human knows which number this is).
     is_configured: bool = False
+    # Full public URL the admin needs to paste into the Green API console
+    # under "Webhook URL" for this specific agent. Built from the incoming
+    # request so it works in any environment (local / Render / preview).
+    webhook_url: str = ""
+    # The token shape the admin should append to the URL so we can verify
+    # incoming Green-API calls. Reflects whatever they typed in the
+    # `webhook_secret` field above.
+    webhook_url_with_token: str = ""
 
 
 class WhatsAppAgentConfigUpdate(BaseModel):
@@ -111,10 +119,46 @@ async def _fetch_settings_dict(supabase, prefix: str) -> tuple[dict[str, str], O
     return out, latest
 
 
-def _build_config(agent_code: str, settings: dict[str, str], last_updated: Optional[str]) -> WhatsAppAgentConfig:
+def _public_base_url(request: Optional[Request]) -> str:
+    """Compute the externally-reachable base URL of this backend.
+
+    Render terminates TLS at the edge, so the inbound request sometimes
+    reports http even though the public URL is https. Trust the
+    X-Forwarded-Proto/Host headers first, then fall back to request.url.
+    """
+    if request is None:
+        return ""
+    forwarded_proto = (
+        request.headers.get("x-forwarded-proto")
+        or request.headers.get("X-Forwarded-Proto")
+        or request.url.scheme
+        or "https"
+    )
+    host = (
+        request.headers.get("x-forwarded-host")
+        or request.headers.get("X-Forwarded-Host")
+        or request.url.netloc
+    )
+    return f"{forwarded_proto}://{host}".rstrip("/")
+
+
+def _build_config(
+    agent_code: str,
+    settings: dict[str, str],
+    last_updated: Optional[str],
+    request: Optional[Request] = None,
+) -> WhatsAppAgentConfig:
     label = AGENT_LABELS.get(agent_code, {"name": agent_code, "role": "", "emoji": "💬"})
     instance_id = settings.get("instance_id", "")
     token = settings.get("token", "")
+    webhook_secret = settings.get("webhook_secret", "")
+
+    base_url = _public_base_url(request)
+    webhook_url = f"{base_url}/webhooks/whatsapp/{agent_code}" if base_url else ""
+    webhook_url_with_token = (
+        f"{webhook_url}?token={webhook_secret}" if (webhook_url and webhook_secret) else webhook_url
+    )
+
     return WhatsAppAgentConfig(
         agent_code=agent_code,
         name=label["name"],
@@ -123,9 +167,11 @@ def _build_config(agent_code: str, settings: dict[str, str], last_updated: Optio
         instance_id=instance_id,
         token=token,
         whatsapp_number=settings.get("whatsapp_number", ""),
-        webhook_secret=settings.get("webhook_secret", ""),
+        webhook_secret=webhook_secret,
         last_updated_at=last_updated,
         is_configured=bool(instance_id and token),
+        webhook_url=webhook_url,
+        webhook_url_with_token=webhook_url_with_token,
     )
 
 
@@ -151,6 +197,7 @@ async def _upsert_setting(supabase, key: str, value: str) -> None:
 
 @router.get("/config", response_model=WhatsAppAgentsResponse)
 async def get_all_whatsapp_agents(
+    request: Request,
     supabase=Depends(get_supabase_client),
 ) -> WhatsAppAgentsResponse:
     """Return the Green-API config for all three WhatsApp agents at once."""
@@ -161,25 +208,27 @@ async def get_all_whatsapp_agents(
         except Exception as e:
             logger.warning(f"Failed to read settings for {code}: {e}")
             settings, last_updated = {}, None
-        out.append(_build_config(code, settings, last_updated))
+        out.append(_build_config(code, settings, last_updated, request))
     return WhatsAppAgentsResponse(agents=out)
 
 
 @router.get("/{agent_code}/config", response_model=WhatsAppAgentConfig)
 async def get_one_whatsapp_agent(
     agent_code: str,
+    request: Request,
     supabase=Depends(get_supabase_client),
 ) -> WhatsAppAgentConfig:
     if agent_code not in SUPPORTED_AGENTS:
         raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_code}")
     settings, last_updated = await _fetch_settings_dict(supabase, agent_code)
-    return _build_config(agent_code, settings, last_updated)
+    return _build_config(agent_code, settings, last_updated, request)
 
 
 @router.post("/{agent_code}/config", response_model=WhatsAppAgentConfig)
 async def save_whatsapp_agent_config(
     agent_code: str,
     body: WhatsAppAgentConfigUpdate,
+    request: Request,
     supabase=Depends(get_supabase_client),
 ) -> WhatsAppAgentConfig:
     """Save the 4 fields for ONE agent. Other agents are untouched.
@@ -201,7 +250,7 @@ async def save_whatsapp_agent_config(
 
     # Return the freshly-saved state so the UI can re-render confidently.
     settings, last_updated = await _fetch_settings_dict(supabase, agent_code)
-    return _build_config(agent_code, settings, last_updated)
+    return _build_config(agent_code, settings, last_updated, request)
 
 
 # ============================================================================

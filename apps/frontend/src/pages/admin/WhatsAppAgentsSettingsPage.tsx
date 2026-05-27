@@ -244,38 +244,113 @@ function SettingsTab({ bot }: { bot: WhatsAppAgentConfig }) {
     form.webhook_secret !== bot.webhook_secret;
 
   return (
-    <section className="bg-gray-800 border border-gray-700 rounded-lg p-5 space-y-4">
-      <div className="text-sm text-gray-400">
-        עודכן: {formatWhen(bot.last_updated_at)}
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <Field label={`📱 מספר WhatsApp של ${bot.name}`} value={form.whatsapp_number}
-               onChange={(v) => setForm((f) => ({ ...f, whatsapp_number: v }))}
-               help="לזיהוי אדם בלבד — לא נשלח ל-Green API." placeholder="+972501234567" dir="ltr" />
-        <Field label="Green API Instance ID" value={form.instance_id}
-               onChange={(v) => setForm((f) => ({ ...f, instance_id: v }))}
-               help="מזהה המופע ב-Green API." placeholder="לדוגמה: 1101234567" dir="ltr" />
-        <Field label="Green API Token" type="password" value={form.token}
-               onChange={(v) => setForm((f) => ({ ...f, token: v }))}
-               help="הטוקן הסודי." placeholder="••••••••••••••••" dir="ltr" />
-        <Field label="Webhook Secret (אופציונלי)" type="password" value={form.webhook_secret}
-               onChange={(v) => setForm((f) => ({ ...f, webhook_secret: v }))}
-               help="לאימות הודעות נכנסות." dir="ltr" />
-      </div>
-      <div className="flex items-center justify-end gap-3 pt-3 border-t border-gray-700">
-        {statusMsg && <span className="text-sm text-gray-300">{statusMsg}</span>}
+    <div className="space-y-4">
+      <WebhookUrlPanel bot={bot} />
+
+      <section className="bg-gray-800 border border-gray-700 rounded-lg p-5 space-y-4">
+        <div className="text-sm text-gray-400">
+          עודכן: {formatWhen(bot.last_updated_at)}
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <Field label={`📱 מספר WhatsApp של ${bot.name}`} value={form.whatsapp_number}
+                 onChange={(v) => setForm((f) => ({ ...f, whatsapp_number: v }))}
+                 help="לזיהוי אדם בלבד — לא נשלח ל-Green API." placeholder="+972501234567" dir="ltr" />
+          <Field label="Green API Instance ID" value={form.instance_id}
+                 onChange={(v) => setForm((f) => ({ ...f, instance_id: v }))}
+                 help="מזהה המופע ב-Green API." placeholder="לדוגמה: 1101234567" dir="ltr" />
+          <Field label="Green API Token" type="password" value={form.token}
+                 onChange={(v) => setForm((f) => ({ ...f, token: v }))}
+                 help="הטוקן הסודי." placeholder="••••••••••••••••" dir="ltr" />
+          <Field label="Webhook Secret (אופציונלי)" type="password" value={form.webhook_secret}
+                 onChange={(v) => setForm((f) => ({ ...f, webhook_secret: v }))}
+                 help="אם תזין סוד — נדרוש אותו ב-Green API ככה: ?token=<הסוד>." dir="ltr" />
+        </div>
+        <div className="flex items-center justify-end gap-3 pt-3 border-t border-gray-700">
+          {statusMsg && <span className="text-sm text-gray-300">{statusMsg}</span>}
+          <button
+            onClick={() => save.mutate()}
+            disabled={!dirty || save.isPending}
+            className={`px-5 py-2 rounded font-semibold text-sm transition ${
+              !dirty || save.isPending
+                ? "bg-gray-700 text-gray-500 cursor-not-allowed"
+                : "bg-indigo-600 hover:bg-indigo-700 text-white"
+            }`}
+          >
+            {save.isPending ? "שומר…" : `שמור הגדרות של ${bot.name}`}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+// ============================================================================
+// Webhook URL panel — shown at the top of each agent's settings tab so the
+// admin can copy it straight into Green API's "Webhook URL" field.
+// The URL is per-agent (path-segment isolation) and includes the
+// webhook_secret as ?token=... when one is configured.
+// ============================================================================
+function WebhookUrlPanel({ bot }: { bot: WhatsAppAgentConfig }) {
+  const hasUrl = !!bot.webhook_url;
+  // Use the with-token URL if a secret is configured; otherwise the bare URL.
+  const urlToShow = bot.webhook_url_with_token || bot.webhook_url || "";
+  const [copied, setCopied] = useState(false);
+
+  const onCopy = async () => {
+    if (!urlToShow) return;
+    try {
+      await navigator.clipboard.writeText(urlToShow);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // clipboard API can fail on insecure contexts — fall back to no-op
+    }
+  };
+
+  if (!hasUrl) return null;
+
+  const c = BOT_COLORS[bot.agent_code];
+  return (
+    <section className={`border ${c.border} ${c.bg} rounded-lg p-5 space-y-3`}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className={`font-bold ${c.accent}`}>📡 Webhook URL עבור {bot.name}</h3>
+          <p className="text-sm text-gray-300 mt-1 leading-relaxed">
+            הדבק את ה-URL הזה ב-Green API console תחת{" "}
+            <code className="bg-gray-900 px-1 rounded text-xs">Settings → Webhook URL</code>{" "}
+            של המופע של {bot.name}. כל בוט מקבל URL שונה — אל תערבב.
+          </p>
+        </div>
         <button
-          onClick={() => save.mutate()}
-          disabled={!dirty || save.isPending}
-          className={`px-5 py-2 rounded font-semibold text-sm transition ${
-            !dirty || save.isPending
-              ? "bg-gray-700 text-gray-500 cursor-not-allowed"
-              : "bg-indigo-600 hover:bg-indigo-700 text-white"
-          }`}
+          onClick={onCopy}
+          className="shrink-0 px-3 py-1.5 text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white rounded transition"
         >
-          {save.isPending ? "שומר…" : `שמור הגדרות של ${bot.name}`}
+          {copied ? "✅ הועתק" : "📋 העתק"}
         </button>
       </div>
+
+      <div className="bg-gray-900 border border-gray-700 rounded p-3" dir="ltr">
+        <code className="text-emerald-300 text-xs break-all">{urlToShow}</code>
+      </div>
+
+      <ul className="text-xs text-gray-400 space-y-1 list-disc pr-5">
+        <li>
+          ב-Green API: גש למופע של <strong>{bot.name}</strong>, פתח "API Settings",
+          הדבק את ה-URL בשדה <code>webhookUrl</code> ולחץ Save.
+        </li>
+        {bot.webhook_secret ? (
+          <li className="text-green-300">
+            🔒 הוגדר Webhook Secret — ה-URL כולל <code>?token=…</code> ואנחנו נאמת כל קריאה נכנסת.
+          </li>
+        ) : (
+          <li className="text-yellow-300">
+            ⚠️ לא הוגדר Webhook Secret — נקבל כל קריאה. הזן ערך בשדה למטה כדי לאבטח.
+          </li>
+        )}
+        <li>
+          קריאות נכנסות יופיעו בטאב "💬 שיחות" ובדאשבורד תוך שניות.
+        </li>
+      </ul>
     </section>
   );
 }
