@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: pandapower-backend
+    runtime: python
+    region: frankfurt
+    plan: starter
+    rootDir: apps/backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn pandapower.main:app --host 0.0.0.0 --port $PORT --app-dir src
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      - key: APP_ENV
+        value: production
+      - key: DEBUG
+        value: "false"
+      # Set the following secrets manually in Render Dashboard:
+      # SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_JWT_SECRET
+      # ANTHROPIC_API_KEY
+      # RESEND_API_KEY
+      # PIPEDRIVE_API_TOKEN, PIPEDRIVE_COMPANY_DOMAIN
+      # CORS_ORIGINS (e.g. https://panda-power.vercel.app)
+    healthCheckPath: /health
+    autoDeploy: true
