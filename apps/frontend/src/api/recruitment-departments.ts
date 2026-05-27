@@ -3,7 +3,7 @@
  * Fetch functions for agent matches, status updates, and department stats
  */
 
-const API_BASE = "http://localhost:8000";
+const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 export interface DepartmentMatch {
   id: string;

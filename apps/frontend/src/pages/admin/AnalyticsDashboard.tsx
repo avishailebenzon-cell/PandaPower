@@ -77,7 +77,7 @@ interface AgentPerformanceMetric {
 }
 
 // API fetch functions
-const API_BASE = "http://localhost:8000";
+const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 const fetchKPISummary = async (period: string): Promise<KPISummary> => {
   const response = await fetch(`${API_BASE}/admin/analytics/kpi-summary?period=${period}`);
