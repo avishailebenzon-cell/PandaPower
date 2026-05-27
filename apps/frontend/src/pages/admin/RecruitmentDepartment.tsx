@@ -17,6 +17,7 @@ import {
 } from '@/api/recruitment-departments';
 import { useParams } from 'react-router-dom';
 import { getAgent } from '@/data/agents';
+import { MatchDetailModal, ClearanceBadge } from '@/components/MatchDetailModal';
 
 type TabType = 'active' | 'history';
 type GroupBy = 'none' | 'job' | 'status' | 'score';
@@ -41,6 +42,8 @@ export const RecruitmentDepartment: React.FC = () => {
   const [showApproveModal, setShowApproveModal] = useState(false);
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [selectedMatch, setSelectedMatch] = useState<DepartmentMatch | null>(null);
+  // Match-detail modal (strengths / gaps / reasoning / clearance comparison)
+  const [detailMatch, setDetailMatch] = useState<DepartmentMatch | null>(null);
   const [rejectionReason, setRejectionReason] = useState('');
   const [newCVsCount, setNewCVsCount] = useState(0);
   const [lastCVCheck, setLastCVCheck] = useState<Date | null>(null);
@@ -563,6 +566,7 @@ export const RecruitmentDepartment: React.FC = () => {
                         <th className="px-4 py-3 text-right font-semibold text-gray-200">משרה</th>
                         <th className="px-4 py-3 text-right font-semibold text-gray-200">חברה</th>
                         <th className="px-4 py-3 text-right font-semibold text-gray-200">ציון</th>
+                        <th className="px-4 py-3 text-right font-semibold text-gray-200">סיווג ביטחוני</th>
                         <th className="px-4 py-3 text-right font-semibold text-gray-200">סטטוס</th>
                         <th className="px-4 py-3 text-right font-semibold text-gray-200">פעולות</th>
                       </tr>
@@ -581,7 +585,16 @@ export const RecruitmentDepartment: React.FC = () => {
                               className="cursor-pointer"
                             />
                           </td>
-                          <td className="px-4 py-3 text-white font-semibold">{match.candidateName}</td>
+                          <td className="px-4 py-3">
+                            <button
+                              type="button"
+                              onClick={() => setDetailMatch(match)}
+                              className="text-white font-semibold hover:text-amber-300 hover:underline transition text-right"
+                              title="לחץ לפרטי התאמה מלאים"
+                            >
+                              {match.candidateName}
+                            </button>
+                          </td>
                           <td className="px-4 py-3 text-gray-300">{match.jobTitle}</td>
                           <td className="px-4 py-3 text-gray-400">{match.company}</td>
                           <td className="px-4 py-3">
@@ -604,6 +617,9 @@ export const RecruitmentDepartment: React.FC = () => {
                             </div>
                           </td>
                           <td className="px-4 py-3">
+                            <ClearanceBadge value={match.clearanceMatch} />
+                          </td>
+                          <td className="px-4 py-3">
                             <span
                               className={`px-2 py-1 rounded text-xs font-semibold ${
                                 match.status === 'approved'
@@ -619,28 +635,37 @@ export const RecruitmentDepartment: React.FC = () => {
                             </span>
                           </td>
                           <td className="px-4 py-3 text-left">
-                            {match.status === 'found' && (
-                              <div className="flex gap-2">
-                                <button
-                                  onClick={() => {
-                                    setSelectedMatch(match);
-                                    setShowApproveModal(true);
-                                  }}
-                                  className="px-2 py-1 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold rounded transition"
-                                >
-                                  אשר
-                                </button>
-                                <button
-                                  onClick={() => {
-                                    setSelectedMatch(match);
-                                    setShowRejectModal(true);
-                                  }}
-                                  className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded transition"
-                                >
-                                  דחה
-                                </button>
-                              </div>
-                            )}
+                            <div className="flex gap-2 items-center justify-end">
+                              <button
+                                onClick={() => setDetailMatch(match)}
+                                className="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded transition"
+                                title="פרטי התאמה מלאים"
+                              >
+                                מפרט
+                              </button>
+                              {match.status === 'found' && (
+                                <>
+                                  <button
+                                    onClick={() => {
+                                      setSelectedMatch(match);
+                                      setShowApproveModal(true);
+                                    }}
+                                    className="px-2 py-1 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold rounded transition"
+                                  >
+                                    אשר
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setSelectedMatch(match);
+                                      setShowRejectModal(true);
+                                    }}
+                                    className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded transition"
+                                  >
+                                    דחה
+                                  </button>
+                                </>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -726,6 +751,9 @@ export const RecruitmentDepartment: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Match Detail Modal — strengths/gaps/reasoning/clearance comparison */}
+      <MatchDetailModal match={detailMatch} onClose={() => setDetailMatch(null)} />
     </div>
   );
 };

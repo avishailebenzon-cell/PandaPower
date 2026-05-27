@@ -5,9 +5,12 @@
 
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
+export type ClearanceMatch = "match" | "partial" | "mismatch" | "unknown";
+
 export interface DepartmentMatch {
   id: string;
   candidateName: string;
+  candidateId?: string;
   jobId: string;
   jobTitle: string;
   company: string;
@@ -18,6 +21,15 @@ export interface DepartmentMatch {
   dateAdded: string;
   lastActivity?: string;
   notes?: string;
+  // Match-quality detail (already produced by the agent_matching worker)
+  matchReasoning?: string;
+  strengths?: string[];
+  gaps?: string[];
+  // Security-clearance comparison
+  candidateClearance?: string;
+  candidateClearanceConfidence?: number;
+  requiredClearance?: string;
+  clearanceMatch?: ClearanceMatch;
 }
 
 export interface AssignedJob {

@@ -13,10 +13,69 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin/departments", tags=["admin", "departments"])
 
 
+# Hebrew security-clearance hierarchy (low -> high).
+# Used to compare candidate clearance vs job requirement.
+_CLEARANCE_RANK = {
+    "ללא": 0,
+    "none": 0,
+    "ללא סיווג": 0,
+    "סודי": 1,
+    "secret": 1,
+    "סודי ביותר": 2,
+    "top secret": 2,
+    "ts": 2,
+    "טופ סיקרט": 2,
+}
+
+
+def _normalize_clearance(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    return str(value).strip().lower()
+
+
+def _clearance_rank(value: Optional[str]) -> Optional[int]:
+    norm = _normalize_clearance(value)
+    if norm is None:
+        return None
+    return _CLEARANCE_RANK.get(norm)
+
+
+def _compute_clearance_match(candidate_clearance: Optional[str], required_clearance: Optional[str]) -> str:
+    """Return one of: match | partial | mismatch | unknown.
+
+    - unknown: either side missing
+    - match: candidate rank >= required rank
+    - partial: candidate has some clearance but below required
+    - mismatch: candidate has no clearance and job requires one
+    """
+    if not required_clearance:
+        # Job has no clearance requirement — anything is fine
+        return "match" if candidate_clearance else "unknown"
+    if not candidate_clearance:
+        return "mismatch"
+
+    cand_rank = _clearance_rank(candidate_clearance)
+    req_rank = _clearance_rank(required_clearance)
+
+    if cand_rank is None or req_rank is None:
+        # We have free-text values we don't recognise — fall back to string equality
+        if _normalize_clearance(candidate_clearance) == _normalize_clearance(required_clearance):
+            return "match"
+        return "partial"
+
+    if cand_rank >= req_rank:
+        return "match"
+    if cand_rank > 0:
+        return "partial"
+    return "mismatch"
+
+
 class DepartmentMatch(BaseModel):
     """Match in department view."""
     id: str
     candidateName: str
+    candidateId: Optional[str] = None
     jobId: str
     jobTitle: str
     company: str
@@ -27,6 +86,15 @@ class DepartmentMatch(BaseModel):
     dateAdded: str
     lastActivity: Optional[str] = None
     notes: Optional[str] = None
+    # Match-quality detail (already produced by agent_matching.py)
+    matchReasoning: Optional[str] = None
+    strengths: List[str] = []
+    gaps: List[str] = []
+    # Security-clearance comparison
+    candidateClearance: Optional[str] = None
+    candidateClearanceConfidence: Optional[float] = None
+    requiredClearance: Optional[str] = None
+    clearanceMatch: str = "unknown"  # "match" | "partial" | "mismatch" | "unknown"
 
 
 class UpdateStatusRequest(BaseModel):
@@ -61,6 +129,8 @@ class AssignedJob(BaseModel):
     match_count: int
     approved_count: int
     found_count: int
+    organization_name: Optional[str] = None
+    contact_person_name: Optional[str] = None
 
 
 @router.get("/{department_code}/assigned-jobs", response_model=List[AssignedJob])
@@ -166,10 +236,14 @@ async def get_department_matches(
         List of matches for the department
     """
     try:
-        # Query matches table for this agent (matched_by_agent_code is the agent who found the match)
-        # Also filter by is_valid=True (Phase 4: only show non-invalidated matches)
+        # Query matches table for this agent (matched_by_agent_code is the agent who found the match).
+        # Filter by is_valid=True (Phase 4: only show non-invalidated matches).
+        # Pull candidate clearance + job required clearance via joined relations so we can
+        # show a security-clearance badge in the row without an extra round-trip.
         query = supabase.table("matches").select(
-            "*, candidates(id,name,email,phone), jobs(id,job_title)"
+            "*, "
+            "candidates(id,name,email,phone,security_clearance_level,security_clearance_confidence), "
+            "jobs(id,job_title,required_security_clearance)"
         ).eq("matched_by_agent_code", department_code).eq(
             "is_valid", True
         )
@@ -184,6 +258,30 @@ async def get_department_matches(
         if not result.data:
             return []
 
+        # Batch-load strengths/gaps for these matches from agent_logs.output_payload.
+        # The agent_matching worker writes them as JSONB on the "find_match" action.
+        match_ids = [str(r.get("id")) for r in result.data if r.get("id")]
+        strengths_by_match: dict[str, list[str]] = {}
+        gaps_by_match: dict[str, list[str]] = {}
+        if match_ids:
+            try:
+                logs_result = await supabase.table("agent_logs").select(
+                    "related_match_id, output_payload"
+                ).in_("related_match_id", match_ids).eq("action", "find_match").execute()
+                for log in logs_result.data or []:
+                    mid = str(log.get("related_match_id") or "")
+                    payload = log.get("output_payload") or {}
+                    if isinstance(payload, dict):
+                        s = payload.get("strengths") or []
+                        g = payload.get("gaps") or []
+                        if isinstance(s, list) and s and mid not in strengths_by_match:
+                            strengths_by_match[mid] = [str(x) for x in s]
+                        if isinstance(g, list) and g and mid not in gaps_by_match:
+                            gaps_by_match[mid] = [str(x) for x in g]
+            except Exception as log_err:
+                # Non-fatal — show matches without strengths/gaps if agent_logs lookup fails
+                logger.warning(f"Could not load strengths/gaps from agent_logs: {log_err}")
+
         # Map to response model
         matches = []
         for row in result.data:
@@ -192,19 +290,25 @@ async def get_department_matches(
             candidate_name = candidate.get("name") or "Unknown"
             candidate_email = candidate.get("email")
             candidate_phone = candidate.get("phone")
+            candidate_clearance = candidate.get("security_clearance_level")
+            candidate_clearance_conf = candidate.get("security_clearance_confidence")
 
             # Extract job info from joined data
             job = row.get("jobs", {}) or {}
             job_id = str(row.get("job_id", ""))
             job_title = job.get("job_title") or "Unknown Job"
+            required_clearance = job.get("required_security_clearance")
+
+            match_id = str(row.get("id", ""))
 
             matches.append(
                 DepartmentMatch(
-                    id=str(row.get("id", "")),
+                    id=match_id,
                     candidateName=candidate_name,
+                    candidateId=str(candidate.get("id")) if candidate.get("id") else None,
                     jobId=job_id,
                     jobTitle=job_title,
-                    company=row.get("company", "Unknown Company"),  # May not have company info
+                    company=row.get("company", "Unknown Company"),
                     phone=candidate_phone,
                     email=candidate_email,
                     status=row.get("current_state", "unknown"),
@@ -212,6 +316,15 @@ async def get_department_matches(
                     dateAdded=row.get("created_at", ""),
                     lastActivity=row.get("updated_at"),
                     notes=row.get("notes"),
+                    matchReasoning=row.get("match_reasoning"),
+                    strengths=strengths_by_match.get(match_id, []),
+                    gaps=gaps_by_match.get(match_id, []),
+                    candidateClearance=candidate_clearance,
+                    candidateClearanceConfidence=(
+                        float(candidate_clearance_conf) if candidate_clearance_conf is not None else None
+                    ),
+                    requiredClearance=required_clearance,
+                    clearanceMatch=_compute_clearance_match(candidate_clearance, required_clearance),
                 )
             )
 
