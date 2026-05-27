@@ -316,7 +316,7 @@ class AgentMatchingWorker:
         try:
             # Call Claude Sonnet (faster and cheaper than Opus for matching)
             response = await self.claude.match_score_with_json(
-                prompt=prompt, model="claude-sonnet-4"
+                prompt=prompt, model="claude-sonnet-4-5"
             )
 
             # Parse response
@@ -602,7 +602,7 @@ Return ONLY valid JSON (no extra text):
                             "milestone": "candidate_match_created",  # Track progression through pipeline
                         },
                         "reasoning": f"Found match with score {score}: {reasoning}",
-                        "llm_model": "claude-sonnet-4",
+                        "llm_model": "claude-sonnet-4-5",
                         "tokens_used": tokens_used,
                         "duration_ms": int(duration_ms),
                         "status": "success",

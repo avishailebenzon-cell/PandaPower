@@ -483,14 +483,15 @@ Return ONLY this JSON structure (every field is REQUIRED — use null/[]/{{}} wh
             logger.error(f"CV parsing failed: {str(e)}")
             raise
 
-    async def match_score_with_json(self, prompt: str, model: str = "claude-sonnet-4") -> dict[str, Any]:
+    async def match_score_with_json(self, prompt: str, model: str = "claude-sonnet-4-5") -> dict[str, Any]:
         """Score a candidate-job match and return structured JSON result.
 
         Used by agent matching worker for Phase 4.
 
         Args:
             prompt: The matching prompt containing candidate and job details
-            model: Claude model to use (default: claude-sonnet-4)
+            model: Claude model to use (default: claude-sonnet-4-5; the
+                previous "claude-sonnet-4" was retired and now 404s).
 
         Returns:
             {
