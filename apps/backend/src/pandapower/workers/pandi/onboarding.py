@@ -45,8 +45,13 @@ async def continue_intake_flow(
         intake_data = client.get("intake_collected_data") or {}
         step = len([k for k in ["name", "company", "role", "referrer"] if k in intake_data])
 
-        # Get greeting message from settings (fallback to default)
-        greeting = "שלום! אני פנדי, הבוט החכם של PandaTech 🐼. נראה שהגעת אליי לראשונה. אשמח להכיר! מה שמך?"
+        # Opening greeting Pandi sends to every first-time contact.
+        # Tone and wording confirmed by product: keep singular and friendly,
+        # no bot disclosure beyond "סוכנת גיוס בינה מלאכותית".
+        greeting = (
+            "היי, אני פנדי סוכנת גיוס בינה מלאכותית של פנדה-טק. "
+            "אני כאן כדי לעזור לך למצוא מועמד מתאים לתפקיד."
+        )
 
         # First message: send greeting
         if is_first:

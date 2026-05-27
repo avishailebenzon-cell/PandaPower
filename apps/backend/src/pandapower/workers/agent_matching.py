@@ -52,6 +52,16 @@ AGENT_CONFIGS = {
         "keywords": "Any domain not covered by specialized agents",
         "skill_categories": ["general"],
     },
+    # Mani works INDEPENDENTLY of Carmit — he auto-matches any Level-1
+    # security-clearance candidate against any Level-1 job. He doesn't
+    # receive routed jobs the way the 7 domain agents do; instead a
+    # dedicated worker (workers/mani_matching.py) sweeps Level-1 pairs.
+    "mani": {
+        "name": "Mani",
+        "domain": "Security-Clearance Specialist (Level 1)",
+        "keywords": "Security clearance, רמה 1, Level 1, classified, defense",
+        "skill_categories": ["security", "clearance", "defense", "classified"],
+    },
 }
 
 
@@ -583,7 +593,12 @@ Return ONLY valid JSON (no extra text):
             result = await self.supabase.table("matches").insert(match_data).execute()
             match_id = result.data[0]["id"] if result.data else None
 
-            # Log to agent_logs
+            # Log to agent_logs.
+            # NOTE: production agent_logs table is missing some columns the
+            # migration defines (duration_ms, tokens_used, llm_model). Insert
+            # only the verified column set; stash the rest inside output_payload
+            # so nothing is lost. This is the same shape used by
+            # scripts/backfill_match_details.py.
             if match_id:
                 await self.supabase.table("agent_logs").insert(
                     {
@@ -592,20 +607,22 @@ Return ONLY valid JSON (no extra text):
                         "related_candidate_id": candidate_id,
                         "related_job_id": job_id,
                         "related_match_id": match_id,
+                        "milestone": "candidate_match_created",
+                        "status": "success",
                         "input_payload": {"candidate_id": candidate_id, "job_id": job_id},
                         "output_payload": {
                             "score": score,
                             "reasoning": reasoning,
                             "strengths": strengths,
                             "gaps": gaps,
-                            "match_status": "found",  # Initial state, will be updated by Carmit review
-                            "milestone": "candidate_match_created",  # Track progression through pipeline
+                            "match_status": "found",
+                            "milestone": "candidate_match_created",
+                            # Metrics that don't have dedicated columns
+                            "llm_model": "claude-sonnet-4-5",
+                            "tokens_used": tokens_used,
+                            "duration_ms": int(duration_ms),
                         },
                         "reasoning": f"Found match with score {score}: {reasoning}",
-                        "llm_model": "claude-sonnet-4-5",
-                        "tokens_used": tokens_used,
-                        "duration_ms": int(duration_ms),
-                        "status": "success",
                     }
                 ).execute()
 
