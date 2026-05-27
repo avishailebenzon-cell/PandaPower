@@ -30,6 +30,7 @@ interface Job {
   status?: string;
   assigned_agent_name?: string;
   contact_person_name?: string;
+  organization_name?: string;
   job_opening_date?: string;
   created_at?: string;
   updated_at?: string;
@@ -504,6 +505,7 @@ export const CarmitPage = () => {
                   <tr className="border-b border-gray-700">
                     <th className="text-right px-4 py-3 text-gray-300 font-semibold">כותרת משרה</th>
                     <th className="text-right px-4 py-3 text-gray-300 font-semibold">עדיפות</th>
+                    <th className="text-right px-4 py-3 text-gray-300 font-semibold">ארגון</th>
                     <th className="text-right px-4 py-3 text-gray-300 font-semibold">איש קשר</th>
                     <th className="text-right px-4 py-3 text-gray-300 font-semibold">תאריך פתיחה</th>
                     <th className="text-right px-4 py-3 text-gray-300 font-semibold">סוכן מוקצה</th>
@@ -533,6 +535,9 @@ export const CarmitPage = () => {
                         >
                           {job.priority}
                         </span>
+                      </td>
+                      <td className="px-4 py-3 text-gray-400 text-sm">
+                        {job.organization_name || '-'}
                       </td>
                       <td className="px-4 py-3 text-gray-400 text-sm">
                         {job.contact_person_name || '-'}

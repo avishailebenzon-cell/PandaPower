@@ -374,6 +374,12 @@ export const RecruitmentDepartment: React.FC = () => {
                     </div>
                   </div>
                   <h3 className="font-bold text-white text-right">{job.job_title}</h3>
+                  {job.organization_name && (
+                    <p className="text-sm text-gray-300 text-right mt-2">🏢 {job.organization_name}</p>
+                  )}
+                  {job.contact_person_name && (
+                    <p className="text-sm text-gray-300 text-right">👤 {job.contact_person_name}</p>
+                  )}
                   <div className="flex justify-between items-center text-right mt-3 gap-2 text-sm">
                     <span className="text-blue-300 font-semibold">{job.match_count} התאמות</span>
                     <span className="text-green-300">{job.found_count} חדשות</span>
@@ -408,6 +414,12 @@ export const RecruitmentDepartment: React.FC = () => {
                     <div>
                       <h3 className="text-xl font-bold text-white text-right">{job.job_title}</h3>
                       <p className="text-blue-200 text-sm text-right">Priority: {job.priority}</p>
+                      {job.organization_name && (
+                        <p className="text-blue-300 text-sm text-right">🏢 {job.organization_name}</p>
+                      )}
+                      {job.contact_person_name && (
+                        <p className="text-blue-300 text-sm text-right">👤 {job.contact_person_name}</p>
+                      )}
                     </div>
                     <div className={`text-xs font-bold px-3 py-1 rounded ${
                       job.priority === 1 ? 'bg-red-600 text-white' :

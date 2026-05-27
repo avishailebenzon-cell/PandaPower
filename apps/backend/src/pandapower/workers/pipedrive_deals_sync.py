@@ -11,6 +11,9 @@ Field mappings (Pipedrive custom field -> jobs table column):
 - a6a8a84e518fb22fc9920f3e714a2bfaf9f488b5  -> deadline
 - 360108d810b89e174c7ca6a3a8222eebfd278bf6  -> priority (enum id -> 1-5)
 - org_id (standard)                          -> org_id
+- person_id (standard)                       -> person_id
+- org_id name lookup                         -> organization_name (ארגון)
+- person_id name lookup                      -> contact_person_name (איש קשר)
 """
 
 import logging
@@ -154,6 +157,33 @@ async def _fetch_contact_name(db: Any, pipedrive_person_id: Optional[int]) -> Op
     return None
 
 
+async def _fetch_organization_name(db: Any, pipedrive_org_id: Optional[int]) -> Optional[str]:
+    """Fetch the organization name from the organizations table.
+
+    Args:
+        db: Supabase async client
+        pipedrive_org_id: The Pipedrive organization ID to look up
+
+    Returns:
+        The organization's name, or None if not found
+    """
+    if not pipedrive_org_id:
+        return None
+
+    try:
+        org_response = await db.table("organizations").select("name").eq(
+            "pipedrive_org_id", pipedrive_org_id
+        ).single().execute()
+
+        if org_response.data:
+            return org_response.data.get("name")
+    except Exception as e:
+        # Organization not found or other error - just log and continue
+        logger.debug(f"Could not fetch organization for pipedrive_org_id {pipedrive_org_id}: {e}")
+
+    return None
+
+
 def _extract_deadline(deal: Dict[str, Any]) -> Optional[str]:
     """Extract deadline date from custom field"""
     raw = deal.get(FIELD_DEADLINE)
@@ -243,11 +273,15 @@ async def sync_pipedrive_deals() -> Dict[str, Any]:
                         summary["skipped_no_job_title"] += 1
                         continue
 
-                    # Extract the Pipedrive person ID for contact lookup
+                    # Extract the Pipedrive person ID and org ID
                     pipedrive_person_id = _extract_id(deal.get("person_id"))
+                    pipedrive_org_id = _extract_id(deal.get("org_id"))
 
                     # Fetch contact person name from contacts table
                     contact_name = await _fetch_contact_name(db, pipedrive_person_id)
+
+                    # Fetch organization name from organizations table
+                    organization_name = await _fetch_organization_name(db, pipedrive_org_id)
 
                     # Build complete deal_data with all field mappings
                     deal_data = {
@@ -260,11 +294,12 @@ async def sync_pipedrive_deals() -> Dict[str, Any]:
                         "deadline": _extract_deadline(deal),
                         "priority": _extract_priority(deal),
                         "person_id": pipedrive_person_id,
-                        "org_id": _extract_id(deal.get("org_id")),
+                        "org_id": pipedrive_org_id,
                         "stage_id": _extract_id(deal.get("stage_id")),
                         "status": "open",
-                        "contact_person_name": contact_name,  # New: Contact person name
-                        "job_opening_date": _extract_opening_date(deal),  # New: Job opening date from Pipedrive
+                        "contact_person_name": contact_name,  # Contact person name (איש קשר)
+                        "organization_name": organization_name,  # Organization name (ארגון)
+                        "job_opening_date": _extract_opening_date(deal),  # Job opening date from Pipedrive
                         "pipedrive_last_synced_at": datetime.utcnow().isoformat(),
                         "updated_at": datetime.utcnow().isoformat(),
                     }

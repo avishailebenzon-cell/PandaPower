@@ -30,6 +30,8 @@ export interface AssignedJob {
   match_count: number;
   approved_count: number;
   found_count: number;
+  organization_name?: string;
+  contact_person_name?: string;
 }
 
 export interface DepartmentStats {
