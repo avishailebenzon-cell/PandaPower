@@ -44,22 +44,25 @@ def _clearance_rank(value: Optional[str]) -> Optional[int]:
 def _compute_clearance_match(candidate_clearance: Optional[str], required_clearance: Optional[str]) -> str:
     """Return one of: match | partial | mismatch | unknown.
 
-    - unknown: either side missing
-    - match: candidate rank >= required rank
-    - partial: candidate has some clearance but below required
-    - mismatch: candidate has no clearance and job requires one
+    Semantics:
+    - "ללא" / "none" / empty in the required field means "no clearance required" —
+      every candidate is a match (regardless of their own clearance).
+    - If the candidate side is unknown but the job requires real clearance: mismatch.
+    - Higher candidate rank than required: match. Same rank: match. Lower: partial.
     """
-    if not required_clearance:
-        # Job has no clearance requirement — anything is fine
-        return "match" if candidate_clearance else "unknown"
+    req_rank = _clearance_rank(required_clearance)
+
+    # No real requirement (missing OR explicitly "ללא"/rank 0) — anyone is fine.
+    if not required_clearance or req_rank == 0:
+        return "match"
+
     if not candidate_clearance:
         return "mismatch"
 
     cand_rank = _clearance_rank(candidate_clearance)
-    req_rank = _clearance_rank(required_clearance)
 
     if cand_rank is None or req_rank is None:
-        # We have free-text values we don't recognise — fall back to string equality
+        # Free-text values we don't recognise — fall back to string equality.
         if _normalize_clearance(candidate_clearance) == _normalize_clearance(required_clearance):
             return "match"
         return "partial"
@@ -240,10 +243,13 @@ async def get_department_matches(
         # Filter by is_valid=True (Phase 4: only show non-invalidated matches).
         # Pull candidate clearance + job required clearance via joined relations so we can
         # show a security-clearance badge in the row without an extra round-trip.
+        # NOTE: actual DB column names (verified in production Supabase):
+        #   candidates.clearance_level         (not security_clearance_level)
+        #   jobs.job_security_clearance        (not required_security_clearance)
         query = supabase.table("matches").select(
             "*, "
-            "candidates(id,name,email,phone,security_clearance_level,security_clearance_confidence), "
-            "jobs(id,job_title,required_security_clearance)"
+            "candidates(id,name,email,phone,clearance_level), "
+            "jobs(id,job_title,job_security_clearance)"
         ).eq("matched_by_agent_code", department_code).eq(
             "is_valid", True
         )
@@ -290,14 +296,15 @@ async def get_department_matches(
             candidate_name = candidate.get("name") or "Unknown"
             candidate_email = candidate.get("email")
             candidate_phone = candidate.get("phone")
-            candidate_clearance = candidate.get("security_clearance_level")
-            candidate_clearance_conf = candidate.get("security_clearance_confidence")
+            candidate_clearance = candidate.get("clearance_level")
+            # confidence column doesn't exist in current schema — leave as None
+            candidate_clearance_conf = None
 
             # Extract job info from joined data
             job = row.get("jobs", {}) or {}
             job_id = str(row.get("job_id", ""))
             job_title = job.get("job_title") or "Unknown Job"
-            required_clearance = job.get("required_security_clearance")
+            required_clearance = job.get("job_security_clearance")
 
             match_id = str(row.get("id", ""))
 
