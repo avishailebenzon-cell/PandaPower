@@ -40,8 +40,15 @@ const StatCard: React.FC<StatCard> = ({ label, value, unit, color }) => (
 export const WorkDashboard: React.FC = () => {
   const navigate = useNavigate();
 
+  // RECRUITMENT_AGENTS is a Record (object keyed by code) — must convert to
+  // an array before .map(). The previous code called .map directly on the
+  // object and crashed the entire /recruiting route with "X.map is not a
+  // function". The list is stable across renders so calling useQuery inside
+  // the map is safe per React rules-of-hooks.
+  const agentList = Object.values(RECRUITMENT_AGENTS);
+
   // Fetch stats for all agents
-  const agentStatsQueries = RECRUITMENT_AGENTS.map((agent) => ({
+  const agentStatsQueries = agentList.map((agent) => ({
     agent,
     ...useQuery({
       queryKey: ['agent-stats', agent.code],
@@ -118,7 +125,7 @@ export const WorkDashboard: React.FC = () => {
               </h2>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {RECRUITMENT_AGENTS.map((agent) => {
+                {agentList.map((agent) => {
                   const statsItem = allStatsData.find(s => s.code === agent.code);
                   const stats = statsItem || { matchesCreated: 0, successRate: 0 };
                   const isLoading = agentStatsQueries.find(q => q.agent.code === agent.code)?.isLoading;
@@ -195,7 +202,7 @@ export const WorkDashboard: React.FC = () => {
                 <div className="text-xs text-gray-500 p-3 bg-gray-900 rounded-lg">
                   ℹ️ נתונים אמיתיים מהדטאבייס - מתעדכן כל 15 שניות
                 </div>
-                {RECRUITERS.map((recruiter) => {
+                {Object.values(RECRUITERS).map((recruiter) => {
                   return (
                   <button
                     key={recruiter.code}

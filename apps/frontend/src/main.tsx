@@ -70,8 +70,6 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             <Route path="/admin/security" element={<ProtectedRoute><SecurityClassificationPage /></ProtectedRoute>} />
             <Route path="/admin/alerts" element={<ProtectedRoute><AlertsPage /></ProtectedRoute>} />
             <Route path="/admin/agents" element={<ProtectedRoute><AgentManagementPage /></ProtectedRoute>} />
-            <Route path="/admin/pandi" element={<ProtectedRoute><PandiPage /></ProtectedRoute>} />
-            <Route path="/admin/pandi-conversations" element={<ProtectedRoute><PandiClientRequestPage /></ProtectedRoute>} />
             <Route path="/admin/analytics" element={<ProtectedRoute><AnalyticsDashboard /></ProtectedRoute>} />
           </Route>
 
@@ -89,6 +87,14 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 
             {/* Recruitment Manager (Carmit) - Part of Work Area */}
             <Route path="/admin/carmit" element={<ProtectedRoute><CarmitPage /></ProtectedRoute>} />
+
+            {/* Pandi (WhatsApp client-intake agent) — works alongside the other
+                AI recruiters, so its pages render inside the Work-area shell,
+                not the admin shell. Both URL paths are kept for backwards
+                compat with existing links/bookmarks. */}
+            <Route path="/admin/pandi" element={<ProtectedRoute><PandiPage /></ProtectedRoute>} />
+            <Route path="/admin/pandi-conversations" element={<ProtectedRoute><PandiClientRequestPage /></ProtectedRoute>} />
+            <Route path="/recruiting/pandi" element={<ProtectedRoute><PandiClientRequestPage /></ProtectedRoute>} />
           </Route>
 
           {/* AGENT PAGES - AI Agents */}

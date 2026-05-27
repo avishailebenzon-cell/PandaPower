@@ -101,28 +101,18 @@ export function AdminLayout() {
               </a>
             </li>
 
-            {/* Sales Agents */}
-            <div className="pt-4 pb-1 px-3 font-semibold text-blue-400 border-t border-slate-700">
-              💬 סוכני מכירות
-            </div>
-            <li>
-              <a href="/admin/pandi-conversations" className="block px-3 py-2 rounded text-slate-300 hover:bg-slate-800 transition">
-                💬 פנדי (בקשות לקוחות)
-              </a>
-            </li>
-
             {/* AI Agents */}
+            {/* Pandi was moved out of "Sales Agents / AI Agents" admin sections
+                and now lives entirely in the Work area sidebar (Pandi is an
+                operational agent, not admin tooling). The /admin/pandi and
+                /admin/pandi-conversations URLs still work but render inside
+                the Work-area shell. */}
             <div className="pt-4 pb-1 px-3 font-semibold text-pink-400 border-t border-slate-700">
               🤖 סוכנים AI
             </div>
             <li>
               <a href="/admin/agents" className="block px-3 py-2 rounded text-slate-300 hover:bg-slate-800 transition">
                 ניהול סוכנים מיוחדים
-              </a>
-            </li>
-            <li>
-              <a href="/admin/pandi" className="block px-3 py-2 rounded text-slate-300 hover:bg-slate-800 transition">
-                Pandi - ניהול WhatsApp
               </a>
             </li>
 
