@@ -24,7 +24,7 @@ httpx==0.25.1
 aiohttp==3.9.1
 python-multipart==0.0.6
 email-validator==2.1.0
-resend==0.3.1
+resend==0.7.0
 
 # PDF/Document Processing
 pdfplumber==0.10.3
