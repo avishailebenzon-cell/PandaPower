@@ -78,22 +78,30 @@ async def get_assigned_jobs(
         List of jobs assigned to the agent
     """
     try:
-        # Query jobs table for jobs assigned to this agent
-        jobs_result = supabase.table("jobs").select(
-            "id, job_title, job_description, assigned_agent_code, priority, status"
-        ).eq("assigned_agent_code", department_code).eq(
-            "status", "open"
-        ).order("priority", desc=True).execute()
+        # Query jobs table - fetch all jobs first, then filter for assigned ones
+        # Try to get jobs with wildcard to see all available columns
+        jobs_result = await supabase.table("jobs").select("*").order("priority", desc=True).execute()
 
         if not jobs_result.data:
             return []
 
         assigned_jobs = []
         for job in jobs_result.data:
+            # Check both assigned_agent_code and agent_code
+            agent_code = job.get("assigned_agent_code") or job.get("agent_code")
+
+            # Only include jobs assigned to this department/agent
+            if agent_code != department_code:
+                continue
+
+            # Only include open jobs
+            if job.get("status") != "open":
+                continue
+
             job_id = str(job.get("id", ""))
 
             # Get match counts for this job from this agent (who found them)
-            matches_result = supabase.table("matches").select(
+            matches_result = await supabase.table("matches").select(
                 "id, current_state"
             ).eq("job_id", job_id).eq(
                 "matched_by_agent_code", department_code
@@ -109,7 +117,7 @@ async def get_assigned_jobs(
                     id=job_id,
                     job_title=job.get("job_title", "Unknown"),
                     job_description=job.get("job_description"),
-                    assigned_agent_code=job.get("assigned_agent_code", ""),
+                    assigned_agent_code=agent_code or "",
                     priority=job.get("priority", 5),
                     status=job.get("status", "open"),
                     match_count=match_count,
@@ -121,8 +129,8 @@ async def get_assigned_jobs(
         return assigned_jobs
 
     except Exception as e:
-        logger.error(f"Get assigned jobs failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to get assigned jobs")
+        logger.error(f"Get assigned jobs failed for {department_code}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get assigned jobs: {str(e)}")
 
 
 @router.get("/{department_code}/matches", response_model=List[DepartmentMatch])
@@ -157,7 +165,7 @@ async def get_department_matches(
         if status:
             query = query.eq("current_state", status)
 
-        result = query.range(offset, offset + limit - 1).order(
+        result = await query.range(offset, offset + limit - 1).order(
             "created_at", desc=True
         ).execute()
 
@@ -233,7 +241,7 @@ async def update_match_status(
         if request.notes:
             update_data["notes"] = request.notes
 
-        result = supabase.table("matches").update(update_data).eq("id", match_id).eq(
+        result = await supabase.table("matches").update(update_data).eq("id", match_id).eq(
             "matched_by_agent_code", department_code
         ).execute()
 
@@ -279,7 +287,7 @@ async def get_department_stats(
     """
     try:
         # Get all valid matches for this department (Phase 4: only count valid matches)
-        result = supabase.table("matches").select(
+        result = await supabase.table("matches").select(
             "id, current_state"
         ).eq("matched_by_agent_code", department_code).eq(
             "is_valid", True
@@ -338,7 +346,7 @@ async def record_conversation(
             "updated_at": timestamp,
         }
 
-        result = supabase.table("matches").update(update_data).eq("id", match_id).eq(
+        result = await supabase.table("matches").update(update_data).eq("id", match_id).eq(
             "matched_by_agent_code", department_code
         ).execute()
 
