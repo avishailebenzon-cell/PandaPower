@@ -3,6 +3,8 @@
   "outputDirectory": "dist",
   "framework": "vite",
   "env": {
+    "VITE_SUPABASE_URL": "https://xknzpurparakylocrnld.supabase.co",
+    "VITE_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhrbnpwdXJwYXJha3lsb2NybmxkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkzNjQ1MDUsImV4cCI6MjA5NDk0MDUwNX0.5nv46Q--uUNzmeg6udozPZ6n7b5Zkxqikg7ou5WM7Xs",
     "VITE_API_URL": "https://pandapower-backend.onrender.com"
   },
   "rewrites": [
