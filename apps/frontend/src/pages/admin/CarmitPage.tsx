@@ -121,6 +121,15 @@ export const CarmitPage = () => {
   // Pagination state for the new "agent-matches" tab (≥70% from all 8 agents).
   const [agentMatchesPage, setAgentMatchesPage] = useState(0);
   const AGENT_MATCHES_PAGE_SIZE = 25;
+  // Score-floor filter for the table. Stored as 0.0–1.0 (matches backend
+  // min_score param). 0.70 is the default the user originally asked for.
+  const [agentMatchesMinScore, setAgentMatchesMinScore] = useState(0.70);
+  // Sort state. Backend accepts: score | candidate | job | agent | state |
+  // clearance | date. Default: highest score first.
+  type SortKey = 'score' | 'candidate' | 'job' | 'agent' | 'state' | 'clearance' | 'date';
+  type SortDir = 'asc' | 'desc';
+  const [agentMatchesSortBy, setAgentMatchesSortBy] = useState<SortKey>('score');
+  const [agentMatchesSortDir, setAgentMatchesSortDir] = useState<SortDir>('desc');
   // Modal state for the agent-matches table:
   //  • selectedAgentMatchForDetail → match-detail modal (click on score %)
   //  • selectedAgentCandidate     → candidate-profile modal (click on name)
@@ -174,10 +183,10 @@ export const CarmitPage = () => {
   // for the "התאמות מסוכני הגיוס" tab. Paginated via local agentMatchesPage state.
   const API_BASE = import.meta.env.VITE_API_URL || '';
   const { data: agentMatchesData, isLoading: agentMatchesLoading, error: agentMatchesError } = useQuery({
-    queryKey: ['carmit-agent-matches', agentMatchesPage],
+    queryKey: ['carmit-agent-matches', agentMatchesPage, agentMatchesMinScore, agentMatchesSortBy, agentMatchesSortDir],
     queryFn: async () => {
       const offset = agentMatchesPage * AGENT_MATCHES_PAGE_SIZE;
-      const url = `${API_BASE}/admin/carmit/agent-matches?limit=${AGENT_MATCHES_PAGE_SIZE}&offset=${offset}&min_score=0.70`;
+      const url = `${API_BASE}/admin/carmit/agent-matches?limit=${AGENT_MATCHES_PAGE_SIZE}&offset=${offset}&min_score=${agentMatchesMinScore}&sort_by=${agentMatchesSortBy}&sort_dir=${agentMatchesSortDir}`;
       const r = await fetch(url);
       if (!r.ok) throw new Error('Failed to fetch agent matches');
       return r.json() as Promise<{
@@ -500,6 +509,27 @@ export const CarmitPage = () => {
             </div>
           </div>
 
+          {/* Toolbar: score-floor filter. Lives above the loading/empty
+              guard so the user always sees the controls. */}
+          <div className="flex items-center gap-3 flex-wrap">
+            <label className="text-sm text-gray-300 font-semibold">סינון לפי ציון:</label>
+            <select
+              value={agentMatchesMinScore}
+              onChange={(e) => {
+                setAgentMatchesMinScore(parseFloat(e.target.value));
+                setAgentMatchesPage(0); // jumping to page 1 — the page count just changed
+              }}
+              className="bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-1.5 focus:border-blue-500 outline-none"
+            >
+              <option value={0}>הכל</option>
+              <option value={0.5}>50% ומעלה</option>
+              <option value={0.6}>60% ומעלה</option>
+              <option value={0.7}>70% ומעלה</option>
+              <option value={0.8}>80% ומעלה</option>
+              <option value={0.9}>90% ומעלה</option>
+            </select>
+          </div>
+
           {agentMatchesLoading ? (
             <div className="text-center py-12 text-gray-400">טוען…</div>
           ) : agentMatchesError ? (
@@ -508,7 +538,7 @@ export const CarmitPage = () => {
             </div>
           ) : (agentMatchesData?.matches.length ?? 0) === 0 ? (
             <div className="bg-gray-800 border border-gray-700 rounded-lg p-8 text-center text-gray-300">
-              אין כרגע התאמות ב-70% ומעלה.
+              אין כרגע התאמות בטווח המבוקש.
             </div>
           ) : (
             <>
@@ -517,13 +547,47 @@ export const CarmitPage = () => {
                   <table className="w-full text-right text-sm">
                     <thead className="bg-gray-700 border-b border-gray-600 text-gray-200">
                       <tr>
-                        <th className="px-4 py-3 font-semibold">ציון</th>
-                        <th className="px-4 py-3 font-semibold">מועמד</th>
-                        <th className="px-4 py-3 font-semibold">משרה</th>
-                        <th className="px-4 py-3 font-semibold">סוכן</th>
-                        <th className="px-4 py-3 font-semibold">מצב</th>
-                        <th className="px-4 py-3 font-semibold">סיווג ביטחוני</th>
-                        <th className="px-4 py-3 font-semibold">נוצר</th>
+                        {/* Clickable column headers — clicking the active column
+                            toggles direction, clicking a different column resets
+                            to that column's natural default (desc for score/date,
+                            asc otherwise). */}
+                        {(() => {
+                          const cols: Array<{ key: SortKey; label: string; defaultDir: SortDir }> = [
+                            { key: 'score',     label: 'ציון',           defaultDir: 'desc' },
+                            { key: 'candidate', label: 'מועמד',          defaultDir: 'asc'  },
+                            { key: 'job',       label: 'משרה',           defaultDir: 'asc'  },
+                            { key: 'agent',     label: 'סוכן',           defaultDir: 'asc'  },
+                            { key: 'state',     label: 'מצב',            defaultDir: 'asc'  },
+                            { key: 'clearance', label: 'סיווג ביטחוני',  defaultDir: 'asc'  },
+                            { key: 'date',      label: 'נוצר',           defaultDir: 'desc' },
+                          ];
+                          return cols.map((col) => {
+                            const isActive = agentMatchesSortBy === col.key;
+                            const arrow = !isActive ? '↕' : agentMatchesSortDir === 'asc' ? '▲' : '▼';
+                            return (
+                              <th key={col.key} className="px-4 py-3 font-semibold">
+                                <button
+                                  onClick={() => {
+                                    if (isActive) {
+                                      setAgentMatchesSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+                                    } else {
+                                      setAgentMatchesSortBy(col.key);
+                                      setAgentMatchesSortDir(col.defaultDir);
+                                    }
+                                    setAgentMatchesPage(0); // reset to first page
+                                  }}
+                                  className={`inline-flex items-center gap-1 hover:text-white transition ${
+                                    isActive ? 'text-blue-300' : 'text-gray-200'
+                                  }`}
+                                  title={isActive ? 'הפוך כיוון מיון' : `מיין לפי ${col.label}`}
+                                >
+                                  <span>{col.label}</span>
+                                  <span className="text-[10px] opacity-70">{arrow}</span>
+                                </button>
+                              </th>
+                            );
+                          });
+                        })()}
                       </tr>
                     </thead>
                     <tbody>

@@ -54,6 +54,10 @@ export const RecruitmentDepartment: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabType>('active');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterJob, setFilterJob] = useState<string>('all');
+  // Score-floor filter: only show matches with matchScore >= minScoreFilter.
+  // Stored as 0.0–1.0; 0 means "no filter". Matches the same dropdown used
+  // in Carmit's "התאמות מסוכני הגיוס" tab for UX consistency.
+  const [minScoreFilter, setMinScoreFilter] = useState<number>(0);
   const [groupBy, setGroupBy] = useState<GroupBy>('none');
   const [sortBy, setSortBy] = useState<'newest' | 'oldest' | 'score_high' | 'score_low'>('newest');
   const [searchQuery, setSearchQuery] = useState('');
@@ -141,10 +145,13 @@ export const RecruitmentDepartment: React.FC = () => {
         match.candidateName.toLowerCase().includes(searchQuery.toLowerCase()) ||
         match.jobTitle.toLowerCase().includes(searchQuery.toLowerCase()) ||
         match.company.toLowerCase().includes(searchQuery.toLowerCase());
+      // Score floor — 0 means "no filter" so the default UI behaviour is
+      // unchanged for users who don't touch the new dropdown.
+      const scoreMatch = (match.matchScore || 0) >= minScoreFilter;
 
-      return statusMatch && jobMatch && searchMatch;
+      return statusMatch && jobMatch && searchMatch && scoreMatch;
     });
-  }, [matchesData, filterStatus, filterJob, searchQuery]);
+  }, [matchesData, filterStatus, filterJob, searchQuery, minScoreFilter]);
 
   // Sort matches
   const sortedMatches = useMemo(() => {
@@ -546,6 +553,23 @@ export const RecruitmentDepartment: React.FC = () => {
               <option value="found">חדשות</option>
               <option value="approved">מאושרות</option>
               <option value="rejected">דחויות</option>
+            </select>
+
+            {/* Score-floor Filter — same UX as the Carmit agent-matches tab.
+                Default is 0 ("all"), so existing behaviour is preserved
+                for users who don't touch this dropdown. */}
+            <select
+              value={minScoreFilter}
+              onChange={(e) => setMinScoreFilter(parseFloat(e.target.value))}
+              title="הצג רק התאמות בציון מינימלי"
+              className="bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500"
+            >
+              <option value={0}>כל הציונים</option>
+              <option value={0.5}>50% ומעלה</option>
+              <option value={0.6}>60% ומעלה</option>
+              <option value={0.7}>70% ומעלה</option>
+              <option value={0.8}>80% ומעלה</option>
+              <option value={0.9}>90% ומעלה</option>
             </select>
 
             {/* Group By */}

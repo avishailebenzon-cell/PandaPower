@@ -705,11 +705,30 @@ async def get_carmit_decisions(
 RECRUITMENT_AGENT_CODES = ("naama", "alik", "dganit", "ofir", "itai", "lior", "gc", "mani")
 
 
+# Whitelist of column names we'll accept as sort keys, mapped to the
+# DB column the order clause actually references. Anything not in this
+# map falls back to "match_score" so a malformed ?sort_by= can't crash
+# the endpoint.
+_AGENT_MATCH_SORT_COLUMNS = {
+    "score": "match_score",
+    "agent": "matched_by_agent_code",
+    "state": "current_state",
+    "date": "created_at",
+}
+# Sort keys that need to be applied client-side (Python list.sort) because
+# they live on JOINED tables — postgrest's .order() over an embedded
+# resource has gotchas, especially with .range() pagination. The values
+# refer to the FINAL response keys, not DB columns.
+_AGENT_MATCH_CLIENT_SORT_KEYS = {"candidate", "job", "clearance"}
+
+
 @router.get("/agent-matches")
 async def get_agent_matches(
     limit: int = Query(25, ge=1, le=200),
     offset: int = Query(0, ge=0),
     min_score: float = Query(0.70, ge=0.0, le=1.0),
+    sort_by: str = Query("score"),
+    sort_dir: str = Query("desc"),
 ):
     """Carmit's "all high-quality agent matches" view.
 
@@ -719,6 +738,9 @@ async def get_agent_matches(
         min_score: lower-bound score, 0.0–1.0 (default 0.70 — the "70%+ only"
                    filter the user asked for; exposed in case we ever want to
                    relax it for diagnostics)
+        sort_by:   column key. One of score / candidate / job / agent / state /
+                   clearance / date. Unknown values silently fall back to "score".
+        sort_dir:  "asc" or "desc". Anything else is treated as "desc".
 
     Returns: paginated matches with candidate name, job title, agent code,
              score, current state, reasoning preview, security clearance,
@@ -726,6 +748,7 @@ async def get_agent_matches(
     """
     try:
         supabase = await get_supabase_client()
+        descending = (sort_dir or "").lower() != "asc"
 
         # ── total count, for pagination UI ─────────────────────────────────
         # Note: postgrest returns count separately when count="exact".
@@ -743,7 +766,14 @@ async def get_agent_matches(
         # Wide projection: the UI shows clickable rows that open a candidate
         # modal AND a match-detail modal, both need richer fields than the
         # table itself — pulling them here avoids per-row round-trips.
-        resp = await (
+        # Sort strategy:
+        #   • DB-side sort for native columns (score / agent / state / date)
+        #     so pagination works on the server.
+        #   • For "candidate"/"job"/"clearance" we DB-sort by match_score
+        #     (so paging is stable) and re-order the page client-side at
+        #     the end — close enough for a 25-row page.
+        sort_col_db = _AGENT_MATCH_SORT_COLUMNS.get(sort_by)
+        query = (
             supabase.table("matches")
             .select(
                 "id, candidate_id, job_id, matched_by_agent_code, match_score, "
@@ -756,11 +786,18 @@ async def get_agent_matches(
             .eq("is_valid", True)
             .gte("match_score", min_score)
             .in_("matched_by_agent_code", list(RECRUITMENT_AGENT_CODES))
-            .order("match_score", desc=True)
-            .order("created_at", desc=True)
-            .range(offset, offset + limit - 1)
-            .execute()
         )
+        if sort_col_db:
+            # Primary order is the user-chosen column; created_at is the
+            # tie-breaker so paging stays deterministic across ties.
+            query = query.order(sort_col_db, desc=descending)
+            if sort_col_db != "created_at":
+                query = query.order("created_at", desc=True)
+        else:
+            # Unknown / client-side key → DB-sort by score for stable pages.
+            query = query.order("match_score", desc=True).order("created_at", desc=True)
+
+        resp = await query.range(offset, offset + limit - 1).execute()
 
         # ── Batch-load strengths/gaps from agent_logs.output_payload ───────
         # The agent_matching worker writes them as JSONB under action="find_match".
@@ -837,6 +874,26 @@ async def get_agent_matches(
                 "created_at": row.get("created_at"),
                 "updated_at": row.get("updated_at"),
             })
+
+        # ── Client-side sort for keys that live on joined tables ───────────
+        # When sort_by is a join-side key we fetched a page sorted by score
+        # (for stable paging) — now re-order just this page in Python.
+        if sort_by in _AGENT_MATCH_CLIENT_SORT_KEYS:
+            client_key_fn = {
+                # casefold gives locale-insensitive case-insensitive compare,
+                # works for Hebrew too (lowercases nothing but still consistent).
+                "candidate": lambda m: (m.get("candidate_name") or "").casefold(),
+                "job":       lambda m: (m.get("job_title") or "").casefold(),
+                # Clearance ordering by status verdict, then by raw value.
+                # Order is informative: match → partial → mismatch → unknown.
+                "clearance": lambda m: (
+                    {"match": 0, "partial": 1, "mismatch": 2, "unknown": 3}.get(
+                        m.get("clearance_match", "unknown"), 9
+                    ),
+                    (m.get("required_clearance") or "").casefold(),
+                ),
+            }[sort_by]
+            out.sort(key=client_key_fn, reverse=descending)
 
         return {
             "matches": out,
