@@ -238,10 +238,10 @@ async def get_pending_review(
     try:
         supabase = await get_supabase_client()
 
-        # Build query
+        # Build query - fetch only necessary fields
         query = supabase.table("matches").select(
-            "id, candidates(name), jobs(job_title), match_score, matched_by_agent_code, created_at"
-        ).eq("current_state", filter_state or "found")
+            "id, candidate_id, job_id, match_score, matched_by_agent_code, created_at"
+        ).eq("current_state", filter_state or "found").eq("is_valid", True)
 
         if filter_agent:
             query = query.eq("matched_by_agent_code", filter_agent)
@@ -252,10 +252,39 @@ async def get_pending_review(
         # Format response
         matches = []
         for match in response.data or []:
+            candidate_name = "Unknown"
+            job_title = "Unknown"
+
+            # Try to fetch candidate name
+            try:
+                candidate_id = match.get("candidate_id")
+                if candidate_id:
+                    candidate_query = supabase.table("candidates").select("name").eq("id", candidate_id)
+                    candidate_response = await candidate_query.execute()
+                    if candidate_response.data and len(candidate_response.data) > 0:
+                        cand_data = candidate_response.data[0]
+                        candidate_name = cand_data.get("name") or "Unknown"
+            except Exception as e:
+                logger.warning(f"Failed to fetch candidate {match.get('candidate_id')}: {str(e)}")
+
+            # Try to fetch job title
+            try:
+                job_id = match.get("job_id")
+                if job_id:
+                    job_query = supabase.table("jobs").select("job_title").eq("id", job_id)
+                    job_response = await job_query.execute()
+                    if job_response.data and len(job_response.data) > 0:
+                        job_data = job_response.data[0]
+                        job_title = job_data.get("job_title", "Unknown")
+            except Exception as e:
+                logger.warning(f"Failed to fetch job {match.get('job_id')}: {str(e)}")
+
             matches.append({
                 "id": match["id"],
-                "candidate_name": match["candidates"].get("name", "Unknown") if match.get("candidates") else "Unknown",
-                "job_title": match["jobs"].get("title", "Unknown") if match.get("jobs") else "Unknown",
+                "candidate_id": match.get("candidate_id", ""),
+                "job_id": match.get("job_id", ""),
+                "candidate_name": candidate_name,
+                "job_title": job_title,
                 "match_score": match.get("match_score", 0.0),
                 "agent_code": match.get("matched_by_agent_code", ""),
                 "created_at": match.get("created_at", ""),
