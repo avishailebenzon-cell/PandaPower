@@ -271,11 +271,11 @@ async def get_pending_review(
             try:
                 job_id = match.get("job_id")
                 if job_id:
-                    job_query = supabase.table("jobs").select("job_title").eq("id", job_id)
+                    job_query = supabase.table("jobs").select("title").eq("id", job_id)
                     job_response = await job_query.execute()
                     if job_response.data and len(job_response.data) > 0:
                         job_data = job_response.data[0]
-                        job_title = job_data.get("job_title", "Unknown")
+                        job_title = job_data.get("title", "Unknown")
             except Exception as e:
                 logger.warning(f"Failed to fetch job {match.get('job_id')}: {str(e)}")
 
@@ -504,13 +504,13 @@ async def get_jobs_to_route():
         # Get unassigned jobs (no assigned_agent_code), ordered by priority (highest first)
         jobs_response = await supabase.table("jobs").select("*").is_(
             "assigned_agent_code", None
-        ).eq("status", "open").order("priority", desc=True).limit(50).execute()
+        ).eq("is_active", True).order("priority", desc=True).limit(50).execute()
 
         jobs = []
         for job in jobs_response.data or []:
             jobs.append({
                 "id": job.get("id"),
-                "title": job.get("job_title", "Unknown"),
+                "title": job.get("title", "Unknown"),
                 "description": job.get("description", ""),
                 "priority": job.get("priority", 5),
                 "candidateCount": 0,  # Placeholder - can be computed from matches if needed
