@@ -7,6 +7,24 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import KPICard from '@/components/KPICard';
 
+interface GateResult {
+  passed: boolean;
+  reason?: string;
+}
+
+interface CarmitDecision {
+  match_id: string;
+  candidate_name: string;
+  job_title: string;
+  decision: 'approved' | 'rejected';
+  match_score: number;
+  gate_results: Record<string, GateResult>;
+  reasoning: string;
+  decided_at: string;
+  candidate_id?: string;
+  job_id?: string;
+}
+
 interface Match {
   id: string;
   candidateName: string;
@@ -58,14 +76,10 @@ const AGENTS = [
 
 export const CarmitPage = () => {
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<'matches' | 'routing' | 'all-jobs'>('matches');
-  const [selectedMatch, setSelectedMatch] = useState<Match | null>(null);
+  const [activeTab, setActiveTab] = useState<'decisions' | 'routing' | 'all-jobs'>('decisions');
+  const [selectedMatch, setSelectedMatch] = useState<CarmitDecision | null>(null);
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
-  const [showApprovalModal, setShowApprovalModal] = useState(false);
-  const [showRejectionModal, setShowRejectionModal] = useState(false);
-  const [rejectionReason, setRejectionReason] = useState('');
-  const [filterAgent, setFilterAgent] = useState('all');
-  const [sortBy, setSortBy] = useState<'newest' | 'score'>('newest');
+  const [decisionFilter, setDecisionFilter] = useState<'all' | 'approved' | 'rejected'>('all');
   const [showOverrideModal, setShowOverrideModal] = useState(false);
   const [jobToOverride, setJobToOverride] = useState<any | null>(null);
   const [selectedNewAgent, setSelectedNewAgent] = useState('');
@@ -82,16 +96,16 @@ export const CarmitPage = () => {
     refetchInterval: 30000, // 30 seconds
   });
 
-  // Fetch pending matches for review
-  const { data: matchesData, isLoading: matchesLoading } = useQuery({
-    queryKey: ['carmit-pending-matches', filterAgent, sortBy],
+  // Fetch Carmit's decisions (already-made decisions with gate results)
+  const { data: decisionsData, isLoading: decisionsLoading } = useQuery({
+    queryKey: ['carmit-decisions', decisionFilter],
     queryFn: async () => {
       const params = new URLSearchParams();
-      if (filterAgent !== 'all') params.append('filter_agent', filterAgent);
-      params.append('sort', sortBy);
-      const response = await fetch(`/admin/carmit/pending-review?${params}`);
-      if (!response.ok) throw new Error('Failed to fetch matches');
-      return response.json() as Promise<{ matches: Match[]; total: number }>;
+      params.append('decision_filter', decisionFilter);
+      params.append('limit', '50');
+      const response = await fetch(`/admin/carmit/decisions?${params}`);
+      if (!response.ok) throw new Error('Failed to fetch decisions');
+      return response.json() as Promise<{ decisions: CarmitDecision[]; total: number }>;
     },
     refetchInterval: 15000, // 15 seconds
   });
@@ -135,47 +149,6 @@ export const CarmitPage = () => {
     refetchInterval: 30000, // 30 seconds
   });
 
-  // Mutation to approve match
-  const approveMutation = useMutation({
-    mutationFn: async (matchId: string) => {
-      const response = await fetch(`/admin/carmit/review-match/${matchId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ force_approve: true }),
-      });
-      if (!response.ok) throw new Error('Failed to approve match');
-      return response.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['carmit-pending-matches'] });
-      queryClient.invalidateQueries({ queryKey: ['carmit-kpi'] });
-      setShowApprovalModal(false);
-      setSelectedMatch(null);
-    },
-  });
-
-  // Mutation to reject match
-  const rejectMutation = useMutation({
-    mutationFn: async (matchId: string) => {
-      const response = await fetch(`/admin/carmit/review-match/${matchId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          force_approve: false,
-          override_reason: rejectionReason,
-        }),
-      });
-      if (!response.ok) throw new Error('Failed to reject match');
-      return response.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['carmit-pending-matches'] });
-      queryClient.invalidateQueries({ queryKey: ['carmit-kpi'] });
-      setShowRejectionModal(false);
-      setSelectedMatch(null);
-      setRejectionReason('');
-    },
-  });
 
   // Mutation to route job
   const routeJobMutation = useMutation({
@@ -271,14 +244,14 @@ export const CarmitPage = () => {
       {/* Tab Navigation */}
       <div className="mb-6 flex gap-4 border-b border-gray-700 overflow-x-auto">
         <button
-          onClick={() => setActiveTab('matches')}
+          onClick={() => setActiveTab('decisions')}
           className={`px-6 py-3 font-semibold transition whitespace-nowrap ${
-            activeTab === 'matches'
+            activeTab === 'decisions'
               ? 'text-blue-400 border-b-2 border-blue-400'
               : 'text-gray-400 hover:text-gray-200'
           }`}
         >
-          📋 ביקורת התאמות
+          ✅ החלטות כרמית
         </button>
         <button
           onClick={() => setActiveTab('routing')}
@@ -302,63 +275,55 @@ export const CarmitPage = () => {
         </button>
       </div>
 
-      {/* Matches Review Tab */}
-      {activeTab === 'matches' && (
+      {/* Carmit Decisions Tab */}
+      {activeTab === 'decisions' && (
         <div className="space-y-4">
           {/* Filters */}
           <div className="flex gap-4 mb-6">
             <div>
-              <label className="block text-sm text-gray-400 mb-2">סנן לפי סוכן</label>
+              <label className="block text-sm text-gray-400 mb-2">סנן לפי החלטה</label>
               <select
-                value={filterAgent}
-                onChange={(e) => setFilterAgent(e.target.value)}
+                value={decisionFilter}
+                onChange={(e) => setDecisionFilter(e.target.value as 'all' | 'approved' | 'rejected')}
                 className="px-4 py-2 rounded bg-gray-800 text-white border border-gray-700 focus:border-blue-500 outline-none"
               >
-                <option value="all">כל הסוכנים</option>
-                <option value="alik">אליק</option>
-                <option value="naama">נעמה</option>
-                <option value="dganit">דגנית</option>
-                <option value="ofir">אופיר</option>
-                <option value="itai">איתי</option>
-                <option value="lior">ליאור</option>
-                <option value="gc">כללי</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm text-gray-400 mb-2">מיין ב</label>
-              <select
-                value={sortBy}
-                onChange={(e) => setSortBy(e.target.value as 'newest' | 'score')}
-                className="px-4 py-2 rounded bg-gray-800 text-white border border-gray-700 focus:border-blue-500 outline-none"
-              >
-                <option value="newest">החדשות ביותר</option>
-                <option value="score">ציון גבוה</option>
+                <option value="all">כל ההחלטות</option>
+                <option value="approved">✅ אושרו</option>
+                <option value="rejected">❌ דחויות</option>
               </select>
             </div>
           </div>
 
-          {/* Matches List */}
-          {matchesLoading ? (
+          {/* Decisions List */}
+          {decisionsLoading ? (
             <div className="text-center py-8 text-gray-400">טוען...</div>
-          ) : (matchesData?.matches.length || 0) > 0 ? (
+          ) : (decisionsData?.decisions.length || 0) > 0 ? (
             <div className="grid gap-4">
-              {matchesData?.matches.map((match) => (
+              {decisionsData?.decisions.map((decision) => (
                 <div
-                  key={match.id}
-                  className="bg-gray-800 border border-gray-700 rounded-lg p-6 hover:border-blue-500 transition"
+                  key={decision.match_id}
+                  className="bg-gray-800 border border-gray-700 rounded-lg p-6 hover:border-purple-500 transition"
                 >
+                  {/* Header with Decision Badge */}
                   <div className="flex justify-between items-start mb-4">
-                    <div>
-                      <h3 className="text-lg font-semibold text-white">
-                        {match.candidateName}
-                      </h3>
-                      <p className="text-sm text-gray-400">{match.jobTitle}</p>
-                      <p className="text-xs text-gray-500 mt-1">סוכן: {match.agent}</p>
+                    <div className="flex-1">
+                      <div className="flex items-center gap-3 mb-2">
+                        <h3 className="text-lg font-semibold text-white">
+                          {decision.candidate_name}
+                        </h3>
+                        <span className={`px-3 py-1 rounded font-semibold text-sm ${
+                          decision.decision === 'approved'
+                            ? 'bg-green-900 text-green-300'
+                            : 'bg-red-900 text-red-300'
+                        }`}>
+                          {decision.decision === 'approved' ? '✅ אושרה' : '❌ דחויה'}
+                        </span>
+                      </div>
+                      <p className="text-sm text-gray-400">{decision.job_title}</p>
                     </div>
                     <div className="text-right">
                       <div className="text-2xl font-bold text-blue-400">
-                        {(match.score * 100).toFixed(0)}%
+                        {(decision.match_score * 100).toFixed(0)}%
                       </div>
                       <p className="text-xs text-gray-400">ציון התאמה</p>
                     </div>
@@ -368,60 +333,57 @@ export const CarmitPage = () => {
                   <div className="mb-4 bg-gray-700 rounded-full h-2">
                     <div
                       className={`h-2 rounded-full transition ${
-                        match.score >= 0.8
+                        decision.match_score >= 0.8
                           ? 'bg-green-500'
-                          : match.score >= 0.7
+                          : decision.match_score >= 0.7
                           ? 'bg-yellow-500'
                           : 'bg-red-500'
                       }`}
-                      style={{ width: `${match.score * 100}%` }}
+                      style={{ width: `${decision.match_score * 100}%` }}
                     />
                   </div>
 
-                  {/* Gate Results (if available) */}
-                  {match.gateResults && (
-                    <div className="mb-4 space-y-2">
-                      <p className="text-sm font-semibold text-gray-300">תוצאות שערים:</p>
-                      {Object.entries(match.gateResults).map(([gate, result]: [string, any]) => (
-                        <div key={gate} className="flex items-center gap-2 text-xs">
+                  {/* Gate Results */}
+                  <div className="mb-4 space-y-2">
+                    <p className="text-sm font-semibold text-gray-300">📋 תוצאות שערים:</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      {Object.entries(decision.gate_results).map(([gate, result]) => (
+                        <div key={gate} className="flex items-start gap-2 text-xs bg-gray-900 p-2 rounded">
                           <span className={result.passed ? '✅' : '❌'} />
-                          <span className="text-gray-400 capitalize">{gate}</span>
-                          {result.reason && (
-                            <span className="text-gray-500">({result.reason})</span>
-                          )}
+                          <div>
+                            <p className="text-gray-300 font-medium capitalize">{gate.replace(/_/g, ' ')}</p>
+                            {result.reason && (
+                              <p className="text-gray-500 text-xs">{result.reason}</p>
+                            )}
+                          </div>
                         </div>
                       ))}
                     </div>
+                  </div>
+
+                  {/* Decision Reasoning */}
+                  {decision.reasoning && (
+                    <div className="mb-4 bg-gray-900 border-l-4 border-purple-500 p-3 rounded">
+                      <p className="text-sm font-semibold text-gray-300 mb-1">💭 נימוק ההחלטה:</p>
+                      <p className="text-sm text-gray-400">{decision.reasoning}</p>
+                    </div>
                   )}
 
-                  {/* Actions */}
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => {
-                        setSelectedMatch(match);
-                        setShowApprovalModal(true);
-                      }}
-                      className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded font-semibold transition text-sm"
-                      disabled={approveMutation.isPending}
-                    >
-                      ✅ אישור
-                    </button>
-                    <button
-                      onClick={() => {
-                        setSelectedMatch(match);
-                        setShowRejectionModal(true);
-                      }}
-                      className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded font-semibold transition text-sm"
-                      disabled={rejectMutation.isPending}
-                    >
-                      ❌ דחייה
-                    </button>
-                  </div>
+                  {/* Decision Timestamp */}
+                  <p className="text-xs text-gray-500">
+                    🕐 הוחלט: {new Date(decision.decided_at).toLocaleDateString('he-IL')} {new Date(decision.decided_at).toLocaleTimeString('he-IL')}
+                  </p>
                 </div>
               ))}
             </div>
           ) : (
-            <div className="text-center py-8 text-gray-400">אין התאמות ממתינות לביקורת</div>
+            <div className="text-center py-8 text-gray-400">
+              {decisionFilter === 'all'
+                ? 'אין החלטות עדיין'
+                : decisionFilter === 'approved'
+                ? 'אין התאמות אושרו עדיין'
+                : 'אין התאמות דחויות עדיין'}
+            </div>
           )}
         </div>
       )}
@@ -592,73 +554,6 @@ export const CarmitPage = () => {
           ) : (
             <div className="text-center py-8 text-gray-400">אין משרות</div>
           )}
-        </div>
-      )}
-
-      {/* Approval Modal */}
-      {showApprovalModal && selectedMatch && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-gray-800 border border-gray-700 rounded-lg p-6 max-w-md w-full mx-4">
-            <h2 className="text-xl font-semibold text-white mb-4">אישור התאמה</h2>
-            <p className="text-gray-400 mb-6">
-              אתה עומד לאשר את ההתאמה של <span className="font-semibold">{selectedMatch.candidateName}</span> ל<span className="font-semibold">{selectedMatch.jobTitle}</span>
-            </p>
-            <div className="flex gap-2">
-              <button
-                onClick={() => {
-                  approveMutation.mutate(selectedMatch.id);
-                }}
-                className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded font-semibold transition"
-                disabled={approveMutation.isPending}
-              >
-                ✅ אישור
-              </button>
-              <button
-                onClick={() => setShowApprovalModal(false)}
-                className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded font-semibold transition"
-              >
-                ביטול
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Rejection Modal */}
-      {showRejectionModal && selectedMatch && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-gray-800 border border-gray-700 rounded-lg p-6 max-w-md w-full mx-4">
-            <h2 className="text-xl font-semibold text-white mb-4">דחיית התאמה</h2>
-            <p className="text-gray-400 mb-4">
-              אתה עומד לדחות את ההתאמה של <span className="font-semibold">{selectedMatch.candidateName}</span>
-            </p>
-            <textarea
-              value={rejectionReason}
-              onChange={(e) => setRejectionReason(e.target.value)}
-              placeholder="הסיבה לדחיה..."
-              className="w-full px-4 py-2 rounded bg-gray-700 text-white border border-gray-600 focus:border-red-500 outline-none resize-none h-24 mb-4"
-            />
-            <div className="flex gap-2">
-              <button
-                onClick={() => {
-                  rejectMutation.mutate(selectedMatch.id);
-                }}
-                className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded font-semibold transition"
-                disabled={rejectMutation.isPending || !rejectionReason}
-              >
-                ❌ דחייה
-              </button>
-              <button
-                onClick={() => {
-                  setShowRejectionModal(false);
-                  setRejectionReason('');
-                }}
-                className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded font-semibold transition"
-              >
-                ביטול
-              </button>
-            </div>
-          </div>
         </div>
       )}
 
