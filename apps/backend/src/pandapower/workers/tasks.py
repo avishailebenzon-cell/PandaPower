@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime
 from typing import Any
 
 from pandapower.workers.celery_app import app
@@ -779,6 +780,134 @@ def carmit_review_matches_task(self) -> dict[str, Any]:
             loop.close()
     except Exception as e:
         logger.error(f"Carmit match review task wrapper failed: {e}", exc_info=True)
+        return {"status": "failed", "error": str(e)}
+
+
+# ============================================================================
+# Carmit → Tal handoff
+# ----------------------------------------------------------------------------
+# This is the missing link in the pipeline. carmit_review_matches_task flips
+# matches from "found" → "carmit_approved"; nothing then moves them on to
+# "sent_to_tal" so Tal's queue was always empty. The legacy RecruiterWorkflow-
+# Manager.send_match_to_recruiter() exists but is wired only to a manual API
+# call (and uses sync supabase calls that don't work with our async client).
+#
+# This task does the minimum needed: bulk-flip carmit_approved matches to
+# sent_to_tal and write an audit row, using the same defensive history-write
+# helper used by Carmit's review. Pipedrive activity creation is intentionally
+# deferred — it's nice-to-have but not blocking, and the previous code's
+# sync .execute() calls were broken anyway.
+# ============================================================================
+
+async def _carmit_handoff_to_tal_async(batch_size: int = 20) -> dict[str, Any]:
+    """Move carmit_approved matches → sent_to_tal so Tal's queue fills up.
+
+    Returns {status, handed_off, errors}. Picks the oldest carmit_approved
+    matches first so nothing starves.
+    """
+    try:
+        supabase_client = await get_supabase_client()
+
+        # Find approved matches that haven't been handed off yet.
+        resp = await (
+            supabase_client.table("matches")
+            .select("id, candidate_id, job_id, matched_by_agent_code, match_score")
+            .eq("current_state", "carmit_approved")
+            .eq("is_valid", True)
+            .order("updated_at", desc=False)  # oldest first
+            .limit(batch_size)
+            .execute()
+        )
+        matches = resp.data or []
+        if not matches:
+            return {"status": "success", "handed_off": 0}
+
+        # Reuse Carmit's defensive history writer so the audit row schema
+        # matches what _carmit_review_matches_async already produces.
+        from pandapower.workers.carmit import CarmitOrchestrator
+        orchestrator = CarmitOrchestrator(
+            supabase_client=supabase_client,
+            anthropic_client=None,   # not used by handoff path
+            pipedrive_client=None,   # ditto
+            settings={
+                "CARMIT_MATCH_SCORE_THRESHOLD": settings.CARMIT_MATCH_SCORE_THRESHOLD,
+                "CARMIT_CLEARANCE_LEVELS": settings.CARMIT_CLEARANCE_LEVELS,
+            },
+        )
+
+        handed_off = 0
+        errors: list[str] = []
+        now = datetime.utcnow().isoformat()
+        for m in matches:
+            mid = str(m["id"])
+            try:
+                # 1) Flip state.
+                await supabase_client.table("matches").update({
+                    "current_state": "sent_to_tal",
+                    "updated_at": now,
+                }).eq("id", mid).execute()
+
+                # 2) Best-effort audit row via Carmit's defensive helper.
+                await orchestrator._store_match_review(
+                    match_id=mid,
+                    from_state="carmit_approved",
+                    to_state="sent_to_tal",
+                    gate_results={},  # no new gates run at handoff
+                    reasoning="Auto-handoff: Carmit-approved match forwarded to Tal",
+                )
+
+                # 3) Lightweight agent log so the activity timeline shows it.
+                try:
+                    await supabase_client.table("agent_logs").insert({
+                        "agent_code": "carmit_orchestrator",
+                        "action": "handoff_to_tal",
+                        "related_match_id": mid,
+                        "related_candidate_id": m.get("candidate_id"),
+                        "related_job_id": m.get("job_id"),
+                        "output_payload": {
+                            "from_state": "carmit_approved",
+                            "to_state": "sent_to_tal",
+                            "match_score": float(m.get("match_score") or 0.0),
+                        },
+                        "created_at": now,
+                    }).execute()
+                except Exception as log_err:
+                    # Don't let logging block the handoff.
+                    logger.debug(f"agent_logs insert failed for handoff {mid}: {str(log_err)[:120]}")
+
+                handed_off += 1
+            except Exception as e:
+                errors.append(f"{mid}: {str(e)[:200]}")
+                logger.warning(f"Handoff failed for match {mid}: {e}")
+
+        logger.info(f"Carmit→Tal handoff: handed_off={handed_off} errors={len(errors)}")
+        return {"status": "success", "handed_off": handed_off, "errors": errors}
+
+    except Exception as e:
+        logger.error(f"Carmit→Tal handoff async failed: {str(e)}", exc_info=True)
+        return {"status": "failed", "error": str(e)}
+
+
+@app.task(bind=True)
+def carmit_handoff_to_tal_task(self) -> dict[str, Any]:
+    """Celery task: Hand off Carmit-approved matches to Tal's queue.
+
+    Scheduled to run every 10 minutes (see celery_app.py beat schedule),
+    intentionally faster than the 15-minute review cadence so newly-approved
+    matches reach Tal within roughly one review cycle.
+    """
+    logger.info("Starting Carmit → Tal handoff task")
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(_carmit_handoff_to_tal_async())
+            logger.info(f"Carmit → Tal handoff completed: {result}")
+            return result
+        finally:
+            loop.close()
+    except Exception as e:
+        logger.error(f"Carmit → Tal handoff task wrapper failed: {e}", exc_info=True)
         return {"status": "failed", "error": str(e)}
 
 

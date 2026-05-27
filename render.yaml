@@ -1,4 +1,7 @@
 services:
+  # ─────────────────────────────────────────────────────────────────────────
+  # Web — FastAPI serving the admin UI and API.
+  # ─────────────────────────────────────────────────────────────────────────
   - type: web
     name: pandapower-backend
     runtime: python
@@ -20,5 +23,38 @@ services:
       # RESEND_API_KEY
       # PIPEDRIVE_API_TOKEN, PIPEDRIVE_COMPANY_DOMAIN
       # CORS_ORIGINS (e.g. https://panda-power.vercel.app)
+      # REDIS_URL (provisioned via Render Key-Value, see worker service)
     healthCheckPath: /health
+    autoDeploy: true
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Background worker — runs Celery worker + Celery Beat in a single process.
+  # Without this service, scheduled tasks (carmit_review_matches_task,
+  # carmit_handoff_to_tal_task, ingest_emails_task, pipedrive sync, etc.)
+  # never run — which was the silent root cause of "Tal doesn't get matches"
+  # and "email backfill progress stays at 0%".
+  #
+  # REQUIRES: a Render Key-Value (Redis) instance + REDIS_URL env var set on
+  # BOTH this worker and the web service. Provision in Render dashboard,
+  # then add REDIS_URL to env on each service.
+  # ─────────────────────────────────────────────────────────────────────────
+  - type: worker
+    name: pandapower-worker
+    runtime: python
+    region: frankfurt
+    plan: starter
+    rootDir: apps/backend
+    buildCommand: pip install -r requirements.txt
+    # -B = embed beat scheduler in this same worker process so we only pay
+    # for one service. The single-worker beat is fine for our scale.
+    startCommand: celery -A pandapower.workers.celery_app worker -B --loglevel=info --concurrency=2
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      - key: APP_ENV
+        value: production
+      - key: DEBUG
+        value: "false"
+      # Same Supabase / Anthropic / Pipedrive / Resend secrets the web service
+      # uses, plus REDIS_URL pointing at the Key-Value instance.
     autoDeploy: true

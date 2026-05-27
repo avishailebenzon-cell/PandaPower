@@ -163,6 +163,51 @@ async def route_job_manual(
         raise HTTPException(status_code=500, detail=f"Job routing failed: {str(e)}")
 
 
+@router.post("/run-review-now")
+async def run_carmit_review_now():
+    """Manually trigger Carmit's batch match-review task.
+
+    Use when the scheduler isn't running (e.g. before the Render worker
+    service + Redis are provisioned) or to force-process a backlog. Picks
+    up the next 20 "found" matches, runs the quality gates, and flips
+    each to carmit_approved / carmit_rejected.
+
+    Returns the same shape the Celery task produces:
+        {status, matches_reviewed, approved, rejected}
+    """
+    try:
+        # Import here to avoid loading the whole celery wiring at module-load.
+        from pandapower.workers.tasks import _carmit_review_matches_async
+
+        result = await _carmit_review_matches_async()
+        logger.info(f"Manual carmit review: {result}")
+        return result
+    except Exception as e:
+        logger.error(f"Manual carmit review failed: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Carmit review failed: {str(e)}")
+
+
+@router.post("/run-handoff-to-tal-now")
+async def run_carmit_handoff_to_tal_now():
+    """Manually trigger the Carmit → Tal handoff task.
+
+    Moves the next 20 carmit_approved matches into Tal's queue
+    (current_state = "sent_to_tal"). Companion to /run-review-now so the
+    admin can complete the pipeline without waiting for the scheduler.
+
+    Returns: {status, handed_off, errors}
+    """
+    try:
+        from pandapower.workers.tasks import _carmit_handoff_to_tal_async
+
+        result = await _carmit_handoff_to_tal_async()
+        logger.info(f"Manual carmit→tal handoff: {result}")
+        return result
+    except Exception as e:
+        logger.error(f"Manual carmit→tal handoff failed: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Carmit handoff failed: {str(e)}")
+
+
 @router.post("/review-match/{match_id}", response_model=MatchReviewResult)
 async def review_match_manual(
     match_id: str,

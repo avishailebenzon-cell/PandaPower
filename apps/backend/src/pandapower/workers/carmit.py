@@ -607,22 +607,61 @@ Return ONLY valid JSON (no markdown, no extra text):
         gate_results: dict,
         reasoning: str,
     ) -> None:
-        """Store match review results in match_state_history."""
-        try:
-            await self.supabase.table("match_state_history").insert({
-                "match_id": str(match_id),
-                "from_state": from_state,
-                "to_state": to_state,
-                "details": {
-                    "gate_results": gate_results,
-                    "decision_reasoning": reasoning,
-                    "timestamp": datetime.utcnow().isoformat(),
-                },
-                "created_at": datetime.utcnow().isoformat(),
-            }).execute()
-        except Exception as e:
-            logger.error(f"Failed to store match review: {str(e)}")
-            raise
+        """Store match review results in match_state_history — best-effort.
+
+        Production's match_state_history schema is narrower than this code
+        was written for (notably the JSONB ``details`` column is missing —
+        PGRST204). Rather than blowing up the whole review loop, we try a
+        rich insert first and progressively drop columns the schema doesn't
+        know about. If even the bare minimum fails we just log and continue
+        so the caller can still flip current_state — keeping audit history
+        is nice-to-have, but advancing the pipeline is critical.
+        """
+        # Production schema (verified) requires `reasoning` NOT NULL as a
+        # plain text column, but does NOT have the JSONB `details` column
+        # this code was originally written for. We include BOTH so we work
+        # against either schema.
+        full_row = {
+            "match_id": str(match_id),
+            "from_state": from_state,
+            "to_state": to_state,
+            "reasoning": reasoning or "(no reasoning recorded)",
+            "details": {
+                "gate_results": gate_results,
+                "decision_reasoning": reasoning,
+                "timestamp": datetime.utcnow().isoformat(),
+            },
+            "created_at": datetime.utcnow().isoformat(),
+        }
+
+        # Each attempt drops one more potentially-missing column. Mirrors
+        # the pattern used in routers/webhooks.py:_log_inbound_message.
+        # Order matters: `details` first (production doesn't have it),
+        # then `created_at` (likely server-default).
+        attempts: list[list[str]] = [
+            [],                          # full row
+            ["details"],                 # drop JSONB details (PGRST204 in prod)
+            ["details", "created_at"],   # drop server-default-eligible column too
+        ]
+        for drop in attempts:
+            payload = {k: v for k, v in full_row.items() if k not in drop}
+            try:
+                await self.supabase.table("match_state_history").insert(payload).execute()
+                return
+            except Exception as e:
+                msg = str(e)[:200]
+                # PGRST204 / 42703 = column missing. Anything else (network /
+                # permission / table absent) → no point retrying; log and bail.
+                if "does not exist" in msg or "schema cache" in msg or "PGRST204" in msg:
+                    continue
+                logger.warning(
+                    f"match_state_history insert failed for {match_id} ({from_state}→{to_state}): {msg}"
+                )
+                return
+        logger.info(
+            f"match_state_history unavailable — skipped audit row for {match_id} "
+            f"({from_state}→{to_state}); current_state will still be updated"
+        )
 
     async def _update_match_state(self, match_id: str, new_state: str) -> None:
         """Update match state."""

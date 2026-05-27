@@ -4,8 +4,12 @@ from pandapower.core.config import settings
 
 app = Celery("pandapower")
 
-# Use Redis in production for proper queue management, memory broker for development
-if os.getenv("ENVIRONMENT") == "production":
+# Production gate. We check BOTH env-var names because render.yaml sets
+# APP_ENV=production while older deployments may have ENVIRONMENT=production.
+# Either should activate Redis + non-eager mode.
+_is_prod = os.getenv("ENVIRONMENT") == "production" or os.getenv("APP_ENV") == "production"
+
+if _is_prod:
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     app.conf.broker_url = redis_url
     app.conf.result_backend = redis_url
@@ -57,6 +61,13 @@ app.conf.beat_schedule = {
         "task": "pandapower.workers.tasks.carmit_review_matches_task",
         "schedule": 900.0,  # Run every 15 minutes
     },
+    # Carmit → Tal handoff: move carmit_approved matches into Tal's queue.
+    # Cadence intentionally faster than review (10min vs 15min) so newly-
+    # approved matches reach Tal within roughly one review cycle.
+    "carmit-handoff-to-tal-every-10-minutes": {
+        "task": "pandapower.workers.tasks.carmit_handoff_to_tal_task",
+        "schedule": 600.0,
+    },
     # NOTE: Pipedrive data sync (deals/persons/organizations) is NOT scheduled
     # at a fixed interval here. It is driven by user-defined settings in the
     # pipedrive_sync_schedule table - see "pipedrive-sync-scheduler-every-minute"
@@ -88,7 +99,7 @@ app.conf.beat_schedule = {
 app.conf.timezone = "UTC"
 
 # Task execution settings
-if os.getenv("ENVIRONMENT") != "production":
+if not _is_prod:
     # For development, execute tasks synchronously to avoid broker/worker coordination issues
     app.conf.task_always_eager = True
     app.conf.task_eager_propagates = True
