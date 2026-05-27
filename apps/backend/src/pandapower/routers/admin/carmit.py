@@ -56,6 +56,20 @@ class ReviewHistoryEntry(BaseModel):
     timestamp: str
 
 
+class CarmitDecision(BaseModel):
+    """Carmit's decision on a match with all gate results and reasoning."""
+    match_id: str
+    candidate_name: str
+    job_title: str
+    decision: str  # 'approved' or 'rejected'
+    match_score: float
+    gate_results: dict[str, GateResult]
+    reasoning: str
+    decided_at: str
+    candidate_id: Optional[str] = None
+    job_id: Optional[str] = None
+
+
 # Request models
 class OverrideRoutingRequest(BaseModel):
     override_agent_code: Optional[str] = None
@@ -530,3 +544,146 @@ async def get_jobs_to_route():
     except Exception as e:
         logger.error(f"Failed to get jobs to route: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to fetch jobs to route: {str(e)}")
+
+
+@router.get("/decisions")
+async def get_carmit_decisions(
+    decision_filter: Optional[str] = Query("all"),  # 'all', 'approved', 'rejected'
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    """Get Carmit's already-made decisions with gate results and reasoning.
+
+    This endpoint shows matches that Carmit has already decided on
+    (carmit_approved or carmit_rejected) along with her reasoning and gate results.
+
+    Args:
+        decision_filter: Filter by 'approved', 'rejected', or 'all' (default: 'all')
+        limit: Number of decisions to return
+        offset: Pagination offset
+
+    Returns:
+        List of Carmit's decisions with detailed gate results and reasoning
+    """
+    try:
+        supabase = await get_supabase_client()
+
+        # Determine which states to query based on filter
+        states = []
+        if decision_filter in ["all", "approved"]:
+            states.append("carmit_approved")
+        if decision_filter in ["all", "rejected"]:
+            states.append("carmit_rejected")
+
+        if not states:
+            states = ["carmit_approved", "carmit_rejected"]
+
+        # Query matches with Carmit decisions (approved or rejected)
+        query = supabase.table("matches").select(
+            "id, candidate_id, job_id, match_score, current_state, updated_at"
+        ).in_("current_state", states).eq("is_valid", True).order("updated_at", desc=True)
+
+        # Execute query with pagination
+        response = await query.range(offset, offset + limit - 1).execute()
+
+        # Format response with enriched data
+        decisions = []
+        for match in response.data or []:
+            match_id = match.get("id")
+            candidate_id = match.get("candidate_id")
+            job_id = match.get("job_id")
+            match_score = float(match.get("match_score", 0))
+            current_state = match.get("current_state", "")
+            updated_at = match.get("updated_at", "")
+
+            candidate_name = "Unknown"
+            job_title = "Unknown"
+            gate_results = {}
+            reasoning = ""
+
+            # Fetch candidate name
+            try:
+                if candidate_id:
+                    candidate_query = supabase.table("candidates").select(
+                        "full_name_he, full_name_en"
+                    ).eq("id", candidate_id)
+                    candidate_response = await candidate_query.execute()
+                    if candidate_response.data and len(candidate_response.data) > 0:
+                        cand_data = candidate_response.data[0]
+                        candidate_name = (
+                            cand_data.get("full_name_he") or
+                            cand_data.get("full_name_en") or
+                            "Unknown"
+                        )
+            except Exception as e:
+                logger.warning(f"Failed to fetch candidate {candidate_id}: {str(e)}")
+
+            # Fetch job title
+            try:
+                if job_id:
+                    job_query = supabase.table("jobs").select("title").eq("id", job_id)
+                    job_response = await job_query.execute()
+                    if job_response.data and len(job_response.data) > 0:
+                        job_data = job_response.data[0]
+                        job_title = job_data.get("title", "Unknown")
+            except Exception as e:
+                logger.warning(f"Failed to fetch job {job_id}: {str(e)}")
+
+            # Fetch gate results and reasoning from match_state_history
+            try:
+                history_query = supabase.table("match_state_history").select(
+                    "details"
+                ).eq("match_id", match_id).in_(
+                    "to_state", ["carmit_approved", "carmit_rejected"]
+                ).order("created_at", desc=True).limit(1)
+                history_response = await history_query.execute()
+
+                if history_response.data and len(history_response.data) > 0:
+                    history_entry = history_response.data[0]
+                    details = history_entry.get("details", {})
+
+                    # Extract gate results from JSONB
+                    raw_gate_results = details.get("gate_results", {})
+                    for gate_name, gate_info in raw_gate_results.items():
+                        if isinstance(gate_info, dict):
+                            gate_results[gate_name] = GateResult(
+                                passed=gate_info.get("passed", False),
+                                reason=gate_info.get("reason", "")
+                            )
+                        else:
+                            # Handle case where gate_info might be a boolean
+                            gate_results[gate_name] = GateResult(
+                                passed=bool(gate_info),
+                                reason=""
+                            )
+
+                    # Extract decision reasoning
+                    reasoning = details.get("decision_reasoning", "")
+            except Exception as e:
+                logger.warning(f"Failed to fetch match state history for {match_id}: {str(e)}")
+
+            decisions.append({
+                "match_id": match_id,
+                "candidate_id": candidate_id,
+                "candidate_name": candidate_name,
+                "job_id": job_id,
+                "job_title": job_title,
+                "decision": "approved" if current_state == "carmit_approved" else "rejected",
+                "match_score": match_score,
+                "gate_results": {k: v.dict() for k, v in gate_results.items()},
+                "reasoning": reasoning,
+                "decided_at": updated_at,
+            })
+
+        return {
+            "decisions": decisions,
+            "total": len(decisions),
+            "offset": offset,
+            "limit": limit,
+            "filter": decision_filter,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get Carmit decisions: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch Carmit decisions: {str(e)}")
