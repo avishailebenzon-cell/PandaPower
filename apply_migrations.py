@@ -31,7 +31,7 @@ async def apply_migrations():
 
     # Get Supabase connection details from settings
     supabase_url = settings.SUPABASE_URL
-    supabase_key = settings.SUPABASE_KEY
+    supabase_key = settings.SUPABASE_SERVICE_ROLE_KEY or settings.SUPABASE_ANON_KEY
 
     # Parse connection details from Supabase settings
     # Supabase URL format: https://[project-id].supabase.co
@@ -39,7 +39,9 @@ async def apply_migrations():
 
     # We need the database URL - construct it from Supabase project ID
     # Format: postgresql://postgres:[password]@db.[project-id].supabase.co:5432/postgres
-    db_password = settings.SUPABASE_DB_PASSWORD if hasattr(settings, "SUPABASE_DB_PASSWORD") else supabase_key
+    db_password = settings.SUPABASE_DB_PASSWORD if hasattr(settings, "SUPABASE_DB_PASSWORD") else None
+    if not db_password:
+        logger.info("SUPABASE_DB_PASSWORD not set, migrations should be applied via Supabase console")
 
     try:
         # Try to connect using the Supabase connection string

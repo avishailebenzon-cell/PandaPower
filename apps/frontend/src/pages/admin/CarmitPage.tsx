@@ -26,6 +26,13 @@ interface Job {
   assignedAgent?: string;
   routingConfidence?: number;
   createdAt: string;
+  priority?: number;
+  status?: string;
+  assigned_agent_name?: string;
+  contact_person_name?: string;
+  job_opening_date?: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 interface KPIMetrics {
@@ -67,7 +74,7 @@ export const CarmitPage = () => {
   const { data: metrics } = useQuery({
     queryKey: ['carmit-kpi'],
     queryFn: async () => {
-      const response = await fetch('/admin/agent-matching/carmit/kpi-summary');
+      const response = await fetch('/admin/carmit/kpi-summary');
       if (!response.ok) throw new Error('Failed to fetch KPI');
       return response.json() as Promise<KPIMetrics>;
     },
@@ -92,7 +99,7 @@ export const CarmitPage = () => {
   const { data: jobsData, isLoading: jobsLoading } = useQuery({
     queryKey: ['carmit-jobs-to-route'],
     queryFn: async () => {
-      const response = await fetch('/admin/agent-matching/carmit/jobs-to-route');
+      const response = await fetch('/admin/carmit/jobs-to-route');
       if (!response.ok) throw new Error('Failed to fetch jobs');
       return response.json() as Promise<{ jobs: Job[]; total: number }>;
     },
@@ -115,6 +122,8 @@ export const CarmitPage = () => {
           status: string;
           assigned_agent_code?: string;
           assigned_agent_name?: string;
+          contact_person_name?: string;
+          job_opening_date?: string;
           is_routed: boolean;
           created_at: string;
           updated_at?: string;
@@ -170,7 +179,7 @@ export const CarmitPage = () => {
   // Mutation to route job
   const routeJobMutation = useMutation({
     mutationFn: async (jobId: string) => {
-      const response = await fetch(`/admin/agent-matching/carmit/route-job/${jobId}`, {
+      const response = await fetch(`/admin/carmit/route-job/${jobId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });
@@ -495,6 +504,8 @@ export const CarmitPage = () => {
                   <tr className="border-b border-gray-700">
                     <th className="text-right px-4 py-3 text-gray-300 font-semibold">כותרת משרה</th>
                     <th className="text-right px-4 py-3 text-gray-300 font-semibold">עדיפות</th>
+                    <th className="text-right px-4 py-3 text-gray-300 font-semibold">איש קשר</th>
+                    <th className="text-right px-4 py-3 text-gray-300 font-semibold">תאריך פתיחה</th>
                     <th className="text-right px-4 py-3 text-gray-300 font-semibold">סוכן מוקצה</th>
                     <th className="text-right px-4 py-3 text-gray-300 font-semibold">סטטוס</th>
                     <th className="text-right px-4 py-3 text-gray-300 font-semibold">תאריך יצירה</th>
@@ -522,6 +533,12 @@ export const CarmitPage = () => {
                         >
                           {job.priority}
                         </span>
+                      </td>
+                      <td className="px-4 py-3 text-gray-400 text-sm">
+                        {job.contact_person_name || '-'}
+                      </td>
+                      <td className="px-4 py-3 text-gray-400 text-sm">
+                        {job.job_opening_date ? new Date(job.job_opening_date).toLocaleDateString('he-IL') : '-'}
                       </td>
                       <td className="px-4 py-3">
                         {job.assigned_agent_name ? (

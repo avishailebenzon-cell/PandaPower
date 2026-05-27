@@ -1489,6 +1489,8 @@ async def get_all_jobs_with_assignments(
                 "status": job.get("status", "unknown"),
                 "assigned_agent_code": agent_code,
                 "assigned_agent_name": agent_name,
+                "contact_person_name": job.get("contact_person_name"),  # New field: Contact person name
+                "job_opening_date": job.get("job_opening_date"),  # New field: Job opening date
                 "created_at": job.get("created_at"),
                 "updated_at": job.get("updated_at"),
                 "is_routed": agent_code is not None,

@@ -94,6 +94,66 @@ def _extract_priority(deal: Dict[str, Any]) -> Optional[int]:
     return PRIORITY_MAPPING.get(option_id)
 
 
+def _extract_opening_date(deal: Dict[str, Any]) -> Optional[str]:
+    """Extract job opening date from deal's add_time field.
+
+    Pipedrive add_time is when the deal was created/opened in Pipedrive,
+    representing when the recruitment need was identified.
+    """
+    add_time = deal.get("add_time")
+    if not add_time:
+        return None
+
+    # add_time is usually an ISO string or Unix timestamp
+    if isinstance(add_time, str):
+        # If it's already an ISO string, return as-is
+        if "T" in add_time or "Z" in add_time:
+            return add_time
+        # If it's a timestamp, try to parse and convert
+        try:
+            timestamp = int(add_time)
+            from datetime import datetime
+            return datetime.utcfromtimestamp(timestamp).isoformat() + "Z"
+        except (ValueError, TypeError):
+            return None
+    elif isinstance(add_time, int):
+        # Unix timestamp
+        from datetime import datetime
+        try:
+            return datetime.utcfromtimestamp(add_time).isoformat() + "Z"
+        except (ValueError, OSError):
+            return None
+
+    return None
+
+
+async def _fetch_contact_name(db: Any, pipedrive_person_id: Optional[int]) -> Optional[str]:
+    """Fetch the contact person's full name from the contacts table.
+
+    Args:
+        db: Supabase async client
+        pipedrive_person_id: The Pipedrive person ID to look up
+
+    Returns:
+        The contact's full name, or None if not found
+    """
+    if not pipedrive_person_id:
+        return None
+
+    try:
+        contact_response = await db.table("contacts").select("full_name").eq(
+            "pipedrive_person_id", pipedrive_person_id
+        ).single().execute()
+
+        if contact_response.data:
+            return contact_response.data.get("full_name")
+    except Exception as e:
+        # Contact not found or other error - just log and continue
+        logger.debug(f"Could not fetch contact for pipedrive_person_id {pipedrive_person_id}: {e}")
+
+    return None
+
+
 def _extract_deadline(deal: Dict[str, Any]) -> Optional[str]:
     """Extract deadline date from custom field"""
     raw = deal.get(FIELD_DEADLINE)
@@ -183,6 +243,12 @@ async def sync_pipedrive_deals() -> Dict[str, Any]:
                         summary["skipped_no_job_title"] += 1
                         continue
 
+                    # Extract the Pipedrive person ID for contact lookup
+                    pipedrive_person_id = _extract_id(deal.get("person_id"))
+
+                    # Fetch contact person name from contacts table
+                    contact_name = await _fetch_contact_name(db, pipedrive_person_id)
+
                     # Build complete deal_data with all field mappings
                     deal_data = {
                         "pipedrive_deal_id": deal.get("id"),
@@ -193,10 +259,12 @@ async def sync_pipedrive_deals() -> Dict[str, Any]:
                         "job_security_clearance": _extract_text(deal.get(FIELD_SECURITY_CLEARANCE)),
                         "deadline": _extract_deadline(deal),
                         "priority": _extract_priority(deal),
-                        "person_id": _extract_id(deal.get("person_id")),
+                        "person_id": pipedrive_person_id,
                         "org_id": _extract_id(deal.get("org_id")),
                         "stage_id": _extract_id(deal.get("stage_id")),
                         "status": "open",
+                        "contact_person_name": contact_name,  # New: Contact person name
+                        "job_opening_date": _extract_opening_date(deal),  # New: Job opening date from Pipedrive
                         "pipedrive_last_synced_at": datetime.utcnow().isoformat(),
                         "updated_at": datetime.utcnow().isoformat(),
                     }

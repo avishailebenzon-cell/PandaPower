@@ -442,3 +442,87 @@ async def get_carmit_status():
     except Exception as e:
         logger.error(f"Failed to get Carmit status: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to fetch status: {str(e)}")
+
+
+@router.get("/kpi-summary")
+async def get_kpi_summary():
+    """Get Carmit KPI summary metrics.
+
+    Returns:
+        KPI metrics including pending matches, approved, rejected, and approval rate
+    """
+    try:
+        supabase = await get_supabase_client()
+
+        # Get counts for valid matches only
+        pending_response = await supabase.table("matches").select("count", count="exact").eq(
+            "current_state", "found"
+        ).eq("is_valid", True).execute()
+
+        approved_response = await supabase.table("matches").select("count", count="exact").eq(
+            "current_state", "carmit_approved"
+        ).eq("is_valid", True).execute()
+
+        rejected_response = await supabase.table("matches").select("count", count="exact").eq(
+            "current_state", "carmit_rejected"
+        ).eq("is_valid", True).execute()
+
+        pending_count = pending_response.count or 0
+        approved_count = approved_response.count or 0
+        rejected_count = rejected_response.count or 0
+        total_matches = pending_count + approved_count + rejected_count
+
+        # Calculate approval rate
+        decided_matches = approved_count + rejected_count
+        approval_rate = (approved_count / decided_matches) if decided_matches > 0 else 0
+
+        return {
+            "pendingReview": pending_count,
+            "approvedMatches": approved_count,
+            "rejectedMatches": rejected_count,
+            "totalMatches": total_matches,
+            "approvalRate": approval_rate,
+            "jobsToRoute": 0,  # Placeholder - can be computed if needed
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get KPI summary: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch KPI summary: {str(e)}")
+
+
+@router.get("/jobs-to-route")
+async def get_jobs_to_route():
+    """Get jobs waiting to be routed to agents.
+
+    Returns:
+        List of jobs without assigned agents, ordered by priority
+    """
+    try:
+        supabase = await get_supabase_client()
+
+        # Get unassigned jobs (no assigned_agent_code), ordered by priority (highest first)
+        jobs_response = await supabase.table("jobs").select("*").is_(
+            "assigned_agent_code", None
+        ).eq("status", "open").order("priority", desc=True).limit(50).execute()
+
+        jobs = []
+        for job in jobs_response.data or []:
+            jobs.append({
+                "id": job.get("id"),
+                "title": job.get("job_title", "Unknown"),
+                "description": job.get("description", ""),
+                "priority": job.get("priority", 5),
+                "candidateCount": 0,  # Placeholder - can be computed from matches if needed
+                "createdAt": job.get("created_at"),
+            })
+
+        return {
+            "jobs": jobs,
+            "total": len(jobs),
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get jobs to route: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch jobs to route: {str(e)}")
