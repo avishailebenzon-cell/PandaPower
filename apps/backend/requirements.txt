@@ -15,6 +15,11 @@ aiohttp==3.9.5
 
 # Task Queue
 celery==5.3.4
+# The `redis` Python client isn't a celery dep — celery uses kombu, and
+# kombu's redis transport imports `redis` at module-import time. Without
+# this, the worker crashes on boot with
+#   AttributeError: 'NoneType' object has no attribute 'Redis'
+redis>=5.0.0,<6.0.0
 
 # AI/LLM
 anthropic>=0.7.0
