@@ -68,10 +68,25 @@ class EmailIngestWorker:
                         date_str = str(backfill_response.data[0]["setting_value"]).strip('"')
                         if date_str and date_str != "null":
                             backfill_start = datetime.fromisoformat(date_str)
+                            # Force UTC tz-awareness: setting is usually stored
+                            # as a bare date ("2021-05-01"), which gives a naive
+                            # datetime that can't be compared with Microsoft
+                            # Graph's tz-aware receivedDateTime down at line 109
+                            # — that's where this code crashed.
+                            from datetime import timezone as _tz
+                            if backfill_start.tzinfo is None:
+                                backfill_start = backfill_start.replace(tzinfo=_tz.utc)
                             last_seen = backfill_start
                             logger.info(f"Starting backfill from date: {last_seen}")
                 except Exception as e:
                     logger.debug(f"Backfill date lookup failed: {e}")
+
+            # Same guard for the other branch: if last_seen came from
+            # azure.last_seen_message_received_at, normalise to tz-aware UTC
+            # so the comparison below is always safe.
+            if last_seen is not None and last_seen.tzinfo is None:
+                from datetime import timezone as _tz
+                last_seen = last_seen.replace(tzinfo=_tz.utc)
 
             next_link = None
             max_received = last_seen
@@ -106,8 +121,14 @@ class EmailIngestWorker:
                     result["duplicates_found"] += processed["duplicates"]
                     processed_batch += 1
 
-                    if processed["received_at"] and (max_received is None or processed["received_at"] > max_received):
-                        max_received = processed["received_at"]
+                    # Belt-and-suspenders: even if upstream forgot, force
+                    # both sides of the comparison to be tz-aware UTC.
+                    recv = processed.get("received_at")
+                    if recv is not None and getattr(recv, "tzinfo", None) is None:
+                        from datetime import timezone as _tz
+                        recv = recv.replace(tzinfo=_tz.utc)
+                    if recv and (max_received is None or recv > max_received):
+                        max_received = recv
 
                 # Update progress for backfill
                 if backfill_start:
