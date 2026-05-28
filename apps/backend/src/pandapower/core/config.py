@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from dotenv import load_dotenv
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Resolve .env path relative to the backend repo root (apps/backend/.env),
@@ -45,7 +45,28 @@ class Settings(BaseSettings):
     SUPABASE_JWT_SECRET: str = ""
 
     # CORS
+    # Accept either a JSON array (`["https://a.com","https://b.com"]`) or a
+    # comma-separated string (`https://a.com,https://b.com`) — the latter is
+    # what gets typed into the Render dashboard 99% of the time. Without this
+    # validator, a plain string crashes pydantic-settings at boot with
+    # "JSONDecodeError: Expecting value: line 1 column 1 (char 0)".
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:5174"]
+
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
+    def _parse_cors_origins(cls, v):
+        if v is None or v == "":
+            return ["http://localhost:5173", "http://localhost:5174"]
+        if isinstance(v, list):
+            return v
+        if isinstance(v, str):
+            s = v.strip()
+            # JSON array form — let pydantic's default JSON decoder handle it.
+            if s.startswith("["):
+                return s
+            # Comma-separated form (the common dashboard input).
+            return [item.strip() for item in s.split(",") if item.strip()]
+        return v
 
     # Claude API (Phase 8: CV Parsing)
     ANTHROPIC_API_KEY: str = ""
