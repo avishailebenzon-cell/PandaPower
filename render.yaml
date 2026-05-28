@@ -47,7 +47,10 @@ services:
     buildCommand: pip install -r requirements.txt
     # -B = embed beat scheduler in this same worker process so we only pay
     # for one service. The single-worker beat is fine for our scale.
-    startCommand: celery -A pandapower.workers.celery_app worker -B --loglevel=info --concurrency=2
+    # `cd src` is critical: the pandapower package lives at apps/backend/src/
+    # — the web service uses `--app-dir src` for the same reason, celery
+    # doesn't have an equivalent flag so we cd into it instead.
+    startCommand: cd src && celery -A pandapower.workers.celery_app worker -B --loglevel=info --concurrency=2
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.0
