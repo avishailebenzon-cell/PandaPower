@@ -187,6 +187,27 @@ async def run_carmit_review_now():
         raise HTTPException(status_code=500, detail=f"Carmit review failed: {str(e)}")
 
 
+@router.post("/run-watchdog-now")
+async def run_pipeline_watchdog_now():
+    """Manually trigger the pipeline watchdog.
+
+    Checks for matches stuck in transient states ("found" > 2h, or
+    "carmit_approved" > 1h) and re-runs the corresponding task. Useful
+    as a one-shot pipeline catch-up after deploys or worker restarts.
+
+    Returns: {status, stuck_found, stuck_carmit_approved, actions[]}
+    """
+    try:
+        from pandapower.workers.tasks import _pipeline_watchdog_async
+
+        result = await _pipeline_watchdog_async()
+        logger.info(f"Manual pipeline watchdog: {result}")
+        return result
+    except Exception as e:
+        logger.error(f"Manual pipeline watchdog failed: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Watchdog failed: {str(e)}")
+
+
 @router.post("/run-handoff-to-tal-now")
 async def run_carmit_handoff_to_tal_now():
     """Manually trigger the Carmit → Tal handoff task.

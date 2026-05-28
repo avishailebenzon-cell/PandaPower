@@ -68,6 +68,13 @@ app.conf.beat_schedule = {
         "task": "pandapower.workers.tasks.carmit_handoff_to_tal_task",
         "schedule": 600.0,
     },
+    # Pipeline watchdog: re-kicks stuck matches so the pipeline self-heals
+    # after worker restarts or transient crashes. See _pipeline_watchdog_async
+    # for what "stuck" means.
+    "pipeline-watchdog-every-30-minutes": {
+        "task": "pandapower.workers.tasks.pipeline_watchdog_task",
+        "schedule": 1800.0,
+    },
     # NOTE: Pipedrive data sync (deals/persons/organizations) is NOT scheduled
     # at a fixed interval here. It is driven by user-defined settings in the
     # pipedrive_sync_schedule table - see "pipedrive-sync-scheduler-every-minute"

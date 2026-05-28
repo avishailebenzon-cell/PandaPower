@@ -747,9 +747,14 @@ async def _carmit_review_matches_async() -> dict[str, Any]:
         return {"status": "failed", "error": str(e)}
 
 
-@app.task(bind=True)
+@app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_backoff_max=600, retry_jitter=True, max_retries=3)
 def carmit_route_jobs_task(self) -> dict[str, Any]:
-    """Celery task: Route jobs to agents every 10 minutes."""
+    """Celery task: Route jobs to agents every 10 minutes.
+
+    Auto-retries up to 3 times with exponential backoff (max 10 min between
+    retries) on any exception — keeps the pipeline self-healing across
+    transient Supabase / Anthropic / Pipedrive blips.
+    """
     logger.info("Starting Carmit job routing task")
     try:
         loop = asyncio.new_event_loop()
@@ -765,9 +770,12 @@ def carmit_route_jobs_task(self) -> dict[str, Any]:
         return {"status": "failed", "error": str(e)}
 
 
-@app.task(bind=True)
+@app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_backoff_max=600, retry_jitter=True, max_retries=3)
 def carmit_review_matches_task(self) -> dict[str, Any]:
-    """Celery task: Review matches via quality gates every 15 minutes."""
+    """Celery task: Review matches via quality gates every 15 minutes.
+
+    Auto-retries with exponential backoff on transient failures.
+    """
     logger.info("Starting Carmit match review task")
     try:
         loop = asyncio.new_event_loop()
@@ -888,7 +896,7 @@ async def _carmit_handoff_to_tal_async(batch_size: int = 20) -> dict[str, Any]:
         return {"status": "failed", "error": str(e)}
 
 
-@app.task(bind=True)
+@app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_backoff_max=600, retry_jitter=True, max_retries=3)
 def carmit_handoff_to_tal_task(self) -> dict[str, Any]:
     """Celery task: Hand off Carmit-approved matches to Tal's queue.
 
@@ -908,6 +916,106 @@ def carmit_handoff_to_tal_task(self) -> dict[str, Any]:
             loop.close()
     except Exception as e:
         logger.error(f"Carmit → Tal handoff task wrapper failed: {e}", exc_info=True)
+        return {"status": "failed", "error": str(e)}
+
+
+# ============================================================================
+# Pipeline watchdog
+# ----------------------------------------------------------------------------
+# Detects matches that have been stuck in a transient state for "too long"
+# and re-kicks the appropriate task so the pipeline self-heals after worker
+# restarts, transient crashes, or any other gap in scheduling. Runs every
+# 30 minutes (see celery_app.py beat schedule).
+#
+# What "stuck" means:
+#   • found            — Carmit's review should have processed it within
+#                        ~15 min of creation; if it's still "found" after
+#                        2 h, re-run review.
+#   • carmit_approved  — handoff fires every 10 min; if still approved
+#                        after 1 h, re-run handoff.
+#
+# We don't touch "sent_to_tal" / "tal_*" / "elad_*" / "hired" — those are
+# manual-recruiter states, not stale-by-time-alone.
+# ============================================================================
+
+async def _pipeline_watchdog_async() -> dict[str, Any]:
+    """Detect and re-kick stuck matches. Best-effort; never raises."""
+    from datetime import timedelta, timezone
+
+    try:
+        supabase_client = await get_supabase_client()
+        now = datetime.now(timezone.utc)
+
+        # Threshold for "found" stragglers — 2 h since last update.
+        found_cutoff = (now - timedelta(hours=2)).isoformat()
+        approved_cutoff = (now - timedelta(hours=1)).isoformat()
+
+        # Count stragglers in each state.
+        stuck_found_resp = await (
+            supabase_client.table("matches")
+            .select("id", count="exact")
+            .eq("current_state", "found")
+            .eq("is_valid", True)
+            .lte("updated_at", found_cutoff)
+            .execute()
+        )
+        stuck_approved_resp = await (
+            supabase_client.table("matches")
+            .select("id", count="exact")
+            .eq("current_state", "carmit_approved")
+            .eq("is_valid", True)
+            .lte("updated_at", approved_cutoff)
+            .execute()
+        )
+
+        stuck_found = getattr(stuck_found_resp, "count", None) or 0
+        stuck_approved = getattr(stuck_approved_resp, "count", None) or 0
+
+        actions: list[str] = []
+        # If anything's stuck, re-trigger the appropriate task. We use the
+        # async helpers directly (not .delay()) so the watchdog itself does
+        # the catch-up work in one shot — no second hop through the queue.
+        if stuck_found > 0:
+            logger.warning(f"Watchdog: {stuck_found} matches stuck in 'found' > 2h — re-running review")
+            await _carmit_review_matches_async()
+            actions.append(f"re-ran review ({stuck_found} stuck)")
+        if stuck_approved > 0:
+            logger.warning(f"Watchdog: {stuck_approved} matches stuck in 'carmit_approved' > 1h — re-running handoff")
+            await _carmit_handoff_to_tal_async()
+            actions.append(f"re-ran handoff ({stuck_approved} stuck)")
+
+        if not actions:
+            logger.info("Watchdog: pipeline healthy, no stuck matches")
+
+        return {
+            "status": "ok",
+            "stuck_found": stuck_found,
+            "stuck_carmit_approved": stuck_approved,
+            "actions": actions,
+            "checked_at": now.isoformat(),
+        }
+
+    except Exception as e:
+        # Watchdog must never crash the worker — log and move on.
+        logger.error(f"Pipeline watchdog failed: {e}", exc_info=True)
+        return {"status": "failed", "error": str(e)[:300]}
+
+
+@app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_backoff_max=600, max_retries=3)
+def pipeline_watchdog_task(self) -> dict[str, Any]:
+    """Celery task: self-heal stuck matches every 30 min."""
+    logger.info("Starting pipeline watchdog")
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(_pipeline_watchdog_async())
+            logger.info(f"Pipeline watchdog completed: {result}")
+            return result
+        finally:
+            loop.close()
+    except Exception as e:
+        logger.error(f"Pipeline watchdog wrapper failed: {e}", exc_info=True)
         return {"status": "failed", "error": str(e)}
 
 
