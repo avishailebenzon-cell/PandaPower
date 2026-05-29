@@ -147,7 +147,7 @@ export const RECRUITERS: Record<string, Recruiter> = {
     emoji: "🎯",
     avatar: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%234f46e5'/%3E%3Ctext x='50' y='60' text-anchor='middle' font-size='40' font-weight='bold' fill='white'%3E ט%3C/text%3E%3C/svg%3E",
     color: "from-indigo-600 to-indigo-800",
-    description: "מנהל מגייסים בשלב הראשון - סינון התאמות מקרמית",
+    description: "מנהל מגייסים בשלב הראשון - סינון התאמות מכרמית",
     stage: "Initial Screening",
     email: "tal@pandapower.io",
   },

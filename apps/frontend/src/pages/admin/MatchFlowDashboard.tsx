@@ -46,7 +46,7 @@ interface Match {
 
 const STAGE_CONFIG = [
   { id: 'found', label: '🔍 התאמות טריות', color: 'bg-blue-600', textColor: 'text-blue-100' },
-  { id: 'carmit_approved', label: '✅ אושר ע"י קרמית', color: 'bg-indigo-600', textColor: 'text-indigo-100' },
+  { id: 'carmit_approved', label: '✅ אושר ע"י כרמית', color: 'bg-indigo-600', textColor: 'text-indigo-100' },
   { id: 'sent_to_tal', label: '👤 אצל טל', color: 'bg-purple-600', textColor: 'text-purple-100' },
   { id: 'tal_conversation', label: '💬 בשיחה עם טל', color: 'bg-pink-600', textColor: 'text-pink-100' },
   { id: 'tal_accepted', label: '🎯 אושר על ידי טל', color: 'bg-orange-600', textColor: 'text-orange-100' },

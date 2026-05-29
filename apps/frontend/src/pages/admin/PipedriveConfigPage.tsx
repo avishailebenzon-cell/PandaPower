@@ -91,6 +91,7 @@ const DAYS_OF_WEEK = [
   { id: 3, label: 'רביעי' },
   { id: 4, label: 'חמישי' },
   { id: 5, label: 'שישי' },
+  { id: 6, label: 'שבת' },
 ];
 
 export const PipedriveConfigPage: React.FC = () => {

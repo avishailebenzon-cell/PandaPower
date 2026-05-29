@@ -306,8 +306,8 @@ async def update_sync_schedule(entity_type: str, schedule: SyncScheduleUpdate):
 
         # Validate sync_days if provided
         if schedule.sync_days:
-            if len(schedule.sync_days) != 7:
-                raise ValueError("sync_days must have exactly 7 boolean values (Mon-Sun)")
+            if len(schedule.sync_days) not in [6, 7]:
+                raise ValueError("sync_days must have 6 or 7 boolean values (Sun-Fri or Sun-Sat)")
 
         # Calculate next sync time
         next_sync = datetime.utcnow() + timedelta(minutes=schedule.sync_interval_minutes)

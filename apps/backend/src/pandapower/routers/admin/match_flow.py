@@ -373,16 +373,20 @@ async def debug_data_quality():
         candidate_ids = list(set(m.get("candidate_id") for m in sample if m.get("candidate_id")))
         job_ids = list(set(m.get("job_id") for m in sample if m.get("job_id")))
 
+        logger.info(f"Sample candidate_ids: {candidate_ids}, job_ids: {job_ids}")
+
         candidates = {}
         jobs = {}
 
         if candidate_ids:
             resp = await supabase.table("candidates").select("id, name").in_("id", candidate_ids).execute()
             candidates = {c["id"]: c.get("name", "?") for c in (resp.data or [])}
+            logger.info(f"Fetched {len(candidates)} candidates: {candidates}")
 
         if job_ids:
             resp = await supabase.table("jobs").select("id, title").in_("id", job_ids).execute()
             jobs = {j["id"]: j.get("title", "?") for j in (resp.data or [])}
+            logger.info(f"Fetched {len(jobs)} jobs: {jobs}")
 
         # Enrich samples
         enriched_samples = []
