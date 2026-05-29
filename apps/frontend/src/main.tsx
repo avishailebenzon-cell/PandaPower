@@ -39,6 +39,7 @@ import { RecruitmentDepartment } from '@/pages/admin/RecruitmentDepartment'
 import { RecruiterDashboard } from '@/pages/admin/RecruiterDashboard'
 import { EladPageNew } from '@/pages/admin/EladPageNew'
 import { TalPage } from '@/pages/admin/TalPage'
+import { MatchFlowDashboard } from '@/pages/admin/MatchFlowDashboard'
 
 // Other Pages
 import { PandiAgent } from '@/pages/agents/PandiAgent'
@@ -72,6 +73,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             <Route path="/admin/alerts" element={<ProtectedRoute><AlertsPage /></ProtectedRoute>} />
             <Route path="/admin/agents" element={<ProtectedRoute><AgentManagementPage /></ProtectedRoute>} />
             <Route path="/admin/analytics" element={<ProtectedRoute><AnalyticsDashboard /></ProtectedRoute>} />
+            <Route path="/admin/match-flow" element={<ProtectedRoute><MatchFlowDashboard /></ProtectedRoute>} />
             <Route path="/admin/whatsapp-agents" element={<ProtectedRoute><WhatsAppAgentsSettingsPage /></ProtectedRoute>} />
           </Route>
 
@@ -89,6 +91,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 
             {/* Recruitment Manager (Carmit) - Part of Work Area */}
             <Route path="/admin/carmit" element={<ProtectedRoute><CarmitPage /></ProtectedRoute>} />
+
+            {/* Pipeline Flow Dashboard */}
+            <Route path="/recruiting/match-flow" element={<ProtectedRoute><MatchFlowDashboard /></ProtectedRoute>} />
 
             {/* Pandi (WhatsApp client-intake agent) — works alongside the other
                 AI recruiters, so its pages render inside the Work-area shell,

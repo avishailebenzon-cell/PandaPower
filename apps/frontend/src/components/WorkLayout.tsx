@@ -64,7 +64,10 @@ export function WorkLayout() {
               {showCarmitMenu && (
                 <nav className="space-y-1 mt-2">
                   <a href="/admin/carmit" className="block px-3 py-2 rounded text-white hover:bg-gray-700 transition text-sm">
-                    כרמית
+                    🤖 כרמית
+                  </a>
+                  <a href="/recruiting/match-flow" className="block px-3 py-2 rounded text-white hover:bg-gray-700 transition text-sm">
+                    📊 Pipeline Flow
                   </a>
                 </nav>
               )}
