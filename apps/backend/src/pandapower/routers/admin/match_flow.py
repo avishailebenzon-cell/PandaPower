@@ -127,7 +127,7 @@ async def get_flow_metrics():
         avg_time_in_tal = sum(time_in_tal) / len(time_in_tal) if time_in_tal else 0
         avg_time_in_elad = sum(time_in_elad) / len(time_in_elad) if time_in_elad else 0
 
-        logger.info(f"Flow metrics: {total_in_pipeline} in pipeline, {total_completed} completed")
+        logger.info(f"Flow metrics: {total_in_pipeline} in pipeline, {total_completed} completed. Stage counts: {stages}")
 
         return MatchFlowMetrics(
             stage_found=stages["found"],
@@ -185,20 +185,32 @@ async def get_matches_by_stage(
 
         matches = matches_response.data or []
 
+        logger.debug(f"Fetched {len(matches)} matches in stage '{stage}'. Sample: {matches[:1] if matches else 'none'}")
+
         # Fetch candidate and job info for all matches
         candidate_ids = list(set(m.get("candidate_id") for m in matches if m.get("candidate_id")))
         job_ids = list(set(m.get("job_id") for m in matches if m.get("job_id")))
+
+        logger.debug(f"Found {len(candidate_ids)} unique candidates, {len(job_ids)} unique jobs")
 
         candidates_map = {}
         jobs_map = {}
 
         if candidate_ids:
-            candidates_response = await supabase.table("candidates").select("id, name").in_("id", candidate_ids).execute()
-            candidates_map = {c["id"]: c["name"] for c in (candidates_response.data or [])}
+            try:
+                candidates_response = await supabase.table("candidates").select("id, name").in_("id", candidate_ids).execute()
+                candidates_map = {c["id"]: c["name"] for c in (candidates_response.data or [])}
+                logger.debug(f"Fetched {len(candidates_map)} candidate names")
+            except Exception as e:
+                logger.warning(f"Failed to fetch candidate names: {e}")
 
         if job_ids:
-            jobs_response = await supabase.table("jobs").select("id, title").in_("id", job_ids).execute()
-            jobs_map = {j["id"]: j["title"] for j in (jobs_response.data or [])}
+            try:
+                jobs_response = await supabase.table("jobs").select("id, title").in_("id", job_ids).execute()
+                jobs_map = {j["id"]: j["title"] for j in (jobs_response.data or [])}
+                logger.debug(f"Fetched {len(jobs_map)} job titles")
+            except Exception as e:
+                logger.warning(f"Failed to fetch job titles: {e}")
 
         # Transform to response format
         result = []
@@ -220,7 +232,9 @@ async def get_matches_by_stage(
                 )
             )
 
-        logger.info(f"Fetched {len(result)} matches in stage '{stage}'")
+        logger.info(f"Returning {len(result)} matches in stage '{stage}'")
+        if result:
+            logger.debug(f"Sample result: {result[0].__dict__}")
         return result
 
     except HTTPException:

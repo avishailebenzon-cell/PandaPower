@@ -199,10 +199,15 @@ async def receive_whatsapp_webhook(
     except Exception as e:
         logger.warning(f"Webhook logging failed for {agent_code}: {e}")
 
-    # TODO: enqueue Celery task to actually have the bot respond. The Pandi
-    # message handler exists at workers/pandi/message_handler.py but the
-    # import was disabled because it required a worker process not running
-    # in production. Wiring that up is the next step after we confirm
-    # webhooks are reaching us reliably.
+    # Enqueue Celery task to process the message (Session 34)
+    if agent_code == "pandi" and parsed.get("event_type") == "incomingMessageReceived":
+        try:
+            from pandapower.workers.pandi.message_handler import process_pandi_incoming_message
+
+            # Enqueue async task
+            task = process_pandi_incoming_message.delay(payload)
+            logger.info(f"Enqueued Celery task {task.id} for Pandi message processing")
+        except Exception as e:
+            logger.error(f"Failed to enqueue Pandi message task: {e}", exc_info=True)
 
     return {"status": "ok", "agent": agent_code, "event": parsed.get("event_type")}
