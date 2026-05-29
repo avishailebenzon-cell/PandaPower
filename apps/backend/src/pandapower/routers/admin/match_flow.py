@@ -177,33 +177,34 @@ async def get_matches_by_stage(
         if stage not in valid_stages:
             raise HTTPException(status_code=400, detail=f"Invalid stage: {stage}")
 
-        # Fetch matches for this stage with candidate and job info
+        # Fetch matches for this stage
         matches_response = await supabase.table("matches").select(
             "id, match_score, current_state, created_at, updated_at, "
-            "tal_summary, carmit_review_notes, "
-            "candidates(name), jobs(title)"
+            "tal_summary, carmit_review_notes, candidate_id, job_id"
         ).eq("current_state", stage).order("updated_at", desc=True).execute()
 
         matches = matches_response.data or []
 
+        # Fetch candidate and job info for all matches
+        candidate_ids = list(set(m.get("candidate_id") for m in matches if m.get("candidate_id")))
+        job_ids = list(set(m.get("job_id") for m in matches if m.get("job_id")))
+
+        candidates_map = {}
+        jobs_map = {}
+
+        if candidate_ids:
+            candidates_response = await supabase.table("candidates").select("id, name").in_("id", candidate_ids).execute()
+            candidates_map = {c["id"]: c["name"] for c in (candidates_response.data or [])}
+
+        if job_ids:
+            jobs_response = await supabase.table("jobs").select("id, title").in_("id", job_ids).execute()
+            jobs_map = {j["id"]: j["title"] for j in (jobs_response.data or [])}
+
         # Transform to response format
         result = []
         for match in matches:
-            # Extract nested data from relations
-            candidates = match.get("candidates", {})
-            jobs = match.get("jobs", {})
-
-            candidate_name = "Unknown"
-            if isinstance(candidates, list) and len(candidates) > 0:
-                candidate_name = candidates[0].get("name", "Unknown")
-            elif isinstance(candidates, dict):
-                candidate_name = candidates.get("name", "Unknown")
-
-            job_title = "Unknown"
-            if isinstance(jobs, list) and len(jobs) > 0:
-                job_title = jobs[0].get("title", "Unknown")
-            elif isinstance(jobs, dict):
-                job_title = jobs.get("title", "Unknown")
+            candidate_name = candidates_map.get(match.get("candidate_id"), "Unknown")
+            job_title = jobs_map.get(match.get("job_id"), "Unknown")
 
             result.append(
                 StageMatch(

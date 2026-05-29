@@ -788,6 +788,82 @@ _AGENT_MATCH_SORT_COLUMNS = {
 _AGENT_MATCH_CLIENT_SORT_KEYS = {"candidate", "job", "clearance"}
 
 
+class BulkMatchStatusRequest(BaseModel):
+    match_ids: list[str]
+    action: str  # 'hired' or 'rejected'
+    notes: Optional[str] = None
+
+
+@router.post("/update-matches-status")
+async def update_matches_status(request: BulkMatchStatusRequest):
+    """Bulk update match status (hire/reject).
+
+    Args:
+        match_ids: List of match IDs to update
+        action: 'hired' or 'rejected'
+        notes: Optional notes for the action
+
+    Returns:
+        List of updated matches
+    """
+    try:
+        if not request.match_ids:
+            raise HTTPException(status_code=400, detail="No match IDs provided")
+
+        if request.action not in ["hired", "rejected"]:
+            raise HTTPException(status_code=400, detail="Action must be 'hired' or 'rejected'")
+
+        supabase = await get_supabase_client()
+
+        # Map action to new state
+        new_state = "hired" if request.action == "hired" else "placement_failed"
+
+        # Update matches
+        updated_matches = []
+        for match_id in request.match_ids:
+            try:
+                # Update match state
+                await supabase.table("matches").update({
+                    "current_state": new_state,
+                }).eq("id", match_id).execute()
+
+                # Log the state transition
+                await supabase.table("match_state_history").insert({
+                    "match_id": match_id,
+                    "from_state": "unknown",  # Could be any state
+                    "to_state": new_state,
+                    "details": {
+                        "action": request.action,
+                        "notes": request.notes or "",
+                        "updated_by": "admin",
+                    }
+                }).execute()
+
+                updated_matches.append({
+                    "id": match_id,
+                    "new_state": new_state,
+                    "action": request.action,
+                })
+            except Exception as e:
+                logger.error(f"Failed to update match {match_id}: {str(e)}")
+                # Continue with other matches
+
+        logger.info(f"Updated {len(updated_matches)} matches with action={request.action}")
+
+        return {
+            "status": "success",
+            "updated_count": len(updated_matches),
+            "updated_matches": updated_matches,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Bulk match status update failed: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Status update failed: {str(e)}")
+
+
 @router.get("/agent-matches")
 async def get_agent_matches(
     limit: int = Query(25, ge=1, le=200),
