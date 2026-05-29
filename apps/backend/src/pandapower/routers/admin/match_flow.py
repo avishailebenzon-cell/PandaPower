@@ -1,13 +1,14 @@
 """
 Match Flow Pipeline Dashboard
 Shows metrics and details of matches through recruitment pipeline stages.
+Includes bottleneck detection and alerts.
 """
 
 import logging
 from typing import Any, Optional
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, HTTPException, Path
+from fastapi import APIRouter, HTTPException, Path, Query
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,23 @@ class StageMatch(BaseModel):
     updated_at: str
     tal_summary: Optional[str] = None
     carmit_review_notes: Optional[str] = None
+
+
+class BottleneckAlert(BaseModel):
+    alert_type: str
+    level: str
+    title: str
+    description: str
+    metrics: dict
+    recommendation: str
+    detected_at: str
+
+
+class BottleneckCheckResponse(BaseModel):
+    status: str
+    alerts_detected: int
+    alerts: list[BottleneckAlert]
+    alerts_sent: int
 
 
 # Endpoints
@@ -209,3 +227,147 @@ async def get_matches_by_stage(
     except Exception as e:
         logger.error(f"Error getting matches by stage: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get matches: {str(e)}")
+
+
+@router.get("/timeline", response_model=list[dict])
+async def get_timeline_data(
+    range: str = Query("month", regex="^(week|month|quarter)$"),
+):
+    """
+    Get timeline data showing match progression through stages over time.
+
+    Shows daily/weekly counts of matches in each pipeline stage.
+    Useful for:
+    - Visualizing flow velocity
+    - Identifying bottleneck formation
+    - Tracking success trends
+
+    Args:
+        range: Time range for the data (week, month, or quarter)
+
+    Returns:
+        List of timeline data points with date, stage, and count
+    """
+    try:
+        from pandapower.core.supabase import get_supabase_client
+        from datetime import datetime, timedelta
+
+        supabase = await get_supabase_client()
+
+        # Determine date range
+        end_date = datetime.utcnow()
+        if range == "week":
+            start_date = end_date - timedelta(days=7)
+        elif range == "month":
+            start_date = end_date - timedelta(days=30)
+        else:  # quarter
+            start_date = end_date - timedelta(days=90)
+
+        # Fetch all matches
+        matches_response = await supabase.table("matches").select(
+            "id, current_state, created_at, updated_at"
+        ).execute()
+
+        matches = matches_response.data or []
+
+        # Build timeline: count matches in each stage per day
+        timeline_data = []
+        current_date = start_date.date()
+
+        while current_date <= end_date.date():
+            date_str = current_date.isoformat()
+
+            # For each stage, count matches that were in that stage on this date
+            stages = [
+                "found", "carmit_approved", "sent_to_tal", "tal_conversation",
+                "tal_accepted", "sent_to_elad", "hired", "rejected_tal", "rejected_elad"
+            ]
+
+            for stage in stages:
+                # Count matches in this stage on this date
+                count = 0
+                for match in matches:
+                    created = datetime.fromisoformat(match["created_at"].replace("Z", "+00:00"))
+                    updated = datetime.fromisoformat(match["updated_at"].replace("Z", "+00:00"))
+
+                    # If match was created before this date and (still in this stage or updated after this date)
+                    if created.date() <= current_date:
+                        # Check if match is in this stage as of this date
+                        if match.get("current_state") == stage:
+                            # Match is currently in this stage
+                            if updated.date() <= current_date:
+                                count += 1
+                        elif updated.date() > current_date:
+                            # Match has moved past, but was in this stage before moving
+                            # This is a simplified heuristic - in production, use state history
+                            pass
+
+                if count > 0:
+                    timeline_data.append({
+                        "date": date_str,
+                        "stage": stage,
+                        "count": count,
+                    })
+
+            current_date += timedelta(days=1)
+
+        logger.info(f"Timeline data: {len(timeline_data)} data points for {range}")
+        return timeline_data
+
+    except Exception as e:
+        logger.error(f"Error getting timeline: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get timeline: {str(e)}")
+
+
+@router.post("/check-bottlenecks", response_model=BottleneckCheckResponse)
+async def check_bottlenecks(send_alerts: bool = Query(True)):
+    """
+    Manually trigger bottleneck detection and optionally send alerts.
+
+    Checks for:
+    - Tal screening overload (sent_to_tal > tal_accepted * 2)
+    - Elad placement delays (tal_accepted > sent_to_elad * 2)
+    - Stagnant matches (>7 days in same stage)
+    - High rejection rates (>35%)
+
+    Args:
+        send_alerts: Whether to send email alerts for detected bottlenecks
+
+    Returns:
+        Detected alerts with metrics and recommendations
+    """
+    try:
+        from pandapower.core.supabase import get_supabase_client
+        from pandapower.workers.bottleneck_alerts import check_and_alert_bottlenecks
+        from pandapower.integrations.resend import ResendAlertService
+        from pandapower.core.config import get_settings
+
+        supabase = await get_supabase_client()
+        settings = get_settings()
+
+        # Initialize alert service if enabled
+        alert_service = None
+        if send_alerts and settings.RESEND_API_KEY:
+            alert_service = ResendAlertService(api_key=settings.RESEND_API_KEY)
+
+        # Run bottleneck detection
+        result = await check_and_alert_bottlenecks(supabase, alert_service)
+
+        logger.info(
+            f"Bottleneck check: {result['alerts_detected']} alerts detected, "
+            f"{result['alerts_sent']} alerts sent"
+        )
+
+        return BottleneckCheckResponse(
+            status=result["status"],
+            alerts_detected=result["alerts_detected"],
+            alerts=[BottleneckAlert(**a) for a in result["alerts"]],
+            alerts_sent=result["alerts_sent"],
+        )
+
+    except Exception as e:
+        logger.error(f"Error checking bottlenecks: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to check bottlenecks: {str(e)}"
+        )

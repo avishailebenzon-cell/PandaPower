@@ -8,10 +8,12 @@
  * - KPI cards for each stage
  * - Detailed tables for deep inspection
  * - Bottleneck detection & recommendations
+ * - Timeline chart for historical analysis
  */
 
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation } from '@tanstack/react-query';
+import { MatchTimelineChart } from '@/components/MatchTimelineChart';
 
 interface MatchFlowMetrics {
   stage_found: number;
@@ -60,6 +62,8 @@ const REJECTION_STAGES = [
 export function MatchFlowDashboard() {
   const [expandedStage, setExpandedStage] = useState<string | null>(null);
   const [showRejections, setShowRejections] = useState(false);
+  const [showTimeline, setShowTimeline] = useState(false);
+  const [bottleneckAlerts, setBottleneckAlerts] = useState<any[]>([]);
 
   // Fetch metrics
   const { data: metrics, isLoading: metricsLoading } = useQuery<MatchFlowMetrics>({
@@ -84,6 +88,21 @@ export function MatchFlowDashboard() {
       return response.json();
     },
     enabled: !!expandedStage,
+  });
+
+  // Check bottlenecks mutation
+  const bottlenecksMutation = useMutation({
+    mutationFn: async (sendAlerts: boolean = true) => {
+      const response = await fetch(
+        `${import.meta.env.VITE_API_URL}/admin/matches/check-bottlenecks?send_alerts=${sendAlerts}`,
+        { method: 'POST' }
+      );
+      if (!response.ok) throw new Error('Failed to check bottlenecks');
+      return response.json();
+    },
+    onSuccess: (data) => {
+      setBottleneckAlerts(data.alerts);
+    },
   });
 
   if (metricsLoading) {
@@ -168,6 +187,40 @@ export function MatchFlowDashboard() {
               <p className="text-yellow-200 text-sm mt-1">{bottleneck.reason}</p>
               <p className="text-yellow-300 text-xs mt-2">💡 כדאי להתערב או להעיף resources</p>
             </div>
+            <button
+              onClick={() => bottlenecksMutation.mutate(true)}
+              className="text-xs px-3 py-1 bg-yellow-700 hover:bg-yellow-600 text-white rounded whitespace-nowrap"
+              disabled={bottlenecksMutation.isPending}
+            >
+              {bottlenecksMutation.isPending ? '⏳' : '📧'} שלח Alert
+            </button>
+          </div>
+        )}
+
+        {/* Detected Bottleneck Alerts */}
+        {bottleneckAlerts.length > 0 && (
+          <div className="space-y-3 mb-8">
+            {bottleneckAlerts.map((alert, idx) => (
+              <div
+                key={idx}
+                className={`border rounded-lg p-4 flex gap-4 items-start ${
+                  alert.level === 'critical'
+                    ? 'bg-red-900/30 border-red-700'
+                    : alert.level === 'warning'
+                      ? 'bg-yellow-900/30 border-yellow-700'
+                      : 'bg-blue-900/30 border-blue-700'
+                }`}
+              >
+                <div className="text-2xl">
+                  {alert.level === 'critical' ? '🔴' : alert.level === 'warning' ? '🟡' : '🔵'}
+                </div>
+                <div className="flex-1">
+                  <h4 className="font-bold text-white">{alert.title}</h4>
+                  <p className="text-sm text-gray-300 mt-1">{alert.description}</p>
+                  <p className="text-xs text-gray-400 mt-2 italic">💡 {alert.recommendation}</p>
+                </div>
+              </div>
+            ))}
           </div>
         )}
 
@@ -318,6 +371,45 @@ export function MatchFlowDashboard() {
               )}
             </div>
           )}
+        </div>
+      </div>
+
+      {/* Timeline Chart */}
+      <button
+        onClick={() => setShowTimeline(!showTimeline)}
+        className="w-full text-left mb-8 bg-gray-800 rounded-lg border border-gray-700 p-4 hover:border-indigo-500/50 transition-colors flex justify-between items-center"
+      >
+        <h3 className="text-lg font-bold text-white">📈 Timeline & Trends</h3>
+        <span className="text-gray-400">{showTimeline ? '▼' : '▶'}</span>
+      </button>
+
+      {showTimeline && <MatchTimelineChart timeRange="month" />}
+
+      {/* Manual Bottleneck Check */}
+      <div className="bg-gray-800 rounded-lg border border-gray-700 p-6">
+        <div className="flex justify-between items-center">
+          <div>
+            <h3 className="text-lg font-bold text-white">🔍 Manual Bottleneck Check</h3>
+            <p className="text-sm text-gray-400 mt-1">
+              Scan pipeline for inefficiencies and optionally send email alerts
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => bottlenecksMutation.mutate(false)}
+              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded font-semibold text-sm"
+              disabled={bottlenecksMutation.isPending}
+            >
+              {bottlenecksMutation.isPending ? '⏳ בדיקה...' : '🔍 בדוק בלבד'}
+            </button>
+            <button
+              onClick={() => bottlenecksMutation.mutate(true)}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded font-semibold text-sm"
+              disabled={bottlenecksMutation.isPending}
+            >
+              {bottlenecksMutation.isPending ? '⏳ שליחה...' : '📧 בדוק ושלח Alert'}
+            </button>
+          </div>
         </div>
       </div>
     </div>
