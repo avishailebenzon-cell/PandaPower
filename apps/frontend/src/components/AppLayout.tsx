@@ -31,7 +31,7 @@ export function AppLayout() {
 
             <li><a href="/admin/email-intake" className="block px-3 py-2 rounded text-white hover:bg-gray-700">קליטת דוא"ל</a></li>
             <li><a href="/admin/cv-parsing" className="block px-3 py-2 rounded text-white hover:bg-gray-700">ניתוח קורות חיים</a></li>
-            <li><a href="/admin/cv-upload" className="block px-3 py-2 rounded text-white hover:bg-gray-700">📤 העלאה ידנית</a></li>
+            <li><a href="/admin/cv-upload" className="block px-3 py-2 rounded text-white hover:bg-gray-700 transition-colors">📤 העלאה ידנית</a></li>
             <li><a href="/admin/candidates" className="block px-3 py-2 rounded text-white hover:bg-gray-700">מועמדים</a></li>
             <li><a href="/admin/agents" className="block px-3 py-2 rounded text-white hover:bg-gray-700">סוכנים</a></li>
 
