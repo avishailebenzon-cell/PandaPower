@@ -39,6 +39,7 @@ import { ConversationsPage } from '@/pages/work/ConversationsPage'
 import { RecruitmentDepartment } from '@/pages/admin/RecruitmentDepartment'
 import { RecruiterDashboard } from '@/pages/admin/RecruiterDashboard'
 import { EladPageNew } from '@/pages/admin/EladPageNew'
+import EladOutreachPage from '@/pages/admin/EladOutreachPage'
 import { TalPage } from '@/pages/admin/TalPage'
 import { MatchFlowDashboard } from '@/pages/admin/MatchFlowDashboard'
 
@@ -89,6 +90,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             {/* Recruiters */}
             <Route path="/recruiting/tal" element={<ProtectedRoute><TalPage /></ProtectedRoute>} />
             <Route path="/recruiting/elad" element={<ProtectedRoute><EladPageNew /></ProtectedRoute>} />
+            <Route path="/recruiting/elad/outreach" element={<ProtectedRoute><EladOutreachPage /></ProtectedRoute>} />
 
             {/* Conversations */}
             <Route path="/recruiting/conversations" element={<ProtectedRoute><ConversationsPage /></ProtectedRoute>} />
