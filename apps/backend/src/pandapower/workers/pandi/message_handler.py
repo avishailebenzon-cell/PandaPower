@@ -210,14 +210,23 @@ async def _process_pandi_incoming_message_async(payload: dict) -> dict[str, Any]
                     "sent_at": datetime.fromtimestamp(timestamp).isoformat()
                 }).execute()
 
-                # Start intake with greeting
-                await continue_intake_flow(client_id, None, supabase, is_first=True)
+                # Route to conversation handler for Pandi to handle client identification
+                # (Session 34: Pandi handles new client intake via tools)
+                logger.info(f"New client {client_id}, routing to conversation handler for Pandi to identify")
+                if conversation_id:
+                    conv_handler_result = await handle_client_message(
+                        conversation_id=UUID(str(conversation_id)),
+                        pandi_client_id=UUID(str(client_id)),
+                        incoming_text=message_text,
+                        chat_id=f"{phone.replace('+', '')}@c.us",
+                    )
+                    logger.info(f"Conversation handler result: {conv_handler_result}")
 
                 return {
                     "status": "processed",
                     "client_id": client_id,
                     "is_new_client": True,
-                    "intake_started": True
+                    "intake_started": False
                 }
 
     except Exception as e:

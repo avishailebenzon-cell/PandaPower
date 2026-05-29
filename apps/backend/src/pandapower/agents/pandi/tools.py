@@ -149,6 +149,50 @@ def get_pandi_tools() -> list:
                 "required": ["summary"],
             },
         },
+        {
+            "name": "identify_client",
+            "description": "Check if a client already exists in the database by phone number. Used during opening phase to determine if this is a known or new client.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "phone": {
+                        "type": "string",
+                        "description": "Phone number in E.164 format (e.g., +972501234567)",
+                    },
+                },
+                "required": ["phone"],
+            },
+        },
+        {
+            "name": "create_client",
+            "description": "Create a new client in the database and sync to Pipedrive. Call this after collecting client details (name, email, company, role).",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "phone": {
+                        "type": "string",
+                        "description": "Phone number in E.164 format",
+                    },
+                    "full_name": {
+                        "type": "string",
+                        "description": "Full name of the client (first + last)",
+                    },
+                    "email": {
+                        "type": "string",
+                        "description": "Email address",
+                    },
+                    "company_name": {
+                        "type": "string",
+                        "description": "Company or organization name",
+                    },
+                    "role": {
+                        "type": "string",
+                        "description": "Job title or role at company",
+                    },
+                },
+                "required": ["phone", "full_name", "email"],
+            },
+        },
     ]
 
 

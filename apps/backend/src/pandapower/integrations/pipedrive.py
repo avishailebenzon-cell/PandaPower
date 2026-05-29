@@ -77,6 +77,37 @@ class PipedriveClient:
         response = await self._make_request("GET", endpoint)
         return response.get("data", {})
 
+    async def create_person(
+        self, name: str, email: str = None, phone: str = None, custom_fields: dict = None
+    ) -> dict:
+        """Create a new person (contact) in Pipedrive.
+
+        Args:
+            name: Full name of the person
+            email: Email address
+            phone: Phone number (E.164 format)
+            custom_fields: Optional dict of custom field hashes to values
+
+        Returns:
+            Created person object with 'id' field
+        """
+        endpoint = "/v1/persons"
+        payload = {"name": name}
+
+        if email:
+            payload["email"] = [{"value": email, "primary": True}]
+
+        if phone:
+            payload["phone"] = [{"value": phone, "primary": True}]
+
+        if custom_fields:
+            payload.update(custom_fields)
+
+        response = await self._make_request("POST", endpoint, body=payload)
+        result = response.get("data", {})
+        logger.info(f"Created Pipedrive person: {name} (ID: {result.get('id')})")
+        return result
+
     async def write_note_to_deal(self, deal_id: str, note_text: str) -> dict:
         """Write a note to a deal (job posting + candidate match).
 

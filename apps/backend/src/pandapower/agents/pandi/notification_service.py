@@ -409,3 +409,122 @@ class NotificationService:
             },
             severity="info",
         )
+
+    async def notify_new_client_prospect(
+        self,
+        client_name: str,
+        email: str,
+        phone: str,
+        company_name: Optional[str] = None,
+        role: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+    ) -> dict:
+        """Notify admin that a new client prospect registered via Pandi.
+
+        This is sent when an unknown client (not in DB) reaches out to Pandi
+        and provides their details. Includes email notification via Resend
+        to admin so they can follow up if needed.
+
+        Args:
+            client_name: Client's full name
+            email: Client's email address
+            phone: Client's phone number
+            company_name: Optional company name
+            role: Optional role/title
+            conversation_id: Optional conversation ID for tracking
+        """
+        try:
+            # Format the notification for Telegram
+            message = f"""
+לקוח חדש! 🎉
+📋 {client_name}
+📧 {email}
+📱 {phone}
+🏢 {company_name or 'לא צוין'}
+💼 {role or 'לא צוין'}
+💬 conversation_id: {conversation_id or 'N/A'}
+            """.strip()
+
+            # Send via Telegram (existing path)
+            telegram_result = await self.notify_event(
+                event_type="new_client_prospect",
+                title=f"🎉 לקוח חדש! {client_name}",
+                message=message,
+                context={
+                    "client_name": client_name,
+                    "email": email,
+                    "phone": phone,
+                    "company_name": company_name,
+                    "role": role,
+                    "conversation_id": conversation_id,
+                },
+                severity="info",
+            )
+
+            # Also send email via Resend to admin
+            try:
+                from pandapower.integrations.resend_client import ResendClient
+                from pandapower.core.config import settings
+
+                if not settings.RESEND_API_KEY:
+                    logger.warning("RESEND_API_KEY not configured, skipping email notification")
+                    resend_result = {"status": "skipped"}
+                else:
+                    resend = ResendClient(api_key=settings.RESEND_API_KEY)
+                    admin_email = "avishai.lebenzon@gmail.com"
+
+                    email_body = f"""
+שלום,
+
+לקוח חדש נרשם דרך אלעד:
+
+שם: {client_name}
+מייל: {email}
+טלפון: {phone}
+חברה: {company_name or 'לא צוין'}
+תפקיד: {role or 'לא צוין'}
+
+מספר שיחה: {conversation_id or 'N/A'}
+
+בואו ניצור עם הלקוח קשר כדי להכיר אותו טוב יותר ולהציע משרות.
+
+---
+פנדה-טק סוכן בינה מלאכותית
+                    """.strip()
+
+                    resend_result = await resend.send_email(
+                        to=[admin_email],
+                        from_addr="pandi@pandatech.jobs",  # Or configured address
+                        subject=f"🎉 לקוח חדש: {client_name}",
+                        html=email_body.replace("\n", "<br>"),
+                    )
+
+                    logger.info(
+                        "new_client_email_sent",
+                        client_name=client_name,
+                        email=email,
+                        resend_result=resend_result,
+                    )
+
+            except Exception as e:
+                logger.warning(
+                    f"Failed to send new client email via Resend: {e}",
+                    exc_info=True,
+                )
+                # Don't raise — email is nice-to-have, not critical
+
+            return {
+                "status": "success",
+                "telegram_sent": telegram_result.get("status") == "success",
+                "email_sent": True,
+            }
+
+        except Exception as e:
+            logger.error(
+                f"notify_new_client_prospect failed: {e}",
+                exc_info=True,
+            )
+            return {
+                "status": "error",
+                "message": str(e),
+            }

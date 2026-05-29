@@ -444,6 +444,208 @@ async def handle_transfer_to_recruitment(
         }
 
 
+async def handle_identify_client(
+    conversation_id: UUID,
+    pandi_client_id: UUID,
+    phone: str,
+) -> dict[str, Any]:
+    """Phase 1 (Opening): Check if client already exists in DB by phone.
+
+    Args:
+        conversation_id: UUID of conversation
+        pandi_client_id: UUID of Pandi client (may be pre-created stub)
+        phone: Phone number in E.164 format
+
+    Returns:
+        Status and client details if found, or 'not_found' if new client
+    """
+    try:
+        supabase = await get_supabase_client()
+
+        # Search contacts by phone
+        result = await supabase.table("contacts").select(
+            "id, full_name, email, organization_id, contact_status, professional_domain"
+        ).eq("phone", phone).single()
+
+        if result:
+            logger.info(
+                "client_identified",
+                phone=phone,
+                contact_id=result["id"],
+            )
+            return {
+                "status": "found",
+                "client_exists": True,
+                "contact_id": result["id"],
+                "full_name": result.get("full_name"),
+                "email": result.get("email"),
+                "contact_status": result.get("contact_status"),
+                "message": f"שלום {result.get('full_name', 'חברים')}! 👋 רוצה לומר לי בשנית מה בדעתך?",
+            }
+        else:
+            logger.info(
+                "client_not_found",
+                phone=phone,
+            )
+            return {
+                "status": "not_found",
+                "client_exists": False,
+                "message": "אתה לקוח חדש. בואו נתחיל - אני צריך את הפרטים שלך: שם מלא, מייל, החברה שלך ותפקיד",
+            }
+
+    except Exception as e:
+        logger.error(f"identify_client failed: {e}", exc_info=True)
+        return {
+            "status": "error",
+            "message": "סליחה, קצת בעיה בזיהוי. אנא נסה שנית",
+            "error": str(e),
+        }
+
+
+async def handle_create_client(
+    conversation_id: UUID,
+    pandi_client_id: UUID,
+    phone: str,
+    full_name: str,
+    email: str,
+    company_name: str = None,
+    role: str = None,
+) -> dict[str, Any]:
+    """Phase 1 (Opening): Create new client in DB, sync to Pipedrive, notify admin.
+
+    Args:
+        conversation_id: UUID of conversation
+        pandi_client_id: UUID of Pandi client
+        phone: Phone number in E.164 format
+        full_name: Full name
+        email: Email address
+        company_name: Optional company name
+        role: Optional role/title
+
+    Returns:
+        Result of client creation
+    """
+    try:
+        supabase = await get_supabase_client()
+
+        # 1. Check if contact already exists (double-check)
+        existing = await supabase.table("contacts").select(
+            "id"
+        ).eq("phone", phone).single()
+
+        if existing:
+            logger.warning(
+                "client_already_exists",
+                phone=phone,
+                contact_id=existing["id"],
+            )
+            return {
+                "status": "already_exists",
+                "message": f"הלקוח הזה כבר קיים במערכת. contact_id: {existing['id']}",
+                "contact_id": existing["id"],
+            }
+
+        # 2. Create new contact in Pipedrive first
+        from pandapower.integrations.pipedrive import PipedriveClient
+        from pandapower.core.config import settings
+
+        if not settings.PIPEDRIVE_API_TOKEN:
+            logger.error("PIPEDRIVE_API_TOKEN not configured")
+            return {
+                "status": "error",
+                "message": "סליחה, בעיה בתיכנון המערכת (Pipedrive לא מוגדר)",
+            }
+
+        pipedrive_client = PipedriveClient(
+            settings.PIPEDRIVE_API_TOKEN,
+            settings.PIPEDRIVE_API_DOMAIN or "https://api.pipedrive.com",
+        )
+
+        pd_person = await pipedrive_client.create_person(
+            name=full_name,
+            email=email,
+            phone=phone,
+            custom_fields={
+                "f9d9b8c7": company_name,  # Adjust field hash as needed
+                "a1b2c3d4": role,  # Adjust field hash as needed
+            },
+        )
+
+        pipedrive_person_id = pd_person.get("id")
+        logger.info(
+            "pipedrive_person_created",
+            pipedrive_person_id=pipedrive_person_id,
+            full_name=full_name,
+        )
+
+        # 3. Create contact in local DB
+        contact_result = await supabase.table("contacts").insert({
+            "pipedrive_person_id": pipedrive_person_id,
+            "full_name": full_name,
+            "email": email,
+            "phone": phone,
+            "contact_status": "new_prospect",  # Mark as new prospect
+            "professional_domain": None,  # Will be updated later
+            "pipedrive_last_synced_at": "now()",
+        }).execute()
+
+        if not contact_result.data:
+            logger.error("contact_creation_failed")
+            return {
+                "status": "error",
+                "message": "סליחה, קצת בעיה בשמירת הפרטים שלך",
+            }
+
+        contact_id = contact_result.data[0]["id"]
+        logger.info(
+            "contact_created",
+            contact_id=contact_id,
+            phone=phone,
+        )
+
+        # 4. Update pandi_client to link to this contact
+        await supabase.table("pandi_clients").update({
+            "contact_id": contact_id,
+            "identified_at": "now()",
+            "identification_method": "manual_intake_via_bot",
+        }).eq("id", str(pandi_client_id))
+
+        # 5. Send admin notification via Resend
+        from pandapower.agents.pandi.notification_service import NotificationService
+
+        notifier = NotificationService()
+        await notifier.notify_new_client_prospect(
+            client_name=full_name,
+            email=email,
+            phone=phone,
+            company_name=company_name,
+            role=role,
+            conversation_id=str(conversation_id),
+        )
+
+        logger.info(
+            "new_client_created_and_notified",
+            contact_id=contact_id,
+            pandi_client_id=str(pandi_client_id),
+            phone=phone,
+        )
+
+        return {
+            "status": "success",
+            "contact_id": contact_id,
+            "pipedrive_person_id": pipedrive_person_id,
+            "message": f"✅ בחזקה! שמרתי את הפרטים שלך ופנדה-טק כבר מודעת ללקוח החדש. עכשיו בואו נדבר על המשרה שלך.",
+        }
+
+    except Exception as e:
+        logger.error(f"create_client failed: {e}", exc_info=True)
+        return {
+            "status": "error",
+            "message": "סליחה, קצת בעיה בשמירת הפרטים",
+            "error": str(e),
+        }
+
+
 # Tool dispatcher
 TOOL_HANDLERS = {
     "update_job_context": handle_update_job_context,
@@ -452,6 +654,8 @@ TOOL_HANDLERS = {
     "check_referral_history": handle_check_referral_history,
     "request_quota_increase": handle_request_quota_increase,
     "transfer_to_recruitment": handle_transfer_to_recruitment,
+    "identify_client": handle_identify_client,
+    "create_client": handle_create_client,
 }
 
 

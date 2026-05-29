@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pandapower.core import configure_logging, settings
 from pandapower.core.supabase import close_supabase, init_supabase
 from pandapower.routers import health_router, webhooks
-from pandapower.routers.admin import email_ingest, setup, cv_parse, cv_upload, candidate_management, skill_management, security_classification, agent_matching, carmit, pipedrive, pipedrive_config, pipedrive_data, pipedrive_sync, analytics, pandi, recruitment_departments, recruiter, alerts as admin_alerts, health as admin_health, whatsapp_agents
+from pandapower.routers.admin import email_ingest, setup, cv_parse, cv_upload, candidate_management, candidate_recommendations, skill_management, security_classification, agent_matching, carmit, pipedrive, pipedrive_config, pipedrive_data, pipedrive_sync, analytics, pandi, recruitment_departments, recruiter, alerts as admin_alerts, health as admin_health, whatsapp_agents
 # Note: agent_matching temporarily excluded due to missing celery tasks
 # Note: match_history temporarily excluded due to import issues
 from pandapower.routers import user
@@ -31,6 +31,7 @@ app.include_router(email_ingest.router)
 app.include_router(cv_parse.router)
 app.include_router(cv_upload.router)
 app.include_router(candidate_management.router)
+app.include_router(candidate_recommendations.router)
 app.include_router(skill_management.router)
 app.include_router(security_classification.router)
 app.include_router(agent_matching.router)

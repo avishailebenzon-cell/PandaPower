@@ -275,6 +275,56 @@ class PipedriveClient:
         logger.info(f"Fetched {len(all_orgs)} organizations from Pipedrive")
         return all_orgs
 
+    async def create_person(
+        self,
+        name: str,
+        email: str = None,
+        phone: str = None,
+        custom_fields: Dict[str, Any] = None,
+    ) -> Dict[str, Any]:
+        """
+        Create a new person (contact) in Pipedrive.
+
+        Args:
+            name: Full name of the person
+            email: Email address
+            phone: Phone number
+            custom_fields: Optional dict of custom field hashes to values
+
+        Returns:
+            API response with created person data (includes 'id' field)
+        """
+        payload = {
+            "name": name,
+        }
+
+        if email:
+            payload["email"] = [{"value": email, "primary": True}]
+
+        if phone:
+            payload["phone"] = [{"value": phone, "primary": True}]
+
+        if custom_fields:
+            payload.update(custom_fields)
+
+        response = await self._make_request_with_retry(
+            "POST",
+            "/v1/persons",
+            json=payload,
+        )
+
+        if response.get("success"):
+            logger.info(
+                f"Created Pipedrive person: {name}",
+                pipedrive_person_id=response.get("data", {}).get("id"),
+            )
+            return response.get("data", {})
+        else:
+            logger.error(
+                f"Failed to create Pipedrive person: {response.get('error')}",
+            )
+            raise Exception(f"Pipedrive API error: {response.get('error')}")
+
     async def close(self):
         """Close the httpx client"""
         if self.client:

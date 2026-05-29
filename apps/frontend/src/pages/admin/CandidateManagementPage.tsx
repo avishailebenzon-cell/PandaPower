@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { supabase } from "@/lib/supabase";
 import { env } from "@/lib/env";
+import { CandidateRecommendationsModal } from "@/components/CandidateRecommendationsModal";
 
 interface CandidateStats {
   total_candidates: number;
@@ -39,6 +40,9 @@ interface CandidateDetails {
 export function CandidateManagementPage() {
   const [selectedCandidate, setSelectedCandidate] = useState<CandidateDetails | null>(null);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [showRecommendationsModal, setShowRecommendationsModal] = useState(false);
+  const [recommendationsCandidateId, setRecommendationsCandidateId] = useState<string>("");
+  const [recommendationsCandidateName, setRecommendationsCandidateName] = useState<string>("");
   const [liveEvents, setLiveEvents] = useState<Candidate[]>([]);
   const [filterLanguage, setFilterLanguage] = useState<string>("all");
 
@@ -301,12 +305,24 @@ export function CandidateManagementPage() {
                       {new Date(candidate.created_at).toLocaleDateString()}
                     </td>
                     <td className="py-3 px-3 text-center">
-                      <button
-                        onClick={() => viewDetailsMutation.mutate(candidate.id)}
-                        className="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
-                      >
-                        צפה
-                      </button>
+                      <div className="flex gap-2 justify-center">
+                        <button
+                          onClick={() => viewDetailsMutation.mutate(candidate.id)}
+                          className="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
+                        >
+                          צפה
+                        </button>
+                        <button
+                          onClick={() => {
+                            setRecommendationsCandidateId(candidate.id);
+                            setRecommendationsCandidateName(candidate.name);
+                            setShowRecommendationsModal(true);
+                          }}
+                          className="text-xs px-2 py-1 bg-indigo-100 text-indigo-700 rounded hover:bg-indigo-200 font-semibold"
+                        >
+                          🎯 התאמות
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -376,6 +392,15 @@ export function CandidateManagementPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Recommendations Modal */}
+      {showRecommendationsModal && (
+        <CandidateRecommendationsModal
+          candidateId={recommendationsCandidateId}
+          candidateName={recommendationsCandidateName}
+          onClose={() => setShowRecommendationsModal(false)}
+        />
       )}
     </div>
   );
