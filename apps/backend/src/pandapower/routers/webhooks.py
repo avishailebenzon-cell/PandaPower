@@ -200,12 +200,22 @@ async def receive_whatsapp_webhook(
         logger.warning(f"Webhook logging failed for {agent_code}: {e}")
 
     # Enqueue Celery task to process the message (Session 34)
-    if agent_code == "pandi" and parsed.get("event_type") == "incomingMessageReceived":
+    if agent_code == "pandi" and parsed.get("event_type") == "incomingMessageReceived" and parsed.get("text"):
         try:
             from pandapower.workers.pandi.message_handler import process_pandi_incoming_message
 
+            # Convert parsed fields back to Green API format for message_handler
+            celery_payload = {
+                "messages": [{
+                    "id": parsed.get("green_api_message_id"),
+                    "from": parsed.get("from_chat_id"),
+                    "text": parsed.get("text"),
+                    "timestamp": parsed.get("timestamp", int(datetime.now().timestamp())),
+                }]
+            }
+
             # Enqueue async task
-            task = process_pandi_incoming_message.delay(payload)
+            task = process_pandi_incoming_message.delay(celery_payload)
             logger.info(f"Enqueued Celery task {task.id} for Pandi message processing")
         except Exception as e:
             logger.error(f"Failed to enqueue Pandi message task: {e}", exc_info=True)

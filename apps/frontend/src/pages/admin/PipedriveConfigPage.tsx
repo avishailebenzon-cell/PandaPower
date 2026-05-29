@@ -3,7 +3,7 @@
  * Manage Pipedrive API credentials, field mappings, and sync schedules
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { env } from '@/lib/env';
 
@@ -100,6 +100,7 @@ export const PipedriveConfigPage: React.FC = () => {
   const [selectedEntity, setSelectedEntity] = useState<string>('deals');
   const [testingConnection, setTestingConnection] = useState(false);
   const [activeSyncs, setActiveSyncs] = useState<Set<string>>(new Set());
+  const [syncScheduleState, setSyncScheduleState] = useState<{ [key: string]: { days: boolean[]; time: string; sync_interval_minutes: number; sync_direction: string } }>({});
 
   // Fetch current config
   const { data: config } = useQuery({
@@ -255,54 +256,67 @@ export const PipedriveConfigPage: React.FC = () => {
     },
   });
 
-  // Compute syncScheduleState from schedules using useMemo to avoid re-render loops
-  const syncScheduleState = useMemo(() => {
-    // Default mock schedules if API returns empty
-    const defaultSchedules: SyncSchedule[] = [
-      {
-        entity_type: 'deals',
-        sync_interval_minutes: 30,
-        sync_direction: 'bidirectional',
-        sync_enabled: true,
-        sync_days: [true, true, true, true, true, false],
-        sync_time: '08:00',
-        last_sync_at: new Date().toISOString(),
-        last_sync_status: 'success',
-        sync_count: 42,
-      },
-      {
-        entity_type: 'persons',
-        sync_interval_minutes: 30,
-        sync_direction: 'bidirectional',
-        sync_enabled: true,
-        sync_days: [true, true, true, true, true, false],
-        sync_time: '09:00',
-        last_sync_at: new Date().toISOString(),
-        last_sync_status: 'success',
-        sync_count: 38,
-      },
-      {
-        entity_type: 'organizations',
-        sync_interval_minutes: 60,
-        sync_direction: 'inbound',
-        sync_enabled: true,
-        sync_days: [true, false, true, false, true, false],
-        sync_time: '10:00',
-        last_sync_at: new Date().toISOString(),
-        last_sync_status: 'success',
-        sync_count: 12,
-      },
-    ];
-
-    const schedulesToUse = schedules && schedules.length > 0 ? schedules : defaultSchedules;
-    const newState: { [key: string]: { days: boolean[]; time: string } } = {};
-    schedulesToUse.forEach((schedule: SyncSchedule) => {
-      newState[schedule.entity_type] = {
-        days: schedule.sync_days || [false, false, false, false, false, false],
-        time: schedule.sync_time || '00:00',
-      };
-    });
-    return newState;
+  // Initialize syncScheduleState from schedules when they load
+  useEffect(() => {
+    if (schedules && schedules.length > 0) {
+      const newState: { [key: string]: { days: boolean[]; time: string; sync_interval_minutes: number; sync_direction: string } } = {};
+      schedules.forEach((schedule: SyncSchedule) => {
+        newState[schedule.entity_type] = {
+          days: schedule.sync_days || [false, false, false, false, false, false],
+          time: schedule.sync_time || '00:00',
+          sync_interval_minutes: schedule.sync_interval_minutes || 30,
+          sync_direction: schedule.sync_direction || 'bidirectional',
+        };
+      });
+      setSyncScheduleState(newState);
+    } else {
+      // Default mock schedules if API returns empty
+      const defaultSchedules: SyncSchedule[] = [
+        {
+          entity_type: 'deals',
+          sync_interval_minutes: 30,
+          sync_direction: 'bidirectional',
+          sync_enabled: true,
+          sync_days: [true, true, true, true, true, false],
+          sync_time: '08:00',
+          last_sync_at: new Date().toISOString(),
+          last_sync_status: 'success',
+          sync_count: 42,
+        },
+        {
+          entity_type: 'persons',
+          sync_interval_minutes: 30,
+          sync_direction: 'bidirectional',
+          sync_enabled: true,
+          sync_days: [true, true, true, true, true, false],
+          sync_time: '09:00',
+          last_sync_at: new Date().toISOString(),
+          last_sync_status: 'success',
+          sync_count: 38,
+        },
+        {
+          entity_type: 'organizations',
+          sync_interval_minutes: 60,
+          sync_direction: 'inbound',
+          sync_enabled: true,
+          sync_days: [true, false, true, false, true, false],
+          sync_time: '10:00',
+          last_sync_at: new Date().toISOString(),
+          last_sync_status: 'success',
+          sync_count: 12,
+        },
+      ];
+      const newState: { [key: string]: { days: boolean[]; time: string; sync_interval_minutes: number; sync_direction: string } } = {};
+      defaultSchedules.forEach((schedule: SyncSchedule) => {
+        newState[schedule.entity_type] = {
+          days: schedule.sync_days || [false, false, false, false, false, false],
+          time: schedule.sync_time || '00:00',
+          sync_interval_minutes: schedule.sync_interval_minutes || 30,
+          sync_direction: schedule.sync_direction || 'bidirectional',
+        };
+      });
+      setSyncScheduleState(newState);
+    }
   }, [schedules]);
 
   const tabs: ConfigTab[] = [
@@ -639,7 +653,16 @@ export const PipedriveConfigPage: React.FC = () => {
                         <label className="block text-gray-300 text-sm mb-1">תדירות סינכרון (דקות)</label>
                         <input
                           type="number"
-                          defaultValue={schedule.sync_interval_minutes}
+                          value={entityState.sync_interval_minutes || schedule.sync_interval_minutes}
+                          onChange={(e) => {
+                            setSyncScheduleState(prev => ({
+                              ...prev,
+                              [schedule.entity_type]: {
+                                ...entityState,
+                                sync_interval_minutes: parseInt(e.target.value) || 30,
+                              },
+                            }));
+                          }}
                           min={5}
                           step={5}
                           className="w-full px-3 py-2 rounded bg-gray-600 border border-gray-500 text-white"
@@ -647,7 +670,18 @@ export const PipedriveConfigPage: React.FC = () => {
                       </div>
                       <div>
                         <label className="block text-gray-300 text-sm mb-1">כיוון סינכרון</label>
-                        <select className="w-full px-3 py-2 rounded bg-gray-600 border border-gray-500 text-white">
+                        <select
+                          value={entityState.sync_direction || schedule.sync_direction}
+                          onChange={(e) => {
+                            setSyncScheduleState(prev => ({
+                              ...prev,
+                              [schedule.entity_type]: {
+                                ...entityState,
+                                sync_direction: e.target.value,
+                              },
+                            }));
+                          }}
+                          className="w-full px-3 py-2 rounded bg-gray-600 border border-gray-500 text-white">
                           <option value="bidirectional">דו-כיווני</option>
                           <option value="inbound">קליטה בלבד</option>
                           <option value="outbound">שליחה בלבד</option>
@@ -725,8 +759,8 @@ export const PipedriveConfigPage: React.FC = () => {
                             entity_type: schedule.entity_type,
                             sync_days: entityState.days,
                             sync_time: entityState.time,
-                            sync_interval_minutes: schedule.sync_interval_minutes,
-                            sync_direction: schedule.sync_direction,
+                            sync_interval_minutes: entityState.sync_interval_minutes || schedule.sync_interval_minutes,
+                            sync_direction: entityState.sync_direction || schedule.sync_direction,
                           });
                         }}
                         disabled={updateSyncScheduleMutation.isPending}
