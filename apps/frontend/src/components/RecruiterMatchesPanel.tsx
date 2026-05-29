@@ -197,7 +197,7 @@ export function RecruiterMatchesPanel({
         />
       ) : (
         <>
-          <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+          <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-visible">
             <table className="w-full text-right text-sm">
               <thead className="bg-gray-700 border-b border-gray-600 text-gray-200">
                 <tr>
