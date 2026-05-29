@@ -341,7 +341,7 @@ function MatchActionsMenu({
   const isInQueue = match.state === `sent_to_${recruiter}` || match.state === `${recruiter}_conversation`;
 
   return (
-    <div className="relative inline-block">
+    <div className="relative inline-block z-50">
       <button
         onClick={onToggle}
         className="px-2 py-1 rounded text-xs bg-gray-700 hover:bg-gray-600 text-gray-200 transition"
@@ -349,7 +349,7 @@ function MatchActionsMenu({
         ⋮
       </button>
       {isOpen && (
-        <div className="absolute right-0 top-full mt-1 bg-gray-700 border border-gray-600 rounded-lg shadow-lg z-10 min-w-max">
+        <div className="absolute right-0 top-full mt-1 bg-gray-700 border border-gray-600 rounded-lg shadow-xl z-[100] min-w-max">
           {isInQueue && (
             <>
               <button
@@ -357,7 +357,7 @@ function MatchActionsMenu({
                   onActivate();
                 }}
                 disabled={isLoading}
-                className="block w-full text-right px-4 py-2 hover:bg-green-900 text-green-200 text-sm disabled:opacity-50 border-b border-gray-600"
+                className="block w-full text-right px-4 py-2 hover:bg-green-900 text-green-200 text-sm disabled:opacity-50 border-b border-gray-600 whitespace-nowrap"
               >
                 ✓ אקטיבציה של פנייה
               </button>
@@ -366,7 +366,7 @@ function MatchActionsMenu({
                   onReject();
                 }}
                 disabled={isLoading}
-                className="block w-full text-right px-4 py-2 hover:bg-red-900 text-red-200 text-sm disabled:opacity-50 border-b border-gray-600"
+                className="block w-full text-right px-4 py-2 hover:bg-red-900 text-red-200 text-sm disabled:opacity-50 border-b border-gray-600 whitespace-nowrap"
               >
                 ✕ מחיקת התאמה
               </button>
@@ -378,7 +378,7 @@ function MatchActionsMenu({
               onToggle();
             }}
             disabled={isLoading}
-            className="block w-full text-right px-4 py-2 hover:bg-blue-900 text-blue-200 text-sm disabled:opacity-50"
+            className="block w-full text-right px-4 py-2 hover:bg-blue-900 text-blue-200 text-sm disabled:opacity-50 whitespace-nowrap"
           >
             💬 הצג שיחה
           </button>
