@@ -229,9 +229,47 @@ async def handle_mark_client_interested(
                 referral_id=result.get("referral_id"),
             )
 
+            # Get referral_number from the referral that was just created/updated
+            referral_id = result.get("referral_id")
+            referral_number = "REF-2026-?"
+            if referral_id:
+                referral_result = await supabase.table("candidate_referrals").select(
+                    "referral_number, candidate_number, pandi_clients(full_name:contact_id->contacts.full_name)"
+                ).eq("id", str(referral_id)).single()
+
+                if referral_result:
+                    referral_number = referral_result.get("referral_number", referral_number)
+
+            # Send notifications (manager + client via Pandi)
+            try:
+                from pandapower.integrations.resend_client import ResendClient
+                from pandapower.core.config import settings
+
+                if settings.RESEND_API_KEY:
+                    resend = ResendClient(api_key=settings.RESEND_API_KEY)
+                    admin_email = "avishai.lebenzon@gmail.com"
+
+                    # Notify manager
+                    await resend.send_email(
+                        to=[admin_email],
+                        from_addr="pandi@pandatech.jobs",
+                        subject=f"🎯 פנייה חדשה: {candidate_number}",
+                        html=f"""
+                        <p>פנייה חדשה בדבר מועמד:</p>
+                        <p><strong>מספר פנייה:</strong> {referral_number}</p>
+                        <p><strong>מועמד:</strong> {candidate_number}</p>
+                        <p><strong>סטטוס:</strong> הלקוח בחר בעניין</p>
+                        <p><strong>SLA:</strong> 48 שעות</p>
+                        <p>בואו נטפל בפנייה!</p>
+                        """.replace("\n", ""),
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to send manager email: {e}")
+
             return {
                 "status": "success",
-                "message": result.get("message"),
+                "referral_number": referral_number,
+                "message": f"✅ המערכת קדמה את הפנייה שלך (מס' פנייה: {referral_number}) לצוות הגיוס. מנהל התחום יצור אתך קשר בתוך 48 שעות.",
             }
         else:
             return {
