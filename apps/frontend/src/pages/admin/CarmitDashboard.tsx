@@ -195,6 +195,22 @@ export const CarmitDashboard: React.FC = () => {
   const [isUpdating, setIsUpdating] = useState(false);
   const [updateMessage, setUpdateMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
 
+  // Filter matches based on active tab - moved up before use
+  const filteredMatches = useMemo(() => {
+    switch (activeTab) {
+      case 'all-matches':
+        return MOCK_MATCHES;
+      case 'sent-to-tal':
+        return MOCK_MATCHES.filter(m => m.currentState === 'sent_to_tal' || m.currentState === 'tal_conversation');
+      case 'sent-to-elad':
+        return MOCK_MATCHES.filter(m => m.currentState === 'sent_to_elad' || m.currentState === 'hired');
+      case 'rejected':
+        return MOCK_MATCHES.filter(m => m.currentState === 'carmit_rejected' || m.currentState === 'tal_rejected');
+      default:
+        return MOCK_MATCHES;
+    }
+  }, [activeTab]);
+
   const toggleMatchSelection = useCallback((matchId: string) => {
     setSelectedMatches(prev => {
       const newSet = new Set(prev);
@@ -268,22 +284,6 @@ export const CarmitDashboard: React.FC = () => {
     },
   ];
 
-  // Filter matches based on active tab
-  const filteredMatches = useMemo(() => {
-    switch (activeTab) {
-      case 'all-matches':
-        return MOCK_MATCHES;
-      case 'sent-to-tal':
-        return MOCK_MATCHES.filter(m => m.currentState === 'sent_to_tal' || m.currentState === 'tal_conversation');
-      case 'sent-to-elad':
-        return MOCK_MATCHES.filter(m => m.currentState === 'sent_to_elad' || m.currentState === 'hired');
-      case 'rejected':
-        return MOCK_MATCHES.filter(m => m.currentState === 'carmit_rejected' || m.currentState === 'tal_rejected');
-      default:
-        return MOCK_MATCHES;
-    }
-  }, [activeTab]);
-
   const renderMatchCard = (match: Match) => {
     const matchTransitions = stateTransitions.filter(t => t.matchId === match.id);
     const isExpanded = expandedMatch === match.id;
@@ -307,20 +307,19 @@ export const CarmitDashboard: React.FC = () => {
               title="בחר התאמה זו"
             />
             <div className="flex-1">
-          <div className="flex-1">
-            <div className="flex items-center gap-2 mb-1">
-              <h3 className="text-lg font-bold text-white">{match.candidateName}</h3>
-              <span className={`px-2 py-1 rounded text-xs font-semibold text-white ${STATE_COLORS[match.currentState] || 'bg-gray-700'}`}>
-                {getStateEmoji(match.currentState)} {getStateLabel(match.currentState)}
-              </span>
+              <div className="flex items-center gap-2 mb-1">
+                <h3 className="text-lg font-bold text-white">{match.candidateName}</h3>
+                <span className={`px-2 py-1 rounded text-xs font-semibold text-white ${STATE_COLORS[match.currentState] || 'bg-gray-700'}`}>
+                  {getStateEmoji(match.currentState)} {getStateLabel(match.currentState)}
+                </span>
+              </div>
+              <p className="text-sm text-gray-300">{match.jobTitle} @ {match.company}</p>
+              <p className="text-xs text-gray-400">סוכן: {AGENT_NAMES[match.agentCode] || match.agentCode}</p>
             </div>
-            <p className="text-sm text-gray-300">{match.jobTitle} @ {match.company}</p>
-            <p className="text-xs text-gray-400">סוכן: {AGENT_NAMES[match.agentCode] || match.agentCode}</p>
           </div>
           <div className="text-right ml-4">
             <div className="text-2xl font-bold text-cyan-400">{Math.round(match.matchScore * 100)}%</div>
             <div className="text-xs text-gray-400">ניקוד התאמה</div>
-            </div>
           </div>
         </div>
 
