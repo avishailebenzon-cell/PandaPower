@@ -35,6 +35,7 @@ import { JobsListPage } from '@/pages/admin/JobsListPage'
 
 // Work Pages
 import { WorkDashboard } from '@/pages/work/WorkDashboard'
+import { ConversationsPage } from '@/pages/work/ConversationsPage'
 import { RecruitmentDepartment } from '@/pages/admin/RecruitmentDepartment'
 import { RecruiterDashboard } from '@/pages/admin/RecruiterDashboard'
 import { EladPageNew } from '@/pages/admin/EladPageNew'
@@ -88,6 +89,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             {/* Recruiters */}
             <Route path="/recruiting/tal" element={<ProtectedRoute><TalPage /></ProtectedRoute>} />
             <Route path="/recruiting/elad" element={<ProtectedRoute><EladPageNew /></ProtectedRoute>} />
+
+            {/* Conversations */}
+            <Route path="/recruiting/conversations" element={<ProtectedRoute><ConversationsPage /></ProtectedRoute>} />
 
             {/* Recruitment Manager (Carmit) - Part of Work Area */}
             <Route path="/admin/carmit" element={<ProtectedRoute><CarmitPage /></ProtectedRoute>} />

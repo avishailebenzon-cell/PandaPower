@@ -20,10 +20,12 @@
  */
 
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   fetchRecruiterMatches,
   fetchRecruiterStatus,
+  performMatchAction,
+  fetchMatchConversation,
   type Match,
 } from "@/api/recruiter";
 
@@ -79,6 +81,11 @@ export function RecruiterMatchesPanel({
   showStatusStrip = true,
 }: Props) {
   const [subTab, setSubTab] = useState<SubTab>(initialSubTab);
+  const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
+  const [showConversationModal, setShowConversationModal] = useState(false);
+  const [showActionMenu, setShowActionMenu] = useState<string | null>(null);
+
+  const queryClient = useQueryClient();
   const tabParam = `${recruiter}-${subTab}`; // tal-queue, elad-history, etc.
 
   const recruiterName = recruiter === "tal" ? "טל" : "אלעד";
@@ -95,6 +102,22 @@ export function RecruiterMatchesPanel({
     queryFn: fetchRecruiterStatus,
     refetchInterval: 20000,
     enabled: showStatusStrip,
+  });
+
+  const conversationQuery = useQuery({
+    queryKey: ["match-conversation", selectedMatchId],
+    queryFn: () => selectedMatchId ? fetchMatchConversation(selectedMatchId) : null,
+    enabled: selectedMatchId !== null,
+  });
+
+  const actionMutation = useMutation({
+    mutationFn: ({ matchId, action, notes }: { matchId: string; action: "activate" | "reject" | "wait"; notes?: string }) =>
+      performMatchAction(matchId, action, notes),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["recruiter-matches"] });
+      queryClient.invalidateQueries({ queryKey: ["recruiter-status"] });
+      setShowActionMenu(null);
+    },
   });
 
   const matches = matchesQuery.data?.matches ?? [];
@@ -173,39 +196,69 @@ export function RecruiterMatchesPanel({
           counterparty={counterparty}
         />
       ) : (
-        <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
-          <table className="w-full text-right text-sm">
-            <thead className="bg-gray-700 border-b border-gray-600 text-gray-200">
-              <tr>
-                <th className="px-4 py-3 font-semibold">מועמד</th>
-                <th className="px-4 py-3 font-semibold">משרה</th>
-                <th className="px-4 py-3 font-semibold">ציון</th>
-                <th className="px-4 py-3 font-semibold">מצב נוכחי</th>
-                <th className="px-4 py-3 font-semibold">ימים במצב</th>
-                <th className="px-4 py-3 font-semibold">עודכן</th>
-              </tr>
-            </thead>
-            <tbody>
-              {matches.map((m: Match) => (
-                <tr
-                  key={m.id}
-                  className="border-b border-gray-700 hover:bg-gray-750 transition"
-                >
-                  <td className="px-4 py-3 text-white font-semibold">{m.candidateName}</td>
-                  <td className="px-4 py-3 text-gray-300">{m.jobTitle}</td>
-                  <td className="px-4 py-3 text-gray-300">
-                    {Math.round((m.matchScore || 0) * 100)}%
-                  </td>
-                  <td className="px-4 py-3">
-                    <StateBadge state={m.state} />
-                  </td>
-                  <td className="px-4 py-3 text-gray-300">{m.daysInStage} י׳</td>
-                  <td className="px-4 py-3 text-gray-400">{formatDate(m.lastActivity)}</td>
+        <>
+          <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+            <table className="w-full text-right text-sm">
+              <thead className="bg-gray-700 border-b border-gray-600 text-gray-200">
+                <tr>
+                  <th className="px-4 py-3 font-semibold">מועמד</th>
+                  <th className="px-4 py-3 font-semibold">משרה</th>
+                  <th className="px-4 py-3 font-semibold">ציון</th>
+                  <th className="px-4 py-3 font-semibold">מצב נוכחי</th>
+                  <th className="px-4 py-3 font-semibold">ימים במצב</th>
+                  <th className="px-4 py-3 font-semibold">עודכן</th>
+                  <th className="px-4 py-3 font-semibold">פעולות</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {matches.map((m: Match) => (
+                  <tr
+                    key={m.id}
+                    className="border-b border-gray-700 hover:bg-gray-750 transition"
+                  >
+                    <td className="px-4 py-3 text-white font-semibold">{m.candidateName}</td>
+                    <td className="px-4 py-3 text-gray-300">{m.jobTitle}</td>
+                    <td className="px-4 py-3 text-gray-300">
+                      {Math.round((m.matchScore || 0) * 100)}%
+                    </td>
+                    <td className="px-4 py-3">
+                      <StateBadge state={m.state} />
+                    </td>
+                    <td className="px-4 py-3 text-gray-300">{m.daysInStage} י׳</td>
+                    <td className="px-4 py-3 text-gray-400">{formatDate(m.lastActivity)}</td>
+                    <td className="px-4 py-3">
+                      <MatchActionsMenu
+                        match={m}
+                        recruiter={recruiter}
+                        isOpen={showActionMenu === m.id}
+                        onToggle={() => setShowActionMenu(showActionMenu === m.id ? null : m.id)}
+                        onActivate={() => actionMutation.mutate({ matchId: m.id, action: "activate" })}
+                        onReject={() => actionMutation.mutate({ matchId: m.id, action: "reject" })}
+                        onConversation={() => {
+                          setSelectedMatchId(m.id);
+                          setShowConversationModal(true);
+                        }}
+                        isLoading={actionMutation.isPending}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Conversation Modal */}
+          {showConversationModal && selectedMatchId && (
+            <ConversationModal
+              conversation={conversationQuery.data}
+              isLoading={conversationQuery.isLoading}
+              onClose={() => {
+                setShowConversationModal(false);
+                setSelectedMatchId(null);
+              }}
+            />
+          )}
+        </>
       )}
     </div>
   );
@@ -261,6 +314,178 @@ function EmptyState({
           </p>
         </>
       )}
+    </div>
+  );
+}
+
+// Action menu for each match row
+function MatchActionsMenu({
+  match,
+  recruiter,
+  isOpen,
+  onToggle,
+  onActivate,
+  onReject,
+  onConversation,
+  isLoading,
+}: {
+  match: Match;
+  recruiter: string;
+  isOpen: boolean;
+  onToggle: () => void;
+  onActivate: () => void;
+  onReject: () => void;
+  onConversation: () => void;
+  isLoading: boolean;
+}) {
+  const isInQueue = match.state === `sent_to_${recruiter}` || match.state === `${recruiter}_conversation`;
+
+  return (
+    <div className="relative inline-block">
+      <button
+        onClick={onToggle}
+        className="px-2 py-1 rounded text-xs bg-gray-700 hover:bg-gray-600 text-gray-200 transition"
+      >
+        ⋮
+      </button>
+      {isOpen && (
+        <div className="absolute right-0 top-full mt-1 bg-gray-700 border border-gray-600 rounded-lg shadow-lg z-10 min-w-max">
+          {isInQueue && (
+            <>
+              <button
+                onClick={() => {
+                  onActivate();
+                }}
+                disabled={isLoading}
+                className="block w-full text-right px-4 py-2 hover:bg-green-900 text-green-200 text-sm disabled:opacity-50 border-b border-gray-600"
+              >
+                ✓ אקטיבציה של פנייה
+              </button>
+              <button
+                onClick={() => {
+                  onReject();
+                }}
+                disabled={isLoading}
+                className="block w-full text-right px-4 py-2 hover:bg-red-900 text-red-200 text-sm disabled:opacity-50 border-b border-gray-600"
+              >
+                ✕ מחיקת התאמה
+              </button>
+            </>
+          )}
+          <button
+            onClick={() => {
+              onConversation();
+              onToggle();
+            }}
+            disabled={isLoading}
+            className="block w-full text-right px-4 py-2 hover:bg-blue-900 text-blue-200 text-sm disabled:opacity-50"
+          >
+            💬 הצג שיחה
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Conversation modal
+function ConversationModal({
+  conversation,
+  isLoading,
+  onClose,
+}: {
+  conversation: any;
+  isLoading: boolean;
+  onClose: () => void;
+}) {
+  if (isLoading) {
+    return (
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div className="bg-gray-800 rounded-lg p-8 text-center">
+          <p className="text-gray-300">טוען שיחה...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!conversation) {
+    return (
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div className="bg-gray-800 rounded-lg p-8 text-center border border-gray-700">
+          <p className="text-gray-300 mb-4">אין עדיין שיחה לתאום זה</p>
+          <button
+            onClick={onClose}
+            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded text-sm"
+          >
+            סגור
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-gray-800 rounded-lg border border-gray-700 w-full max-w-2xl max-h-[80vh] flex flex-col">
+        {/* Header */}
+        <div className="border-b border-gray-700 p-4 flex justify-between items-center">
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-white text-2xl"
+          >
+            ×
+          </button>
+          <h2 className="text-white font-semibold">שיחה</h2>
+          <div className="text-sm text-gray-400">
+            {new Date(conversation.startedAt).toLocaleDateString("he-IL")}
+          </div>
+        </div>
+
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {conversation.messages && conversation.messages.length > 0 ? (
+            conversation.messages.map((msg: any) => (
+              <div
+                key={msg.id}
+                className={`flex ${msg.direction === "outbound" ? "justify-end" : "justify-start"}`}
+              >
+                <div
+                  className={`rounded-lg px-3 py-2 max-w-xs ${
+                    msg.direction === "outbound"
+                      ? "bg-blue-900 text-blue-100"
+                      : "bg-gray-700 text-gray-100"
+                  }`}
+                >
+                  <p className="text-sm">{msg.text}</p>
+                  <p className="text-xs opacity-70 mt-1">
+                    {new Date(msg.createdAt).toLocaleTimeString("he-IL", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </p>
+                </div>
+              </div>
+            ))
+          ) : (
+            <p className="text-center text-gray-400 text-sm">אין הודעות בשיחה זו</p>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="border-t border-gray-700 p-4">
+          {conversation.notes && (
+            <p className="text-xs text-gray-400 mb-2">
+              <strong>הערות:</strong> {conversation.notes}
+            </p>
+          )}
+          <button
+            onClick={onClose}
+            className="w-full px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded text-sm"
+          >
+            סגור
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

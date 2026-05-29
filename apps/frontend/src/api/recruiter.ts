@@ -36,6 +36,24 @@ export interface MatchesResponse {
   limit: number;
 }
 
+export interface ConversationMessage {
+  id: string;
+  direction: "inbound" | "outbound";
+  text?: string;
+  createdAt: string;
+}
+
+export interface ConversationInfo {
+  id: string;
+  matchId: string;
+  recruiter: string;
+  startedAt: string;
+  endedAt?: string;
+  status: string;
+  messages: ConversationMessage[];
+  notes?: string;
+}
+
 /**
  * Fetch recruiter status metrics
  */
@@ -103,4 +121,85 @@ export async function fetchRecruiterMatches(
     page: data.page,
     limit: data.limit,
   };
+}
+
+/**
+ * Perform an action on a match (activate, reject, wait)
+ */
+export async function performMatchAction(
+  matchId: string,
+  action: "activate" | "reject" | "wait",
+  notes?: string
+): Promise<any> {
+  const response = await fetch(`${API_BASE}/admin/recruiter/${matchId}/action`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      action,
+      notes: notes || null,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to perform match action: ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Get conversation details for a match
+ */
+export async function fetchMatchConversation(
+  matchId: string
+): Promise<ConversationInfo> {
+  const response = await fetch(
+    `${API_BASE}/admin/recruiter/${matchId}/conversation`
+  );
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch conversation: ${response.statusText}`);
+  }
+
+  const data = await response.json();
+
+  return {
+    id: data.id,
+    matchId: data.matchId,
+    recruiter: data.recruiter,
+    startedAt: data.startedAt,
+    endedAt: data.endedAt,
+    status: data.status,
+    messages: data.messages || [],
+    notes: data.notes,
+  };
+}
+
+/**
+ * List conversations for a recruiter
+ */
+export async function fetchRecruiterConversations(
+  recruiter: "tal" | "elad",
+  limit: number = 50,
+  page: number = 1
+): Promise<any> {
+  const params = new URLSearchParams({
+    recruiter,
+    limit: String(limit),
+    page: String(page),
+  });
+
+  const response = await fetch(
+    `${API_BASE}/admin/recruiter/conversations/list?${params.toString()}`
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      `Failed to fetch recruiter conversations: ${response.statusText}`
+    );
+  }
+
+  return response.json();
 }

@@ -236,7 +236,7 @@ export const WorkDashboard: React.FC = () => {
         </div>
 
         {/* Bottom Section - Quick Actions */}
-        <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="mt-8 grid grid-cols-1 md:grid-cols-4 gap-4">
           <button
             onClick={() => navigate("/recruiting/departments/naama")}
             className="p-4 rounded-lg bg-gradient-to-br from-blue-900 to-blue-800 hover:from-blue-800 hover:to-blue-700 text-white transition text-center"
@@ -253,6 +253,15 @@ export const WorkDashboard: React.FC = () => {
             <div className="text-2xl mb-2">🎯</div>
             <div className="font-semibold">התאמות בהמתנה</div>
             <div className="text-sm text-purple-200 mt-1">לסקירה שלי</div>
+          </button>
+
+          <button
+            onClick={() => navigate("/recruiting/conversations")}
+            className="p-4 rounded-lg bg-gradient-to-br from-emerald-900 to-emerald-800 hover:from-emerald-800 hover:to-emerald-700 text-white transition text-center"
+          >
+            <div className="text-2xl mb-2">💬</div>
+            <div className="font-semibold">שיחות</div>
+            <div className="text-sm text-emerald-200 mt-1">כל השיחות</div>
           </button>
 
           <button
