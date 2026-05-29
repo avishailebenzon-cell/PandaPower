@@ -64,6 +64,8 @@ export function MatchFlowDashboard() {
   const [showRejections, setShowRejections] = useState(false);
   const [showTimeline, setShowTimeline] = useState(false);
   const [bottleneckAlerts, setBottleneckAlerts] = useState<any[]>([]);
+  const [debugData, setDebugData] = useState<any>(null);
+  const [showDebug, setShowDebug] = useState(false);
 
   // Fetch metrics
   const { data: metrics, isLoading: metricsLoading } = useQuery<MatchFlowMetrics>({
@@ -102,6 +104,21 @@ export function MatchFlowDashboard() {
     },
     onSuccess: (data) => {
       setBottleneckAlerts(data.alerts);
+    },
+  });
+
+  // Debug data quality mutation
+  const debugMutation = useMutation({
+    mutationFn: async () => {
+      const response = await fetch(
+        `${import.meta.env.VITE_API_URL}/admin/matches/debug-data-quality`
+      );
+      if (!response.ok) throw new Error('Failed to fetch debug data');
+      return response.json();
+    },
+    onSuccess: (data) => {
+      setDebugData(data);
+      setShowDebug(true);
     },
   });
 
@@ -386,7 +403,7 @@ export function MatchFlowDashboard() {
       {showTimeline && <MatchTimelineChart timeRange="month" />}
 
       {/* Manual Bottleneck Check */}
-      <div className="bg-gray-800 rounded-lg border border-gray-700 p-6">
+      <div className="bg-gray-800 rounded-lg border border-gray-700 p-6 mb-8">
         <div className="flex justify-between items-center">
           <div>
             <h3 className="text-lg font-bold text-white">🔍 Manual Bottleneck Check</h3>
@@ -411,6 +428,79 @@ export function MatchFlowDashboard() {
             </button>
           </div>
         </div>
+      </div>
+
+      {/* Debug Data Quality */}
+      <div className="bg-gray-800 rounded-lg border border-gray-700 p-6">
+        <button
+          onClick={() => debugMutation.mutate()}
+          className="w-full text-left flex justify-between items-center hover:bg-gray-700/50 transition-colors p-4 rounded"
+        >
+          <div>
+            <h3 className="text-lg font-bold text-white">🐛 Debug: Data Quality Check</h3>
+            <p className="text-sm text-gray-400 mt-1">
+              Inspect database integrity: NULL values, sample data with candidate/job names
+            </p>
+          </div>
+          <span className="text-gray-400">{showDebug ? '▼' : '▶'}</span>
+        </button>
+
+        {showDebug && debugData && (
+          <div className="mt-6 border-t border-gray-700 pt-4 space-y-4">
+            {/* Summary */}
+            <div className="grid grid-cols-4 gap-4 mb-4">
+              <div className="bg-gray-700/50 p-3 rounded">
+                <div className="text-xs text-gray-400">Total Matches</div>
+                <div className="text-2xl font-bold text-white">{debugData.total_matches}</div>
+              </div>
+              <div className="bg-gray-700/50 p-3 rounded">
+                <div className="text-xs text-gray-400">Sent to Tal</div>
+                <div className="text-2xl font-bold text-blue-400">{debugData.sent_to_tal_count}</div>
+              </div>
+              <div className={`p-3 rounded ${debugData.null_candidate_ids > 0 ? 'bg-red-900/30' : 'bg-gray-700/50'}`}>
+                <div className="text-xs text-gray-400">NULL candidate_ids</div>
+                <div className={`text-2xl font-bold ${debugData.null_candidate_ids > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                  {debugData.null_candidate_ids}
+                </div>
+              </div>
+              <div className={`p-3 rounded ${debugData.null_job_ids > 0 ? 'bg-red-900/30' : 'bg-gray-700/50'}`}>
+                <div className="text-xs text-gray-400">NULL job_ids</div>
+                <div className={`text-2xl font-bold ${debugData.null_job_ids > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                  {debugData.null_job_ids}
+                </div>
+              </div>
+            </div>
+
+            {/* Stage Breakdown */}
+            <div className="bg-gray-700/30 p-4 rounded">
+              <h4 className="font-semibold text-white mb-3">Matches by Stage:</h4>
+              <div className="space-y-1 text-sm">
+                {Object.entries(debugData.stage_counts || {}).map(([stage, count]) => (
+                  <div key={stage} className="flex justify-between text-gray-300">
+                    <span>{stage}</span>
+                    <span className="font-mono font-semibold">{count as number}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Sample Data */}
+            {debugData.sample_sent_to_tal && debugData.sample_sent_to_tal.length > 0 && (
+              <div className="bg-gray-700/30 p-4 rounded">
+                <h4 className="font-semibold text-white mb-3">Sample sent_to_tal Matches:</h4>
+                <div className="space-y-3">
+                  {debugData.sample_sent_to_tal.map((m: any, idx: number) => (
+                    <div key={idx} className="text-xs bg-gray-800 p-3 rounded font-mono">
+                      <div><span className="text-gray-400">Candidate:</span> <span className={m.candidate_name === 'NOT FOUND' ? 'text-red-400' : 'text-green-400'}>{m.candidate_name}</span></div>
+                      <div><span className="text-gray-400">Job:</span> <span className={m.job_title === 'NOT FOUND' ? 'text-red-400' : 'text-green-400'}>{m.job_title}</span></div>
+                      <div><span className="text-gray-400">Score:</span> {m.match_score}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

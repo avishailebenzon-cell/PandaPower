@@ -334,6 +334,87 @@ async def get_timeline_data(
         raise HTTPException(status_code=500, detail=f"Failed to get timeline: {str(e)}")
 
 
+@router.get("/debug-data-quality")
+async def debug_data_quality():
+    """
+    Debug endpoint: Check data integrity of matches table.
+
+    Reports:
+    - Total matches count
+    - Matches per stage
+    - NULL values in foreign keys
+    - Sample matches with full data
+    """
+    try:
+        from pandapower.core.supabase import get_supabase_client
+
+        supabase = await get_supabase_client()
+
+        # Get all matches
+        all_matches = await supabase.table("matches").select("*").execute()
+        matches = all_matches.data or []
+
+        # Analyze
+        total = len(matches)
+        null_candidate = sum(1 for m in matches if not m.get("candidate_id"))
+        null_job = sum(1 for m in matches if not m.get("job_id"))
+
+        # Count by stage
+        stage_counts = {}
+        for m in matches:
+            state = m.get("current_state", "unknown")
+            stage_counts[state] = stage_counts.get(state, 0) + 1
+
+        # Sample data
+        sent_to_tal = [m for m in matches if m.get("current_state") == "sent_to_tal"]
+        sample = sent_to_tal[:3] if sent_to_tal else []
+
+        # Get candidate/job names for samples
+        candidate_ids = list(set(m.get("candidate_id") for m in sample if m.get("candidate_id")))
+        job_ids = list(set(m.get("job_id") for m in sample if m.get("job_id")))
+
+        candidates = {}
+        jobs = {}
+
+        if candidate_ids:
+            resp = await supabase.table("candidates").select("id, name").in_("id", candidate_ids).execute()
+            candidates = {c["id"]: c.get("name", "?") for c in (resp.data or [])}
+
+        if job_ids:
+            resp = await supabase.table("jobs").select("id, title").in_("id", job_ids).execute()
+            jobs = {j["id"]: j.get("title", "?") for j in (resp.data or [])}
+
+        # Enrich samples
+        enriched_samples = []
+        for m in sample:
+            enriched_samples.append({
+                "match_id": m.get("id"),
+                "state": m.get("current_state"),
+                "candidate_id": m.get("candidate_id"),
+                "candidate_name": candidates.get(m.get("candidate_id"), "NOT FOUND"),
+                "job_id": m.get("job_id"),
+                "job_title": jobs.get(m.get("job_id"), "NOT FOUND"),
+                "match_score": m.get("match_score"),
+            })
+
+        return {
+            "status": "ok",
+            "total_matches": total,
+            "null_candidate_ids": null_candidate,
+            "null_job_ids": null_job,
+            "stage_counts": stage_counts,
+            "sent_to_tal_count": len(sent_to_tal),
+            "sample_sent_to_tal": enriched_samples,
+        }
+
+    except Exception as e:
+        logger.error(f"Error in debug endpoint: {e}", exc_info=True)
+        return {
+            "status": "error",
+            "error": str(e),
+        }
+
+
 @router.post("/check-bottlenecks", response_model=BottleneckCheckResponse)
 async def check_bottlenecks(send_alerts: bool = Query(True)):
     """
