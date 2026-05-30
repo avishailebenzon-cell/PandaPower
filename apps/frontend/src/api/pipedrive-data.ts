@@ -3,6 +3,38 @@
  * Endpoints for fetching synced Pipedrive data: employees, clients, organizations, jobs
  */
 
+async function handleApiResponse<T>(response: Response, context: string): Promise<T> {
+  if (!response.ok) {
+    const contentType = response.headers.get('content-type');
+    let errorMessage = `${context}: ${response.statusText}`;
+
+    try {
+      if (contentType?.includes('application/json')) {
+        const errorData = await response.json();
+        errorMessage = errorData.detail || errorData.message || errorMessage;
+      } else if (contentType?.includes('text/html')) {
+        // Server returned HTML error page - likely auth issue or endpoint not found
+        errorMessage = `${context}: Server error (${response.status}). Check backend connection and API endpoints.`;
+      } else {
+        const text = await response.text();
+        errorMessage = text || errorMessage;
+      }
+    } catch (e) {
+      // If we can't parse the error, just use the status
+      errorMessage = `${context}: HTTP ${response.status}`;
+    }
+
+    throw new Error(errorMessage);
+  }
+
+  const contentType = response.headers.get('content-type');
+  if (!contentType?.includes('application/json')) {
+    throw new Error(`${context}: Response is not JSON (received ${contentType || 'unknown'})`);
+  }
+
+  return response.json();
+}
+
 export interface EmployeeResponse {
   id: string;
   name: string;
@@ -139,10 +171,7 @@ export async function fetchEmployees(
   }
 
   const response = await fetch(`/admin/pipedrive/data/employees?${params}`);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch employees: ${response.statusText}`);
-  }
-  return response.json();
+  return handleApiResponse<PaginatedResponse<EmployeeResponse>>(response, 'Failed to fetch employees');
 }
 
 /**
@@ -171,10 +200,7 @@ export async function fetchClients(
   }
 
   const response = await fetch(`/admin/pipedrive/data/clients?${params}`);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch clients: ${response.statusText}`);
-  }
-  return response.json();
+  return handleApiResponse<PaginatedResponse<ClientResponse>>(response, 'Failed to fetch clients');
 }
 
 /**
@@ -203,10 +229,7 @@ export async function fetchPotentialClients(
   }
 
   const response = await fetch(`/admin/pipedrive/data/potential-clients?${params}`);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch potential clients: ${response.statusText}`);
-  }
-  return response.json();
+  return handleApiResponse<PaginatedResponse<PotentialClientResponse>>(response, 'Failed to fetch potential clients');
 }
 
 /**
@@ -235,10 +258,7 @@ export async function fetchOrganizations(
   }
 
   const response = await fetch(`/admin/pipedrive/data/organizations?${params}`);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch organizations: ${response.statusText}`);
-  }
-  return response.json();
+  return handleApiResponse<PaginatedResponse<OrganizationResponse>>(response, 'Failed to fetch organizations');
 }
 
 /**
@@ -267,8 +287,5 @@ export async function fetchJobs(
   }
 
   const response = await fetch(`/admin/pipedrive/data/jobs?${params}`);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch jobs: ${response.statusText}`);
-  }
-  return response.json();
+  return handleApiResponse<PaginatedResponse<JobResponse>>(response, 'Failed to fetch jobs');
 }
