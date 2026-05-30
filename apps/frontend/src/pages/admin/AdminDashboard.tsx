@@ -2,7 +2,7 @@
  * Admin Dashboard - System administration and monitoring
  */
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 interface AdminCard {
@@ -116,8 +116,37 @@ const ADMIN_SECTIONS: AdminCard[] = [
   },
 ];
 
+interface SystemStats {
+  system_status: string;
+  queue_tasks: number;
+  connected_users: number;
+  recent_errors: number;
+  uptime_percent: number;
+}
+
 export const AdminDashboard: React.FC = () => {
   const navigate = useNavigate();
+  const [systemStats, setSystemStats] = useState<SystemStats | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchSystemStats = async () => {
+      try {
+        const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+        const response = await fetch(`${apiUrl}/admin/system-stats`);
+        if (response.ok) {
+          const data = await response.json();
+          setSystemStats(data);
+        }
+      } catch (error) {
+        console.error('Failed to fetch system stats:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchSystemStats();
+  }, []);
 
   return (
     <div dir="rtl" className="min-h-screen bg-slate-950 p-8">
@@ -135,19 +164,21 @@ export const AdminDashboard: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="text-center">
               <div className="text-sm text-slate-400 mb-1">מצב מערכת</div>
-              <div className="text-2xl font-bold text-green-400">✓ פעילה</div>
+              <div className="text-2xl font-bold text-green-400">
+                {loading ? '...' : systemStats?.system_status === 'healthy' ? '✓ פעילה' : '⚠ בעיה'}
+              </div>
             </div>
             <div className="text-center">
               <div className="text-sm text-slate-400 mb-1">משימות בתור</div>
-              <div className="text-2xl font-bold text-blue-400">847</div>
+              <div className="text-2xl font-bold text-blue-400">{loading ? '...' : systemStats?.queue_tasks || 0}</div>
             </div>
             <div className="text-center">
               <div className="text-sm text-slate-400 mb-1">משתמשים מחוברים</div>
-              <div className="text-2xl font-bold text-purple-400">12</div>
+              <div className="text-2xl font-bold text-purple-400">{loading ? '...' : systemStats?.connected_users || 0}</div>
             </div>
             <div className="text-center">
               <div className="text-sm text-slate-400 mb-1">שגיאות אחרונות</div>
-              <div className="text-2xl font-bold text-red-400">0</div>
+              <div className="text-2xl font-bold text-red-400">{loading ? '...' : systemStats?.recent_errors || 0}</div>
             </div>
           </div>
         </div>
