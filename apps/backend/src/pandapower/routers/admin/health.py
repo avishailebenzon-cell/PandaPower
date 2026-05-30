@@ -372,9 +372,30 @@ async def system_stats():
         except Exception as e:
             logger.warning(f"Could not get error count: {e}")
 
-        # Connected users are the recruiters in the system
-        # For now, we have: Carmit (coordinator), Tal (recruiter), Elad (senior recruiter), Pandi (AI agent)
-        connected_users = 4
+        # Count unique recruiters that have taken actions recently (last 7 days)
+        connected_users = 0
+        try:
+            # Count unique recruiters with recent activity in matches
+            week_ago = (datetime.utcnow() - timedelta(days=7)).isoformat()
+            result = supabase.table("matches").select("assigned_to", count="exact").gte("updated_at", week_ago).execute()
+
+            # Also count from recruiter conversations
+            result2 = supabase.table("recruiter_conversations").select("recruiter", count="exact").gte("created_at", week_ago).execute()
+
+            # Default recruiters (even if no activity)
+            recruiters_with_activity = set()
+            if result and result.data:
+                recruiters_with_activity.update([m.get("assigned_to") for m in result.data if m.get("assigned_to")])
+            if result2 and result2.data:
+                recruiters_with_activity.update([m.get("recruiter") for m in result2.data if m.get("recruiter")])
+
+            # Always count the main recruiters: carmit, tal, elad, pandi
+            main_recruiters = {"carmit", "tal", "elad", "pandi"}
+            connected_users = len(main_recruiters | recruiters_with_activity)
+        except Exception as e:
+            logger.warning(f"Could not get connected users count: {e}")
+            # Fallback to known recruiters
+            connected_users = 4
 
         return SystemStatsResponse(
             timestamp=datetime.utcnow().isoformat(),
