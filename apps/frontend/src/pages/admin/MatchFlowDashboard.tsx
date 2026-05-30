@@ -16,6 +16,7 @@ import { useQuery, useMutation } from '@tanstack/react-query';
 import { MatchTimelineChart } from '@/components/MatchTimelineChart';
 
 interface MatchFlowMetrics {
+  stage_email_ingest: number;  // New: CV files extracted from emails
   stage_found: number;
   stage_carmit_approved: number;
   stage_sent_to_tal: number;
@@ -45,6 +46,7 @@ interface Match {
 }
 
 const STAGE_CONFIG = [
+  { id: 'email_ingest', label: '📧 קורות חיים נכנסים', color: 'bg-cyan-600', textColor: 'text-cyan-100' },
   { id: 'found', label: '🔍 התאמות טריות', color: 'bg-blue-600', textColor: 'text-blue-100' },
   { id: 'carmit_approved', label: '✅ אושר ע"י כרמית', color: 'bg-indigo-600', textColor: 'text-indigo-100' },
   { id: 'sent_to_tal', label: '👤 אצל טל', color: 'bg-purple-600', textColor: 'text-purple-100' },

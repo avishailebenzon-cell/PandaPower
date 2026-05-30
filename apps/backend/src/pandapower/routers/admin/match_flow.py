@@ -18,6 +18,7 @@ router = APIRouter(prefix="/admin/matches", tags=["admin", "matches"])
 
 # Response models
 class MatchFlowMetrics(BaseModel):
+    stage_email_ingest: int  # CV files extracted from emails (source)
     stage_found: int
     stage_carmit_approved: int
     stage_sent_to_tal: int
@@ -80,6 +81,10 @@ async def get_flow_metrics():
 
         supabase = await get_supabase_client()
 
+        # Count CV files extracted from emails (source)
+        cv_files_response = await supabase.table("cv_files").select("id", count="exact").execute()
+        email_ingest_count = cv_files_response.count or 0
+
         # Fetch all matches with their details
         matches_response = await supabase.table("matches").select(
             "id, current_state, match_score, created_at, updated_at, "
@@ -130,6 +135,7 @@ async def get_flow_metrics():
         logger.info(f"Flow metrics: {total_in_pipeline} in pipeline, {total_completed} completed. Stage counts: {stages}")
 
         return MatchFlowMetrics(
+            stage_email_ingest=email_ingest_count,
             stage_found=stages["found"],
             stage_carmit_approved=stages["carmit_approved"],
             stage_sent_to_tal=stages["sent_to_tal"],
