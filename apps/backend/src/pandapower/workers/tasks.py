@@ -78,11 +78,12 @@ async def _ingest_emails_async(batch_size: int = 20) -> dict[str, Any]:
 
 
 @app.task(bind=True, max_retries=3)
-def ingest_emails_task(self, batch_size: int = 20) -> dict[str, Any]:
+def ingest_emails_task(self, batch_size: int = 50) -> dict[str, Any]:
     """Celery task to ingest emails every 2 minutes.
 
-    During backfill, processes batches of ~20 messages per run to efficiently
-    handle large historical email archives (millions of emails).
+    During backfill, processes batches of ~50 messages per run to efficiently
+    handle large historical email archives (5+ year backfill). Increased from 20
+    to accelerate candidate acquisition during bootstrap phase.
     """
     logger.info(f"Starting email ingest task with batch_size={batch_size}")
     try:

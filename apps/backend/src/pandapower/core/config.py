@@ -70,8 +70,8 @@ class Settings(BaseSettings):
 
     # Claude API (Phase 8: CV Parsing)
     ANTHROPIC_API_KEY: str = ""
-    CV_PARSE_BATCH_SIZE: int = 10
-    CV_PARSE_TIMEOUT_SECONDS: int = 300
+    CV_PARSE_BATCH_SIZE: int = 30  # Increased from 10 for faster backfill (concurrent limit: 4)
+    CV_PARSE_TIMEOUT_SECONDS: int = 60  # Reduced from 300s (async batch processing is fast)
     CV_PARSE_MAX_RETRIES: int = 3
     CV_EXTRACT_TIMEOUT_SECONDS: int = 30
 
