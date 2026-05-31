@@ -86,6 +86,11 @@ export function AdminLayout() {
               </a>
             </li>
             <li>
+              <a href="/admin/cv-upload" className="block px-3 py-2 rounded text-slate-300 hover:bg-slate-800 transition">
+                📤 טעינת קורות חיים ידנית
+              </a>
+            </li>
+            <li>
               <a href="/admin/cv-parsing" className="block px-3 py-2 rounded text-slate-300 hover:bg-slate-800 transition">
                 ניתוח וחילוץ CV
               </a>

@@ -42,7 +42,7 @@ import {
   Clock as ClockIcon,
 } from '@mui/icons-material';
 
-import * as pandiApi from '../../api/pandi_outreach';
+import * as pandiApi from '../../api/pandi_outreach.ts';
 
 interface SelectFilters {
   organization_ids: string[];
