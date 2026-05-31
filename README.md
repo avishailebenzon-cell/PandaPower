@@ -14,8 +14,18 @@ An intelligent recruitment platform for PandaTech that automates candidate match
 ### 1. Clone and Setup Environment
 
 ```bash
+# Root .env for backend services
 cp .env.example .env
+
+# Frontend .env (CRITICAL: must have VITE_API_URL, not VITE_API_BASE!)
+cd apps/frontend
+cp ../.env.example .env
+# Edit .env and ensure: VITE_API_URL=http://localhost:8000
+# Or run the setup script:
+bash setup-env.sh
 ```
+
+⚠️ **IMPORTANT**: The frontend requires `VITE_API_URL` (not `VITE_API_BASE` or `VITE_API_BASE_URL`) to communicate with the backend.
 
 ### 2. Start Database & Cache
 
@@ -148,9 +158,42 @@ Workflows validate:
 
 See `.env.example` for a complete list of all environment variables used by the system.
 
-Key variables for Phase 1:
-- `CORS_ORIGINS` — Frontend URLs allowed to call the API
-- `VITE_API_BASE_URL` — Backend URL for frontend
+### Critical Frontend Variables
+⚠️ **IMPORTANT**: These must be set correctly or the frontend cannot communicate with the API:
+
+- `VITE_API_URL` — Backend API URL (default: `http://localhost:8000`)
+  - ❌ NOT `VITE_API_BASE` or `VITE_API_BASE_URL`
+  - This is used by the Vite proxy to route API requests
+  
+- `VITE_SUPABASE_URL` — Supabase project URL
+- `VITE_SUPABASE_ANON_KEY` — Supabase anonymous key
+
+### Backend Variables
+
+- `CORS_ORIGINS` — Frontend URLs allowed to call the API (default: `http://localhost:5173`)
+- Database/Cache variables (see `.env.example` for full list)
+
+## Troubleshooting
+
+### Frontend Error: "Failed to fetch [endpoint]: Response is not JSON (received text/html)"
+
+**Cause:** The `VITE_API_URL` environment variable is not set correctly in `apps/frontend/.env`
+
+**Fix:**
+1. Check `apps/frontend/.env` has: `VITE_API_URL=http://localhost:8000`
+2. NOT `VITE_API_BASE` or `VITE_API_BASE_URL`
+3. Restart the frontend dev server: `npm run dev`
+4. Hard refresh the browser: `Cmd+Shift+R` (Mac) or `Ctrl+Shift+R` (Windows)
+
+### Employee/Contact Data Pages Show Error
+
+**Cause:** API endpoint variables not configured or proxy misconfigured
+
+**Fix:**
+1. Verify backend is running: `curl http://localhost:8000/health`
+2. Check `VITE_API_URL` in frontend `.env`
+3. Check `CORS_ORIGINS` in root `.env` includes `http://localhost:5173`
+4. Restart both backend and frontend
 
 ## Deployment
 
