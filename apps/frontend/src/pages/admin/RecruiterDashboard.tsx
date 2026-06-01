@@ -9,6 +9,9 @@ import {
   type StatusMetrics,
 } from "@/api/recruiter";
 
+// CRITICAL: Get API base URL from environment - MUST use VITE_API_URL (not VITE_API_BASE)
+const API_BASE = import.meta.env.VITE_API_URL || '';
+
 interface ConversationModalState {
   show: boolean;
   matchId: string | null;
@@ -397,7 +400,7 @@ export const RecruiterDashboard: React.FC = () => {
     queryKey: ["match-history", selectedMatchForTimeline],
     queryFn: async () => {
       if (!selectedMatchForTimeline) return null;
-      const response = await fetch(`/api/admin/matches/${selectedMatchForTimeline}/history`);
+      const response = await fetch(`${API_BASE}/api/admin/matches/${selectedMatchForTimeline}/history`);
       if (!response.ok) throw new Error("Failed to fetch match history");
       return response.json();
     },

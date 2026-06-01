@@ -8,16 +8,19 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { RECRUITMENT_AGENTS, RECRUITERS } from '@/data/agents';
 
+// CRITICAL: Get API base URL from environment - MUST use VITE_API_URL (not VITE_API_BASE)
+const API_BASE = import.meta.env.VITE_API_URL || '';
+
 // Fetch real agent stats from API
 const fetchAgentStats = async (agentCode: string) => {
-  const response = await fetch(`/api/agents/${agentCode}/stats`);
+  const response = await fetch(`${API_BASE}/api/agents/${agentCode}/stats`);
   if (!response.ok) throw new Error('Failed to fetch agent stats');
   return response.json();
 };
 
 // Fetch matches for an agent to show current work
 const fetchAgentMatches = async (agentCode: string) => {
-  const response = await fetch(`/api/department-matches?agent=${agentCode}&limit=10`);
+  const response = await fetch(`${API_BASE}/api/department-matches?agent=${agentCode}&limit=10`);
   if (!response.ok) throw new Error('Failed to fetch matches');
   return response.json();
 };
