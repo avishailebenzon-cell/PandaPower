@@ -70,6 +70,10 @@ class Settings(BaseSettings):
 
     # Claude API (Phase 8: CV Parsing)
     ANTHROPIC_API_KEY: str = ""
+    # Model for CV field extraction. Haiku by default — ~20-50x cheaper than Opus
+    # and ample for structured extraction. Overridable live via system_settings
+    # key `cv_parse.model`. (Opus on the bulk wave was the source of large bills.)
+    CV_PARSE_MODEL: str = "claude-haiku-4-5"
     CV_PARSE_BATCH_SIZE: int = 30  # Increased from 10 for faster backfill (concurrent limit: 4)
     CV_PARSE_TIMEOUT_SECONDS: int = 60  # Reduced from 300s (async batch processing is fast)
     CV_PARSE_MAX_RETRIES: int = 3

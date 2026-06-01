@@ -135,6 +135,14 @@ async def _parse_cvs_async() -> dict[str, Any]:
 
         supabase_client = await get_supabase_client()
         claude_client = AnthropicClient(settings.ANTHROPIC_API_KEY)
+        # CV field extraction is a simple structured task — use a cheap model
+        # (Haiku by default) instead of Opus. Opus on the ~31K recovery wave was
+        # costing ~$10 every few minutes. Overridable live via system_settings
+        # key `cv_parse.model` (no redeploy needed).
+        cv_model = (await _get_setting(supabase_client, "cv_parse.model")) or settings.CV_PARSE_MODEL
+        if cv_model:
+            claude_client.model = cv_model
+            logger.info(f"CV parsing using model: {cv_model}")
         storage_manager = SupabaseStorageManager(supabase_client)
 
         worker = CVParseWorker(
