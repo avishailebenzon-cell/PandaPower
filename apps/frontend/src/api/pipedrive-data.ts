@@ -3,6 +3,9 @@
  * Endpoints for fetching synced Pipedrive data: employees, clients, organizations, jobs
  */
 
+// CRITICAL: Get API base URL from environment - MUST use VITE_API_URL (not VITE_API_BASE)
+const API_BASE = import.meta.env.VITE_API_URL || '';
+
 async function handleApiResponse<T>(response: Response, context: string): Promise<T> {
   if (!response.ok) {
     const contentType = response.headers.get('content-type');
@@ -170,7 +173,7 @@ export async function fetchEmployees(
     params.append('search', search);
   }
 
-  const response = await fetch(`/admin/pipedrive/data/employees?${params}`);
+  const response = await fetch(`${API_BASE}/admin/pipedrive/data/employees?${params}`);
   return handleApiResponse<PaginatedResponse<EmployeeResponse>>(response, 'Failed to fetch employees');
 }
 
@@ -199,7 +202,7 @@ export async function fetchClients(
     params.append('status', status);
   }
 
-  const response = await fetch(`/admin/pipedrive/data/clients?${params}`);
+  const response = await fetch(`${API_BASE}/admin/pipedrive/data/clients?${params}`);
   return handleApiResponse<PaginatedResponse<ClientResponse>>(response, 'Failed to fetch clients');
 }
 
@@ -228,7 +231,7 @@ export async function fetchPotentialClients(
     params.append('interest_level', interestLevel);
   }
 
-  const response = await fetch(`/admin/pipedrive/data/potential-clients?${params}`);
+  const response = await fetch(`${API_BASE}/admin/pipedrive/data/potential-clients?${params}`);
   return handleApiResponse<PaginatedResponse<PotentialClientResponse>>(response, 'Failed to fetch potential clients');
 }
 
@@ -257,7 +260,7 @@ export async function fetchOrganizations(
     params.append('industry', industry);
   }
 
-  const response = await fetch(`/admin/pipedrive/data/organizations?${params}`);
+  const response = await fetch(`${API_BASE}/admin/pipedrive/data/organizations?${params}`);
   return handleApiResponse<PaginatedResponse<OrganizationResponse>>(response, 'Failed to fetch organizations');
 }
 
@@ -286,6 +289,6 @@ export async function fetchJobs(
     params.append('status', status);
   }
 
-  const response = await fetch(`/admin/pipedrive/data/jobs?${params}`);
+  const response = await fetch(`${API_BASE}/admin/pipedrive/data/jobs?${params}`);
   return handleApiResponse<PaginatedResponse<JobResponse>>(response, 'Failed to fetch jobs');
 }

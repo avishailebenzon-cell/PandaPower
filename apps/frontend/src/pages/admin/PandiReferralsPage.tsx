@@ -55,6 +55,9 @@ interface ReferralDetail extends Referral {
   status_notes: string | null;
 }
 
+// CRITICAL: Get API base URL from environment - MUST use VITE_API_URL (not VITE_API_BASE)
+const API_BASE = import.meta.env.VITE_API_URL || '';
+
 const STATUS_LABELS: Record<string, { label: string; color: 'success' | 'warning' | 'error' | 'info' | 'default' }> = {
   presented: { label: 'הוצג', color: 'info' },
   client_interested: { label: 'לקוח בעניין', color: 'warning' },
@@ -83,12 +86,12 @@ export default function PandiReferralsPage() {
   const loadReferrals = async () => {
     try {
       setLoading(true);
-      const url = new URL('/admin/pandi/referrals', window.location.origin);
-      if (statusFilter) url.searchParams.append('status', statusFilter);
-      if (slaFilter === 'breached') url.searchParams.append('sla_breached', 'true');
-      if (slaFilter === 'active') url.searchParams.append('sla_breached', 'false');
+      const params = new URLSearchParams();
+      if (statusFilter) params.append('status', statusFilter);
+      if (slaFilter === 'breached') params.append('sla_breached', 'true');
+      if (slaFilter === 'active') params.append('sla_breached', 'false');
 
-      const response = await fetch(url.toString());
+      const response = await fetch(`${API_BASE}/admin/pandi/referrals?${params.toString()}`);
       const data = await response.json();
       setReferrals(data);
     } catch (error) {
@@ -100,7 +103,7 @@ export default function PandiReferralsPage() {
 
   const loadReferralDetail = async (referralNumber: string) => {
     try {
-      const response = await fetch(`/admin/pandi/referrals/${referralNumber}`);
+      const response = await fetch(`${API_BASE}/admin/pandi/referrals/${referralNumber}`);
       const data = await response.json();
       setSelectedReferral(data);
       setDetailDialogOpen(true);
@@ -117,7 +120,7 @@ export default function PandiReferralsPage() {
     }
 
     try {
-      const response = await fetch(`/admin/pandi/referrals/${selectedReferral.referral_number}/status`, {
+      const response = await fetch(`${API_BASE}/admin/pandi/referrals/${selectedReferral.referral_number}/status`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

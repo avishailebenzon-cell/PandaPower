@@ -2,6 +2,9 @@
  * Match API endpoints
  */
 
+// CRITICAL: Get API base URL from environment - MUST use VITE_API_URL (not VITE_API_BASE)
+const API_BASE = import.meta.env.VITE_API_URL || '';
+
 export interface StateHistoryEntry {
   from_state: string;
   to_state: string;
@@ -21,7 +24,7 @@ export interface MatchHistoryResponse {
  * Fetch complete state history for a match
  */
 export async function fetchMatchHistory(matchId: string): Promise<MatchHistoryResponse> {
-  const response = await fetch(`/api/admin/matches/${matchId}/history`);
+  const response = await fetch(`${API_BASE}/api/admin/matches/${matchId}/history`);
   if (!response.ok) {
     throw new Error(`Failed to fetch match history: ${response.statusText}`);
   }
@@ -36,7 +39,7 @@ export async function updateMatchesStatus(
   action: 'hired' | 'rejected',
   notes?: string
 ): Promise<any> {
-  const response = await fetch(`/api/admin/carmit/update-matches-status`, {
+  const response = await fetch(`${API_BASE}/api/admin/carmit/update-matches-status`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

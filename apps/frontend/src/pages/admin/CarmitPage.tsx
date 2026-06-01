@@ -114,6 +114,9 @@ const AGENTS = [
 ];
 
 export const CarmitPage = () => {
+  // CRITICAL: Define API_BASE at the top so all fetch calls use it consistently
+  const API_BASE = import.meta.env.VITE_API_URL || '';
+
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<
     'decisions' | 'agent-matches' | 'all-jobs' | 'sent-to-tal' | 'sent-to-elad'
@@ -147,7 +150,7 @@ export const CarmitPage = () => {
   const { data: metrics } = useQuery({
     queryKey: ['carmit-kpi'],
     queryFn: async () => {
-      const response = await fetch('/admin/carmit/kpi-summary');
+      const response = await fetch(`${API_BASE}/admin/carmit/kpi-summary`);
       if (!response.ok) throw new Error('Failed to fetch KPI');
       return response.json() as Promise<KPIMetrics>;
     },
@@ -161,7 +164,7 @@ export const CarmitPage = () => {
       const params = new URLSearchParams();
       params.append('decision_filter', decisionFilter);
       params.append('limit', '50');
-      const response = await fetch(`/admin/carmit/decisions?${params}`);
+      const response = await fetch(`${API_BASE}/admin/carmit/decisions?${params}`);
       if (!response.ok) throw new Error('Failed to fetch decisions');
       return response.json() as Promise<{ decisions: CarmitDecision[]; total: number }>;
     },
@@ -172,7 +175,7 @@ export const CarmitPage = () => {
   const { data: jobsData, isLoading: jobsLoading } = useQuery({
     queryKey: ['carmit-jobs-to-route'],
     queryFn: async () => {
-      const response = await fetch('/admin/carmit/jobs-to-route');
+      const response = await fetch(`${API_BASE}/admin/carmit/jobs-to-route`);
       if (!response.ok) throw new Error('Failed to fetch jobs');
       return response.json() as Promise<{ jobs: Job[]; total: number }>;
     },
@@ -181,7 +184,6 @@ export const CarmitPage = () => {
 
   // Fetch the high-quality (≥70%) matches across ALL 8 recruitment agents
   // for the "התאמות מסוכני הגיוס" tab. Paginated via local agentMatchesPage state.
-  const API_BASE = import.meta.env.VITE_API_URL || '';
   const { data: agentMatchesData, isLoading: agentMatchesLoading, error: agentMatchesError } = useQuery({
     queryKey: ['carmit-agent-matches', agentMatchesPage, agentMatchesMinScore, agentMatchesSortBy, agentMatchesSortDir],
     queryFn: async () => {
@@ -204,7 +206,7 @@ export const CarmitPage = () => {
   const { data: allJobsData, isLoading: allJobsLoading } = useQuery({
     queryKey: ['carmit-all-jobs-with-assignments'],
     queryFn: async () => {
-      const response = await fetch('/admin/agent-matching/all-jobs-with-assignments?limit=500');
+      const response = await fetch(`${API_BASE}/admin/agent-matching/all-jobs-with-assignments?limit=500`);
       if (!response.ok) throw new Error('Failed to fetch all jobs');
       return response.json() as Promise<{
         total: number;
@@ -232,7 +234,7 @@ export const CarmitPage = () => {
   // Mutation to route job
   const routeJobMutation = useMutation({
     mutationFn: async (jobId: string) => {
-      const response = await fetch(`/admin/carmit/route-job/${jobId}`, {
+      const response = await fetch(`${API_BASE}/admin/carmit/route-job/${jobId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });
@@ -255,7 +257,7 @@ export const CarmitPage = () => {
       jobId: string;
       newAgentCode: string;
     }) => {
-      const response = await fetch('/admin/agent-matching/override-job-assignment', {
+      const response = await fetch(`${API_BASE}/admin/agent-matching/override-job-assignment`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
