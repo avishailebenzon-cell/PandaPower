@@ -27,6 +27,7 @@ The endpoint:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Any, Optional
@@ -221,3 +222,168 @@ async def receive_whatsapp_webhook(
             logger.error(f"Failed to enqueue Pandi message task: {e}", exc_info=True)
 
     return {"status": "ok", "agent": agent_code, "event": parsed.get("event_type")}
+
+
+# ===========================================================================
+# Telegram bot — "מנהל גיוס כרמית" (read-only conversational assistant)
+# ===========================================================================
+
+CARMIT_SYSTEM_PROMPT = (
+    "את כרמית, מנהלת הגיוס הראשית של מערכת PandaPower (גיוס טכנולוגי/ביטחוני). "
+    "את משוחחת עם אבישי, מנהל המערכת, דרך טלגרם. עני בעברית, בקצרה, בחום ובמקצועיות. "
+    "יש לך גישה לנתוני המערכת בזמן אמת (מצורפים למטה תחת 'נתוני מערכת נוכחיים'). "
+    "ענֵי אך ורק על סמך הנתונים האלה; אם חסר מידע — אמרי בכנות שאינך יודעת, ואל תמציאי מספרים. "
+    "את במצב קריאה-בלבד: אינך יכולה לבצע פעולות (לאשר/לדחות/להריץ), רק לדווח, להסביר ולנתח. "
+    "אם מבקשים ממך לבצע פעולה — הסבירי בעדינות שיש לעשות זאת בממשק המערכת."
+)
+
+
+async def _build_carmit_snapshot(sb) -> str:
+    """Compact, real-time system snapshot injected into Carmit's context."""
+    lines: list[str] = []
+    # Scheduler health
+    try:
+        from pandapower.routers.admin.health import scheduler_heartbeat
+        hb = await scheduler_heartbeat()
+        lines.append(f"בריאות תהליכים: {hb.overall_status} — {hb.summary}")
+        stalled = [t.label for t in hb.tasks if t.is_stalled]
+        if stalled:
+            lines.append("תהליכים תקועים: " + ", ".join(stalled))
+    except Exception as e:
+        logger.debug(f"[telegram] snapshot heartbeat failed: {e}")
+
+    # Pipeline state counts
+    try:
+        from pandapower.routers.admin.health import pipeline_status
+        ps = await pipeline_status()
+        lines.append(f"סך-הכל התאמות פעילות במערכת: {ps.total_matches}")
+        nonzero = [f"{s.stage_label}: {s.count}" for s in ps.stages if s.count]
+        if nonzero:
+            lines.append("פילוח לפי שלב — " + "; ".join(nonzero))
+        if ps.bottleneck:
+            lines.append(f"צוואר בקבוק: {ps.bottleneck}")
+    except Exception as e:
+        logger.debug(f"[telegram] snapshot pipeline failed: {e}")
+
+    # Email intake totals
+    try:
+        total = await sb.table("email_intake_log").select("id", count="exact").execute()
+        lines.append(f"סך-הכל מיילים שעובדו: {getattr(total, 'count', 0) or 0}")
+    except Exception:
+        pass
+
+    return "\n".join(lines) if lines else "אין נתונים זמינים כרגע."
+
+
+async def _handle_carmit_message(text: str, chat_id: str) -> None:
+    """Answer one admin message as Carmit (runs in the background)."""
+    from pandapower.core.config import settings
+    from pandapower.integrations.claude_api import AnthropicClient
+    from pandapower.integrations.telegram_client import TelegramClient, get_telegram_config
+
+    sb = await get_supabase_client()
+    cfg = await get_telegram_config(sb)
+    token = cfg.get("bot_token")
+    if not token:
+        return
+
+    tg = TelegramClient(token)
+    try:
+        if not settings.ANTHROPIC_API_KEY:
+            await tg.send_message(chat_id, "מצטערת, חסר מפתח Claude בהגדרות — לא אוכל לענות כרגע.")
+            return
+
+        snapshot = await _build_carmit_snapshot(sb)
+        system = f"{CARMIT_SYSTEM_PROMPT}\n\n--- נתוני מערכת נוכחיים ---\n{snapshot}"
+        claude = AnthropicClient(settings.ANTHROPIC_API_KEY)
+        try:
+            resp = await claude._make_request_with_retry(
+                messages=[{"role": "user", "content": text}],
+                system=system,
+            )
+            answer = (resp.get("content") or [{}])[0].get("text") or "לא הצלחתי לנסח תשובה."
+        finally:
+            await claude.close()
+
+        await tg.send_message(chat_id, answer)
+    except Exception as e:
+        logger.error(f"[telegram] Carmit reply failed: {e}", exc_info=True)
+        try:
+            await tg.send_message(chat_id, "אירעה שגיאה זמנית. נסה שוב בעוד רגע 🙏")
+        except Exception:
+            pass
+    finally:
+        await tg.close()
+
+
+@router.post("/telegram")
+async def receive_telegram_webhook(
+    request: Request,
+    supabase=Depends(get_supabase_client),
+) -> dict[str, Any]:
+    """Telegram bot webhook. Verifies the secret header, binds the admin chat on
+    /start, and answers admin messages as Carmit (read-only). Always returns 200
+    quickly (heavy work is spawned in the background)."""
+    from pandapower.integrations.telegram_client import get_telegram_config, TelegramClient
+
+    cfg = await get_telegram_config(supabase)
+
+    # Verify Telegram's secret-token header (reuse the optional-secret pattern).
+    expected = cfg.get("webhook_secret") or ""
+    provided = request.headers.get("x-telegram-bot-api-secret-token")
+    if expected and provided != expected:
+        logger.warning("[telegram] webhook auth failed")
+        raise HTTPException(status_code=401, detail="Invalid secret token")
+
+    try:
+        update = await request.json()
+    except Exception:
+        return {"status": "ok"}
+
+    message = (update or {}).get("message") or (update or {}).get("edited_message") or {}
+    chat = message.get("chat") or {}
+    chat_id = chat.get("id")
+    text = (message.get("text") or "").strip()
+    if not chat_id or not text:
+        return {"status": "ok"}
+    chat_id = str(chat_id)
+
+    token = cfg.get("bot_token")
+    admin_chat_id = cfg.get("admin_chat_id")
+
+    # /start binds the admin chat (first sender wins) and greets.
+    if text.startswith("/start"):
+        if not admin_chat_id:
+            try:
+                await supabase.table("system_settings").upsert(
+                    {"setting_key": "telegram.admin_chat_id", "setting_value": chat_id,
+                     "updated_at": datetime.utcnow().isoformat()},
+                    on_conflict="setting_key",
+                ).execute()
+                admin_chat_id = chat_id
+            except Exception as e:
+                logger.error(f"[telegram] failed to store admin_chat_id: {e}")
+        if token:
+            tg = TelegramClient(token)
+            try:
+                if admin_chat_id == chat_id:
+                    await tg.send_message(chat_id, (
+                        "שלום! אני כרמית, מנהלת הגיוס 🤖\n"
+                        "אפשר לשאול אותי על מצב המערכת, ההתאמות, התהליכים ובעיות. "
+                        "אדווח לך גם כשהתאמה עוברת לטל, על גיוסים, ועל תקלות בתהליכים.\n\n"
+                        "נסה: \"מה מצב המערכת?\""
+                    ))
+                else:
+                    await tg.send_message(chat_id, "הבוט כבר משויך למנהל אחר.")
+            finally:
+                await tg.close()
+        return {"status": "ok"}
+
+    # Only the bound admin may converse. Ignore everyone else silently.
+    if not admin_chat_id or chat_id != str(admin_chat_id):
+        logger.info(f"[telegram] ignoring message from non-admin chat {chat_id}")
+        return {"status": "ok"}
+
+    # Answer in the background so we return 200 immediately (no Telegram retry).
+    asyncio.create_task(_handle_carmit_message(text, chat_id))
+    return {"status": "ok"}

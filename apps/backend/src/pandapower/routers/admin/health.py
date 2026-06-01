@@ -120,6 +120,8 @@ SCHEDULED_TASKS: Dict[str, Dict[str, Any]] = {
     "pipeline_watchdog": {"label": "Watchdog — ריפוי עצמי", "interval": 1800},
     "pipedrive_field_sync": {"label": "Pipedrive — סנכרון שדות", "interval": 3600},
     "pipedrive_historical_import": {"label": "Pipedrive — ייבוא היסטורי", "interval": 14400},
+    "notify_telegram": {"label": "טלגרם — התראות (טל/גיוס)", "interval": 120},
+    "telegram_daily_summary": {"label": "טלגרם — סיכום יומי", "interval": 900},
 }
 
 

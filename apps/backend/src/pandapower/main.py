@@ -7,7 +7,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from pandapower.core import configure_logging, settings
 from pandapower.core.supabase import close_supabase, init_supabase
 from pandapower.routers import health_router, webhooks
-from pandapower.routers.admin import email_ingest, setup, cv_parse, cv_upload, candidate_management, candidate_recommendations, match_flow, skill_management, security_classification, agent_matching, carmit, pipedrive, pipedrive_config, pipedrive_data, pipedrive_sync, analytics, pandi, pandi_referrals, recruitment_departments, recruiter, alerts as admin_alerts, health as admin_health, whatsapp_agents, system_settings, elad_outreach, pandi_outreach
+from pandapower.routers.admin import email_ingest, setup, cv_parse, cv_upload, candidate_management, candidate_recommendations, match_flow, skill_management, security_classification, agent_matching, carmit, pipedrive, pipedrive_config, pipedrive_data, pipedrive_sync, analytics, pandi, pandi_referrals, recruitment_departments, recruiter, alerts as admin_alerts, health as admin_health, whatsapp_agents, system_settings, elad_outreach, pandi_outreach, telegram_config
 # Note: agent_matching temporarily excluded due to missing celery tasks
 # Note: match_history temporarily excluded due to import issues
 from pandapower.routers import user
@@ -88,6 +88,7 @@ app.include_router(whatsapp_agents.router)
 app.include_router(system_settings.router)
 app.include_router(elad_outreach.router)
 app.include_router(pandi_outreach.router)
+app.include_router(telegram_config.router)
 # app.include_router(match_history.router)  # Temporarily excluded
 
 
@@ -204,6 +205,8 @@ async def _pipeline_scheduler_loop():
         _pipeline_watchdog_async,
         _pipedrive_field_sync_async,
         _pipedrive_historical_import_async,
+        _notify_telegram_async,
+        _telegram_daily_summary_async,
     )
 
     # Each stage: (async factory, interval seconds, initial stagger offset).
@@ -223,6 +226,9 @@ async def _pipeline_scheduler_loop():
         "pipeline_watchdog":     (_pipeline_watchdog_async,        1800.0,   95.0),
         "pipedrive_field_sync":  (_pipedrive_field_sync_async,     3600.0,   110.0),
         "pipedrive_historical_import": (_pipedrive_historical_import_async, 14400.0, 125.0),
+        # Telegram (Carmit bot): notify match→Tal / hires, and a once-a-day digest.
+        "notify_telegram":       (_notify_telegram_async,          120.0,    55.0),
+        "telegram_daily_summary": (_telegram_daily_summary_async,  900.0,    140.0),
     }
 
     intervals = {name: spec[1] for name, spec in stages.items()}

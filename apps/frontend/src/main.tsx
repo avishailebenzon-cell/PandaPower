@@ -24,6 +24,7 @@ import { AgentManagementPage } from '@/pages/admin/AgentManagementPage'
 import { CarmitPage } from '@/pages/admin/CarmitPage'
 import { AnalyticsDashboard } from '@/pages/admin/AnalyticsDashboard'
 import { SystemHealthPage } from '@/pages/admin/SystemHealthPage'
+import { TelegramBotPage } from '@/pages/admin/TelegramBotPage'
 import WhatsAppAgentsSettingsPage from '@/pages/admin/WhatsAppAgentsSettingsPage'
 import { PipedriveConfigPage } from '@/pages/admin/PipedriveConfigPage'
 import { PandiPage } from '@/pages/admin/PandiPage'
@@ -78,6 +79,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             <Route path="/admin/agents" element={<ProtectedRoute><AgentManagementPage /></ProtectedRoute>} />
             <Route path="/admin/analytics" element={<ProtectedRoute><AnalyticsDashboard /></ProtectedRoute>} />
             <Route path="/admin/system-health" element={<ProtectedRoute><SystemHealthPage /></ProtectedRoute>} />
+            <Route path="/admin/telegram-bot" element={<ProtectedRoute><TelegramBotPage /></ProtectedRoute>} />
             <Route path="/admin/match-flow" element={<ProtectedRoute><MatchFlowDashboard /></ProtectedRoute>} />
             <Route path="/admin/whatsapp-agents" element={<ProtectedRoute><WhatsAppAgentsSettingsPage /></ProtectedRoute>} />
           </Route>

@@ -144,9 +144,23 @@ async def alert_admin(
             logger.info(f"[alerts] alerts disabled, would have sent '{key}'")
             return False
 
+        # Push to Telegram too (best-effort, independent of email config) so the
+        # admin gets process-problem alerts directly in the Carmit bot chat.
+        # Throttle/cooldown/snooze/ack above already gate this, so no spam.
+        telegram_sent = False
+        try:
+            from pandapower.integrations.telegram_client import notify_admin_telegram
+            _emoji = {"critical": "🔴", "error": "⚠️", "warning": "🟡"}.get(severity, "ℹ️")
+            telegram_sent = await notify_admin_telegram(
+                f"{_emoji} <b>בעיה בתהליך</b>\n{subject}\n\n{details}",
+                sb=sb,
+            )
+        except Exception as e:
+            logger.debug(f"[alerts] telegram push failed (non-fatal): {e}")
+
         if not admin_email:
-            logger.warning(f"[alerts] no admin email configured, dropping '{key}'")
-            return False
+            logger.warning(f"[alerts] no admin email configured for '{key}' (telegram_sent={telegram_sent})")
+            return telegram_sent
 
         # Send via Resend
         sent = await _send_via_resend(
@@ -158,8 +172,7 @@ async def alert_admin(
 
         if sent:
             logger.info(f"[alerts] sent '{key}' to {admin_email}")
-            return True
-        return False
+        return sent or telegram_sent
 
     except Exception as e:
         # NEVER propagate alert failures - they would mask the original error

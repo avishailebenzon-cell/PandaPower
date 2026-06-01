@@ -1238,3 +1238,206 @@ def pipedrive_sync_scheduler_task(self) -> dict[str, Any]:
     except Exception as e:
         logger.error(f"Pipedrive sync scheduler task failed: {e}", exc_info=True)
         return {"status": "failed", "error": str(e)}
+
+
+# ===========================================================================
+# Telegram notifications (Carmit bot) — match→Tal / hire events + daily summary
+# ===========================================================================
+
+async def _set_setting(sb, key: str, value: str) -> None:
+    """Upsert one system_settings row (best-effort)."""
+    try:
+        await sb.table("system_settings").upsert(
+            {"setting_key": key, "setting_value": value, "updated_at": datetime.utcnow().isoformat()},
+            on_conflict="setting_key",
+        ).execute()
+    except Exception as e:
+        logger.debug(f"_set_setting failed for {key}: {e}")
+
+
+async def _get_setting(sb, key: str) -> Any:
+    try:
+        r = await sb.table("system_settings").select("setting_value").eq(
+            "setting_key", key
+        ).limit(1).execute()
+        if r.data and r.data[0].get("setting_value") is not None:
+            val = r.data[0]["setting_value"]
+            if isinstance(val, str):
+                val = val.strip().strip('"').strip()
+            return val or None
+    except Exception as e:
+        logger.debug(f"_get_setting failed for {key}: {e}")
+    return None
+
+
+async def _notify_telegram_async() -> dict[str, Any]:
+    """Notify the admin (Telegram) about matches that newly entered 'sent_to_tal'
+    or 'hired', using an updated_at watermark so each transition fires once.
+
+    Skips quietly if the Telegram bot isn't configured. On first run after
+    configuration it sets the watermark to 'now' (no backlog blast)."""
+    try:
+        from pandapower.integrations.telegram_client import get_telegram_config, notify_admin_telegram
+
+        supabase_client = await get_supabase_client()
+        cfg = await get_telegram_config(supabase_client)
+        if not cfg.get("bot_token") or not cfg.get("admin_chat_id"):
+            return {"status": "skipped", "reason": "telegram not configured"}
+
+        WATERMARK_KEY = "telegram.notify_watermark"
+        watermark = await _get_setting(supabase_client, WATERMARK_KEY)
+        now_iso = datetime.utcnow().isoformat()
+
+        # First-time baseline: don't blast historical matches.
+        if not watermark:
+            await _set_setting(supabase_client, WATERMARK_KEY, now_iso)
+            return {"status": "completed", "notified": 0, "note": "watermark initialized"}
+
+        resp = await (
+            supabase_client.table("matches")
+            .select("id, candidate_id, job_id, match_score, current_state, updated_at")
+            .in_("current_state", ["sent_to_tal", "hired"])
+            .gt("updated_at", watermark)
+            .order("updated_at", desc=False)
+            .limit(50)
+            .execute()
+        )
+        rows = resp.data or []
+
+        notified = 0
+        max_ts = watermark
+        for m in rows:
+            ts = m.get("updated_at")
+            if ts and ts > max_ts:
+                max_ts = ts
+
+            # Resolve human-readable names (best-effort).
+            cand_name = str(m.get("candidate_id") or "")
+            job_name = str(m.get("job_id") or "")
+            try:
+                if m.get("candidate_id"):
+                    c = await supabase_client.table("candidates").select("name").eq(
+                        "id", m["candidate_id"]
+                    ).limit(1).execute()
+                    if c.data and c.data[0].get("name"):
+                        cand_name = c.data[0]["name"]
+            except Exception:
+                pass
+            try:
+                if m.get("job_id"):
+                    j = await supabase_client.table("jobs").select("job_title, title").eq(
+                        "id", m["job_id"]
+                    ).limit(1).execute()
+                    if j.data:
+                        job_name = j.data[0].get("job_title") or j.data[0].get("title") or job_name
+            except Exception:
+                pass
+
+            state = m.get("current_state")
+            if state == "sent_to_tal":
+                score = m.get("match_score")
+                score_txt = f" (ציון {round(float(score))})" if score is not None else ""
+                text = (
+                    f"🔔 <b>התאמה חדשה עברה לטל</b>\n"
+                    f"👤 {cand_name}\n"
+                    f"💼 {job_name}{score_txt}"
+                )
+            else:  # hired
+                text = (
+                    f"🎉 <b>גיוס הושלם!</b>\n"
+                    f"👤 {cand_name}\n"
+                    f"💼 {job_name}"
+                )
+
+            if await notify_admin_telegram(text, sb=supabase_client):
+                notified += 1
+
+        if max_ts != watermark:
+            await _set_setting(supabase_client, WATERMARK_KEY, max_ts)
+
+        return {"status": "completed", "notified": notified, "scanned": len(rows)}
+
+    except Exception as e:
+        logger.error(f"Telegram notify task failed: {e}", exc_info=True)
+        return {"status": "failed", "error": str(e)}
+
+
+async def _telegram_daily_summary_async() -> dict[str, Any]:
+    """Send a once-per-day Hebrew digest to the admin's Telegram chat.
+
+    Guarded by telegram.last_summary_date + a target UTC hour (06:00 ≈ 09:00
+    Israel). Skips quietly if not configured / already sent today / too early."""
+    try:
+        from pandapower.integrations.telegram_client import get_telegram_config, notify_admin_telegram
+
+        supabase_client = await get_supabase_client()
+        cfg = await get_telegram_config(supabase_client)
+        if not cfg.get("bot_token") or not cfg.get("admin_chat_id"):
+            return {"status": "skipped", "reason": "telegram not configured"}
+
+        now = datetime.utcnow()
+        today = now.date().isoformat()
+        last = await _get_setting(supabase_client, "telegram.last_summary_date")
+        if last == today:
+            return {"status": "skipped", "reason": "already sent today"}
+        if now.hour < 6:  # ~09:00 Israel; wait until then
+            return {"status": "skipped", "reason": "before summary hour"}
+
+        today_start = datetime(now.year, now.month, now.day).isoformat()
+
+        async def _count(table: str, **filters) -> int:
+            try:
+                q = supabase_client.table(table).select("id", count="exact")
+                for k, v in filters.items():
+                    if k.endswith("__gte"):
+                        q = q.gte(k[:-5], v)
+                    else:
+                        q = q.eq(k, v)
+                r = await q.execute()
+                return r.count if getattr(r, "count", None) else 0
+            except Exception:
+                return 0
+
+        emails_today = await _count("email_intake_log", status="success", processing_completed_at__gte=today_start)
+        found_today = await _count("matches", current_state="found", created_at__gte=today_start)
+        tal_today = await _count("agent_logs", action="handoff_to_tal", created_at__gte=today_start)
+        hired_today = await _count("matches", current_state="hired", updated_at__gte=today_start)
+
+        # Stalled processes from heartbeats.
+        stalled: list[str] = []
+        try:
+            hb = await supabase_client.table("scheduler_heartbeats").select(
+                "task_name, last_run_at, expected_interval_seconds"
+            ).execute()
+            for row in (hb.data or []):
+                lr = row.get("last_run_at")
+                interval = row.get("expected_interval_seconds") or 0
+                if lr and interval:
+                    try:
+                        last_dt = datetime.fromisoformat(lr.replace("Z", "+00:00")).replace(tzinfo=None)
+                        if (now - last_dt).total_seconds() > 2 * interval:
+                            stalled.append(row.get("task_name"))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        health_line = "✅ כל התהליכים תקינים" if not stalled else f"⚠️ תקועים: {', '.join(stalled)}"
+        text = (
+            f"📊 <b>סיכום יומי — {today}</b>\n\n"
+            f"📧 מיילים שנסרקו היום: {emails_today}\n"
+            f"🆕 התאמות חדשות: {found_today}\n"
+            f"🔔 עברו לטל: {tal_today}\n"
+            f"🎉 גיוסים שהושלמו: {hired_today}\n\n"
+            f"{health_line}"
+        )
+
+        sent = await notify_admin_telegram(text, sb=supabase_client)
+        if sent:
+            await _set_setting(supabase_client, "telegram.last_summary_date", today)
+            return {"status": "completed", "sent": True}
+        return {"status": "skipped", "reason": "send failed"}
+
+    except Exception as e:
+        logger.error(f"Telegram daily summary failed: {e}", exc_info=True)
+        return {"status": "failed", "error": str(e)}
