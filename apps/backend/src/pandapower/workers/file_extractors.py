@@ -51,6 +51,16 @@ def detect_file_format(content: bytes, filename: Optional[str] = None) -> str:
     if content[:4] == b"%PDF":
         return "pdf"
 
+    # Images (handled via ConvertAPI OCR — local stack can't read these):
+    if content[:3] == b"\xff\xd8\xff":            # JPEG
+        return "jpg"
+    if content[:8] == b"\x89PNG\r\n\x1a\n":       # PNG
+        return "png"
+    if content[:4] in (b"II*\x00", b"MM\x00*"):   # TIFF (LE / BE)
+        return "tiff"
+    if content[:4] == b"RIFF" and content[8:12] == b"WEBP":  # WEBP
+        return "webp"
+
     # RTF: {\rtf
     if content[:5] == b"{\\rtf":
         return "rtf"
@@ -490,9 +500,91 @@ async def extract_text_from_txt(content: bytes) -> tuple[str, str]:
 SUPPORTED_FORMATS = ("pdf", "docx", "doc", "rtf", "odt", "txt")
 
 
+_MIN_USEFUL_TEXT = 30  # chars; below this we treat extraction as a "miss"
+
+
+async def _try_convertapi(filename: str, content: bytes) -> Optional[str]:
+    """Attempt extraction via ConvertAPI. Returns text on success, else None.
+
+    Never raises — on any error/misconfig returns None so the caller uses the
+    local extractors. No-op when no secret is configured."""
+    try:
+        from pandapower.integrations.convertapi_client import (
+            ConvertApiClient,
+            convertapi_src_token,
+            get_convertapi_config,
+        )
+
+        cfg = await get_convertapi_config()
+        if not cfg.get("enabled") or not cfg.get("secret"):
+            return None
+
+        file_format = detect_file_format(content, filename=filename)
+        src = convertapi_src_token(file_format, filename)
+        if not src:
+            logger.info(f"ConvertAPI: no source mapping for {filename} (format={file_format})")
+            return None
+
+        client = ConvertApiClient(cfg["secret"])
+        try:
+            text = await client.to_text(content, src, ocr_languages=cfg.get("ocr_languages", "en,he"))
+        finally:
+            await client.close()
+
+        if text and len(text.strip()) >= _MIN_USEFUL_TEXT:
+            logger.info(f"ConvertAPI extracted {len(text)} chars from {filename} (src={src})")
+            return text
+        logger.info(f"ConvertAPI returned too little text for {filename} ({len(text or '')} chars)")
+        return None
+    except Exception as e:
+        logger.warning(f"ConvertAPI extraction failed for {filename} (falling back to local): {e}")
+        return None
+
+
 async def extract_text(filename: str, content: bytes) -> tuple[str, str]:
+    """Public orchestrator. Routes through ConvertAPI (managed OCR) per config,
+    with the local extractor stack as the safety net.
+
+    - mode "always":   ConvertAPI first; on miss/error → local extractors.
+    - mode "fallback": local extractors first; on miss/error → ConvertAPI.
+    - no secret:       behaves exactly like the local-only pipeline (no regression).
     """
-    Main orchestrator: detect format and extract text with fallback routing.
+    try:
+        from pandapower.integrations.convertapi_client import get_convertapi_config
+        cfg = await get_convertapi_config()
+        mode = (cfg.get("mode") or "always").lower()
+        enabled = bool(cfg.get("enabled") and cfg.get("secret"))
+    except Exception:
+        mode, enabled = "always", False
+
+    if enabled and mode != "fallback":
+        text = await _try_convertapi(filename, content)
+        if text is not None:
+            return text, "convertapi"
+        return await _extract_text_local(filename, content)
+
+    # fallback mode (or ConvertAPI disabled): try local first.
+    try:
+        text, method = await _extract_text_local(filename, content)
+        if text and len(text.strip()) >= _MIN_USEFUL_TEXT:
+            return text, method
+        local_result = (text, method)
+    except (ExtractorError, ExtractorTimeoutError):
+        local_result = None
+
+    if enabled:
+        ca_text = await _try_convertapi(filename, content)
+        if ca_text is not None:
+            return ca_text, "convertapi"
+
+    if local_result is not None:
+        return local_result
+    raise ExtractorFormatError(f"All extraction methods failed for {filename}")
+
+
+async def _extract_text_local(filename: str, content: bytes) -> tuple[str, str]:
+    """
+    Local-only orchestrator: detect format and extract text with fallback routing.
 
     Supports: PDF, DOCX, DOC (Word 97-2003), RTF, ODT, TXT.
 

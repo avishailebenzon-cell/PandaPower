@@ -75,6 +75,9 @@ class Settings(BaseSettings):
     CV_PARSE_MAX_RETRIES: int = 3
     CV_EXTRACT_TIMEOUT_SECONDS: int = 30
 
+    # ConvertAPI (CV text extraction with OCR — convertapi.com)
+    CONVERTAPI_SECRET: str = ""
+
     # Resend (transactional admin alerts via /admin/alerts)
     RESEND_API_KEY: str = ""
 
