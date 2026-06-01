@@ -170,6 +170,69 @@ async def run_now(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class ReingestRequest(BaseModel):
+    limit: int = 500
+
+
+class ReingestAutoRequest(BaseModel):
+    enabled: bool
+
+
+@router.post("/reingest-missed")
+async def reingest_missed(request: ReingestRequest) -> dict:
+    """Recover CVs from emails the original backfill dropped (status partial/failed).
+
+    Runs in the background so the HTTP call returns immediately; poll
+    /admin/email/reingest-status to watch progress."""
+    import asyncio as _asyncio
+    from pandapower.workers.tasks import _reingest_missed_async
+
+    limit = max(1, min(request.limit, 2000))
+    _asyncio.create_task(_reingest_missed_async(limit=limit))
+    return {"status": "started", "limit": limit,
+            "note": "השחזור רץ ברקע — עקוב ב-/admin/email/reingest-status"}
+
+
+@router.post("/reingest-auto")
+async def reingest_auto(request: ReingestAutoRequest, supabase_client=Depends(get_supabase_client)) -> dict:
+    """Turn the autonomous re-ingestion drain on/off (scheduler stage gate)."""
+    await supabase_client.table("system_settings").upsert(
+        {"setting_key": "reingest.enabled", "setting_value": "true" if request.enabled else "false",
+         "updated_at": datetime.utcnow().isoformat()},
+        on_conflict="setting_key",
+    ).execute()
+    return {"status": "ok", "enabled": request.enabled}
+
+
+@router.get("/reingest-status")
+async def reingest_status(supabase_client=Depends(get_supabase_client)) -> dict:
+    """Counts of remaining recoverable emails + capture totals."""
+    async def _count(table, **eq):
+        q = supabase_client.table(table).select("id", count="exact")
+        for k, v in eq.items():
+            q = q.eq(k, v)
+        r = await q.execute()
+        return getattr(r, "count", 0) or 0
+
+    partial = await _count("email_intake_log", status="partial")
+    failed = await _count("email_intake_log", status="failed")
+    cv_files = await _count("cv_files")
+    candidates = await _count("candidates")
+    enabled_row = await supabase_client.table("system_settings").select("setting_value").eq(
+        "setting_key", "reingest.enabled"
+    ).limit(1).execute()
+    enabled = bool(enabled_row.data) and (enabled_row.data[0].get("setting_value") or "").strip('"') == "true"
+
+    return {
+        "auto_enabled": enabled,
+        "partial_remaining": partial,
+        "failed_remaining": failed,
+        "recoverable_total": partial + failed,
+        "cv_files_total": cv_files,
+        "candidates_total": candidates,
+    }
+
+
 @router.get("/status", response_model=EmailStatusResponse)
 async def get_status(
     supabase_client=Depends(get_supabase_client),

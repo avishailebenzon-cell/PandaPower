@@ -1362,6 +1362,117 @@ async def _notify_telegram_async() -> dict[str, Any]:
         return {"status": "failed", "error": str(e)}
 
 
+async def _build_email_worker():
+    """Construct an EmailIngestWorker from stored Azure settings, or None."""
+    supabase_client = await get_supabase_client()
+    settings_response = await supabase_client.table("system_settings").select(
+        "setting_key, setting_value"
+    ).in_(
+        "setting_key",
+        ["azure.tenant_id", "azure.app_client_id", "azure.client_secret", "azure.target_mailbox"],
+    ).execute()
+    s = {}
+    for row in settings_response.data or []:
+        key = row["setting_key"].split(".")[-1]
+        val = row["setting_value"].strip('"') if isinstance(row["setting_value"], str) else row["setting_value"]
+        s[key] = val
+    if not all(k in s for k in ["tenant_id", "app_client_id", "client_secret", "target_mailbox"]):
+        return None, None
+    azure_client = AzureGraphClient(
+        tenant_id=s["tenant_id"], client_id=s["app_client_id"],
+        client_secret=s["client_secret"], target_mailbox=s["target_mailbox"],
+    )
+    storage_manager = SupabaseStorageManager(supabase_client)
+    worker = EmailIngestWorker(supabase_client, azure_client, storage_manager)
+    # _process_message relies on these semaphores (normally created in
+    # ingest_recent_emails) — create them since we call _process_message directly.
+    worker.download_semaphore = asyncio.Semaphore(worker.max_concurrent_downloads)
+    worker.upload_semaphore = asyncio.Semaphore(worker.max_concurrent_uploads)
+    return supabase_client, worker
+
+
+async def _reingest_missed_async(limit: int = 100) -> dict[str, Any]:
+    """Recover CVs from emails the original backfill dropped.
+
+    Targets email_intake_log rows with status in ('partial','failed') — these
+    carry real candidate CVs that were never stored. Re-fetches each message
+    from Graph and runs the normal _process_message (hash-dedup + retry), which
+    captures the attachment and updates the email status. Uses a received-date
+    watermark so each email is attempted once and the backlog drains forward.
+    Idempotent and safe to run repeatedly."""
+    try:
+        supabase_client, worker = await _build_email_worker()
+        if worker is None:
+            return {"status": "skipped", "reason": "Azure settings not configured"}
+
+        WATERMARK = "reingest.watermark"
+        watermark = await _get_setting(supabase_client, WATERMARK) or "1970-01-01T00:00:00+00:00"
+
+        resp = await (
+            supabase_client.table("email_intake_log")
+            .select("outlook_message_id, email_received_at, status")
+            .in_("status", ["partial", "failed"])
+            .gt("email_received_at", watermark)
+            .order("email_received_at", desc=False)
+            .limit(limit)
+            .execute()
+        )
+        rows = resp.data or []
+        if not rows:
+            return {"status": "completed", "reingested": 0, "cv_created": 0, "note": "backlog drained"}
+
+        sem = asyncio.Semaphore(6)  # bounded Graph concurrency
+        counters = {"reingested": 0, "cv_created": 0}
+        errors: list[str] = []
+        max_ts = watermark
+
+        async def _one(row):
+            nonlocal max_ts
+            mid = row.get("outlook_message_id")
+            ts = row.get("email_received_at")
+            if ts and ts > max_ts:
+                max_ts = ts
+            if not mid:
+                return
+            async with sem:
+                try:
+                    msg = await worker.azure.get_message_raw(mid)
+                    res = await worker._process_message(msg)
+                    counters["reingested"] += 1
+                    counters["cv_created"] += int(res.get("cv_count", 0) or 0)
+                except Exception as e:
+                    errors.append(f"{mid[:20]}: {str(e)[:120]}")
+
+        await asyncio.gather(*[_one(r) for r in rows])
+
+        if max_ts != watermark:
+            await _set_setting(supabase_client, WATERMARK, max_ts)
+
+        return {
+            "status": "completed",
+            "reingested": counters["reingested"],
+            "cv_created": counters["cv_created"],
+            "scanned": len(rows),
+            "errors": errors[:10],
+        }
+    except Exception as e:
+        logger.error(f"Reingest-missed failed: {e}", exc_info=True)
+        return {"status": "failed", "error": str(e)}
+
+
+async def _reingest_missed_scheduled_async() -> dict[str, Any]:
+    """Scheduler wrapper: only drains when reingest.enabled == 'true'."""
+    try:
+        supabase_client = await get_supabase_client()
+        enabled = (await _get_setting(supabase_client, "reingest.enabled") or "false").lower() == "true"
+        if not enabled:
+            return {"status": "skipped", "reason": "reingest disabled"}
+        return await _reingest_missed_async(limit=100)
+    except Exception as e:
+        logger.error(f"Reingest scheduled failed: {e}", exc_info=True)
+        return {"status": "failed", "error": str(e)}
+
+
 async def _telegram_daily_summary_async() -> dict[str, Any]:
     """Send a once-per-day Hebrew digest to the admin's Telegram chat.
 

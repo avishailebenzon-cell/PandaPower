@@ -26,6 +26,7 @@ import { AnalyticsDashboard } from '@/pages/admin/AnalyticsDashboard'
 import { SystemHealthPage } from '@/pages/admin/SystemHealthPage'
 import { TelegramBotPage } from '@/pages/admin/TelegramBotPage'
 import { ConvertApiPage } from '@/pages/admin/ConvertApiPage'
+import { ReingestPage } from '@/pages/admin/ReingestPage'
 import WhatsAppAgentsSettingsPage from '@/pages/admin/WhatsAppAgentsSettingsPage'
 import { PipedriveConfigPage } from '@/pages/admin/PipedriveConfigPage'
 import { PandiPage } from '@/pages/admin/PandiPage'
@@ -82,6 +83,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             <Route path="/admin/system-health" element={<ProtectedRoute><SystemHealthPage /></ProtectedRoute>} />
             <Route path="/admin/telegram-bot" element={<ProtectedRoute><TelegramBotPage /></ProtectedRoute>} />
             <Route path="/admin/convertapi" element={<ProtectedRoute><ConvertApiPage /></ProtectedRoute>} />
+            <Route path="/admin/reingest" element={<ProtectedRoute><ReingestPage /></ProtectedRoute>} />
             <Route path="/admin/match-flow" element={<ProtectedRoute><MatchFlowDashboard /></ProtectedRoute>} />
             <Route path="/admin/whatsapp-agents" element={<ProtectedRoute><WhatsAppAgentsSettingsPage /></ProtectedRoute>} />
           </Route>

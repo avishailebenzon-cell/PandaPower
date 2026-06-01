@@ -208,6 +208,7 @@ async def _pipeline_scheduler_loop():
         _pipedrive_historical_import_async,
         _notify_telegram_async,
         _telegram_daily_summary_async,
+        _reingest_missed_scheduled_async,
     )
 
     # Each stage: (async factory, interval seconds, initial stagger offset).
@@ -230,6 +231,8 @@ async def _pipeline_scheduler_loop():
         # Telegram (Carmit bot): notify match→Tal / hires, and a once-a-day digest.
         "notify_telegram":       (_notify_telegram_async,          120.0,    55.0),
         "telegram_daily_summary": (_telegram_daily_summary_async,  900.0,    140.0),
+        # Recover CVs the original backfill dropped (gated by reingest.enabled).
+        "reingest_missed":       (_reingest_missed_scheduled_async, 120.0,   70.0),
     }
 
     intervals = {name: spec[1] for name, spec in stages.items()}

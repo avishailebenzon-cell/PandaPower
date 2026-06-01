@@ -111,6 +111,11 @@ export function AdminLayout() {
               </a>
             </li>
             <li>
+              <a href="/admin/reingest" className="block px-3 py-2 rounded text-slate-300 hover:bg-slate-800 transition">
+                ♻️ שחזור קורות חיים אבודים
+              </a>
+            </li>
+            <li>
               <a href="/admin/job-match-status" className="block px-3 py-2 rounded text-slate-300 hover:bg-slate-800 transition">
                 ניהול משרות וביצוע התאמות
               </a>

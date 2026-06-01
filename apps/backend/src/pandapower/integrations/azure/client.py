@@ -166,6 +166,18 @@ class AzureGraphClient:
         data = await self._make_request("GET", url)
         return Email(**data)
 
+    async def get_message_raw(self, message_id: str) -> dict[str, Any]:
+        """Return the raw Graph message dict (with attachment metadata expanded).
+
+        Shape matches what list_messages yields, so it can be fed directly into
+        EmailIngestWorker._process_message for re-ingestion."""
+        url = (
+            f"{GRAPH_API_BASE}/users/{self.target_mailbox}/messages/{message_id}"
+            f"?$select=id,internetMessageId,subject,from,receivedDateTime,bodyPreview"
+            f"&$expand=attachments($select=id,name,contentType,size)"
+        )
+        return await self._make_request("GET", url)
+
     async def list_attachments(self, message_id: str) -> list[AttachmentMetadata]:
         url = (
             f"{GRAPH_API_BASE}/users/{self.target_mailbox}/messages/{message_id}/attachments"

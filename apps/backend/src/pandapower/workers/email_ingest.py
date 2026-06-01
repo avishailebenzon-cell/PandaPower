@@ -284,17 +284,32 @@ class EmailIngestWorker:
 
             processed_attachments = await asyncio.gather(*attachment_tasks, return_exceptions=True)
 
+            attachment_errors = 0
             for processed in processed_attachments:
                 if isinstance(processed, Exception):
                     logger.error(f"Error processing attachment: {processed}")
+                    attachment_errors += 1
                     continue
                 result["cv_count"] += processed["created"]
                 result["duplicates"] += processed["duplicates"]
 
-            # Update email_intake_log
+            # Status semantics (made trustworthy + retryable):
+            #   success – a CV file was stored, or it was a known duplicate
+            #             (already captured earlier) → nothing more to do.
+            #   failed  – we had CV attachments but stored none AND hit errors →
+            #             RETRYABLE: the reingest drain re-attempts 'failed' rows.
+            #             (Previously this was silently marked 'partial' and the
+            #             CV was lost forever — the root cause of ~31K dropped CVs.)
+            if result["cv_count"] > 0 or result["duplicates"] > 0:
+                new_status = "success"
+            elif attachment_errors > 0:
+                new_status = "failed"
+            else:
+                new_status = "partial"
+
             await self.supabase.table("email_intake_log").update(
                 {
-                    "status": "success" if result["cv_count"] > 0 else "partial",
+                    "status": new_status,
                     "cv_files_extracted": result["cv_count"],
                     "processing_completed_at": datetime.utcnow().isoformat(),
                 }
@@ -403,8 +418,22 @@ class EmailIngestWorker:
                     await self.storage.upload_file(storage_path, file_content, content_type)
                     logger.debug(f"Upload completed")
             except Exception as e:
-                # If file already exists in storage (409 Duplicate), that's OK - we'll still create the DB record
+                # A "409/duplicate" means the object key already exists. Previously
+                # we blindly created the DB record on 409 — but if that prior
+                # object was never really written, we ended up with cv_files rows
+                # pointing at missing files ("Object not found" at parse time).
+                # Verify the object actually exists; if not, re-raise so the
+                # retry wrapper re-uploads it.
                 if "409" in str(e) or "duplicate" in str(e).lower():
+                    exists = False
+                    try:
+                        await self.storage.download_file(storage_path)
+                        exists = True
+                    except Exception:
+                        exists = False
+                    if not exists:
+                        logger.warning(f"Storage 409 but object missing, re-raising to retry: {storage_path}")
+                        raise
                     logger.debug(f"File already exists in storage: {storage_path}")
                 else:
                     # For other upload errors, re-raise
@@ -486,7 +515,9 @@ class EmailIngestWorker:
         # This converts "קורות חיים.pdf" to "%D7%A7%D7%95%D7%A8%D7%95%D7%AA%20%D7%97%D7%99%D7%99%D7%9D.pdf"
         return quote(filename, safe='.')
 
-    # Supported CV file extensions
+    # Supported CV file extensions. Images are now accepted because CV text
+    # extraction runs through ConvertAPI OCR (see integrations/convertapi_client.py),
+    # so photographed / scanned-image résumés are recoverable.
     CV_EXTENSIONS = (
         ".pdf",
         ".doc",
@@ -494,6 +525,12 @@ class EmailIngestWorker:
         ".rtf",
         ".odt",
         ".txt",
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".tif",
+        ".tiff",
+        ".webp",
     )
 
     # MIME types that indicate a CV-compatible document.
@@ -529,10 +566,12 @@ class EmailIngestWorker:
         "application/x-zip-compressed",
     )
 
-    # Extensions that should NEVER be treated as a CV even if MIME looks OK
-    # (prevents false positives on signature images, calendar invites, etc.)
+    # Extensions that should NEVER be treated as a CV even if MIME looks OK.
+    # NOTE: common résumé image formats (jpg/png/tiff/webp) were removed here and
+    # added to CV_EXTENSIONS — ConvertAPI OCR can read them. We still reject
+    # tiny/non-document images like gif/bmp/svg and all clearly-non-CV types.
     NON_CV_EXTENSIONS = (
-        ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".tif", ".tiff",
+        ".gif", ".bmp", ".svg",
         ".ics", ".vcf", ".eml", ".msg",
         ".xls", ".xlsx", ".csv",
         ".ppt", ".pptx",
