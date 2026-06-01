@@ -40,6 +40,8 @@ async def _ingest_emails_async(batch_size: int = 20) -> dict[str, Any]:
                 "azure.app_client_id",
                 "azure.client_secret",
                 "azure.target_mailbox",
+                "azure.backfill_start_date",
+                "azure.last_seen_message_received_at",
             ],
         ).execute()
 
@@ -53,6 +55,18 @@ async def _ingest_emails_async(batch_size: int = 20) -> dict[str, Any]:
             logger.warning("Azure settings not fully configured, skipping email ingest")
             return {"status": "skipped", "reason": "Azure settings not configured"}
 
+        # Detect if we're in backfill mode
+        # Backfill mode is active when:
+        # 1. backfill_start_date is set AND
+        # 2. last_seen is null (not yet started) OR we're still processing historical emails
+        is_backfill = False
+        if settings_dict.get("backfill_start_date") and settings_dict.get("backfill_start_date") != "null":
+            # Only consider it backfill if last_seen is not set yet or is set to null
+            last_seen_value = settings_dict.get("last_seen_message_received_at", "null")
+            is_backfill = last_seen_value == "null" or last_seen_value is None
+            if is_backfill:
+                logger.info(f"Backfill mode detected: will process more emails per run for faster historical scanning")
+
         azure_client = AzureGraphClient(
             tenant_id=settings_dict["tenant_id"],
             client_id=settings_dict["app_client_id"],
@@ -61,7 +75,7 @@ async def _ingest_emails_async(batch_size: int = 20) -> dict[str, Any]:
         )
 
         storage_manager = SupabaseStorageManager(supabase_client)
-        worker = EmailIngestWorker(supabase_client, azure_client, storage_manager)
+        worker = EmailIngestWorker(supabase_client, azure_client, storage_manager, is_backfill=is_backfill)
         result = await worker.ingest_recent_emails(batch_size=batch_size)
 
         return {
@@ -78,12 +92,20 @@ async def _ingest_emails_async(batch_size: int = 20) -> dict[str, Any]:
 
 
 @app.task(bind=True, max_retries=3)
-def ingest_emails_task(self, batch_size: int = 50) -> dict[str, Any]:
+def ingest_emails_task(self, batch_size: int = 20) -> dict[str, Any]:
     """Celery task to ingest emails every 2 minutes.
 
-    During backfill, processes batches of ~50 messages per run to efficiently
-    handle large historical email archives (5+ year backfill). Increased from 20
-    to accelerate candidate acquisition during bootstrap phase.
+    During backfill mode (when azure.backfill_start_date is set):
+    - Processes up to 500 emails per run
+    - Uses higher concurrency (10 concurrent downloads/uploads)
+    - Aims for 15k-30k emails/hour to complete 5+ year backfill quickly
+
+    During incremental mode (normal operation):
+    - Processes up to 100 emails per run
+    - Uses conservative concurrency (3 concurrent downloads/uploads)
+    - Focuses on recent emails to avoid Celery task timeouts
+
+    The mode is auto-detected based on system_settings.
     """
     logger.info(f"Starting email ingest task with batch_size={batch_size}")
     try:

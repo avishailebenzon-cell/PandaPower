@@ -12,9 +12,19 @@ from pandapower.integrations.supabase_storage import SupabaseStorageManager
 logger = logging.getLogger(__name__)
 
 # Concurrent limits for API calls
-MAX_CONCURRENT_DOWNLOADS = 3
-MAX_CONCURRENT_UPLOADS = 3
+# During backfill (historical scan), we can be more aggressive
+# During incremental (recent emails), we stay conservative to avoid hammering Azure
+MAX_CONCURRENT_DOWNLOADS_INCREMENTAL = 3
+MAX_CONCURRENT_DOWNLOADS_BACKFILL = 10
+MAX_CONCURRENT_UPLOADS_INCREMENTAL = 3
+MAX_CONCURRENT_UPLOADS_BACKFILL = 10
 MAX_ATTACHMENT_SIZE_MB = 50
+
+# Batch processing limits
+# During backfill, process up to 500 emails per run to accelerate historical scanning
+# During incremental, keep conservative to avoid long Celery task execution
+MAX_EMAILS_PER_RUN_INCREMENTAL = 100
+MAX_EMAILS_PER_RUN_BACKFILL = 500
 
 
 class EmailIngestWorker:
@@ -23,10 +33,22 @@ class EmailIngestWorker:
         supabase_client: Any,
         azure_client: AzureGraphClient,
         storage_manager: SupabaseStorageManager,
+        is_backfill: bool = False,
     ):
         self.supabase = supabase_client
         self.azure = azure_client
         self.storage = storage_manager
+        self.is_backfill = is_backfill
+
+        # Set concurrency limits based on backfill mode
+        if is_backfill:
+            self.max_concurrent_downloads = MAX_CONCURRENT_DOWNLOADS_BACKFILL
+            self.max_concurrent_uploads = MAX_CONCURRENT_UPLOADS_BACKFILL
+            self.max_emails_per_run = MAX_EMAILS_PER_RUN_BACKFILL
+        else:
+            self.max_concurrent_downloads = MAX_CONCURRENT_DOWNLOADS_INCREMENTAL
+            self.max_concurrent_uploads = MAX_CONCURRENT_UPLOADS_INCREMENTAL
+            self.max_emails_per_run = MAX_EMAILS_PER_RUN_INCREMENTAL
 
     async def ingest_recent_emails(self, batch_size: int = 20) -> dict[str, Any]:
         """Poll and ingest recent emails from target mailbox.
@@ -34,6 +56,10 @@ class EmailIngestWorker:
         Args:
             batch_size: Number of messages to process per batch (optimal for backfill)
         """
+        # Create semaphores for concurrency control
+        self.download_semaphore = asyncio.Semaphore(self.max_concurrent_downloads)
+        self.upload_semaphore = asyncio.Semaphore(self.max_concurrent_uploads)
+
         result = {
             "total_processed": 0,
             "cv_files_extracted": 0,
@@ -141,9 +167,11 @@ class EmailIngestWorker:
                     logger.info(f"Completed batch of {processed_batch} messages, no more pages")
                     break
 
-                # Limit batch size to avoid memory issues
-                if processed_batch >= batch_size * 5:  # Stop after ~100 messages per run
-                    logger.info(f"Reached batch limit ({processed_batch} messages), will continue in next run")
+                # Limit emails per run based on backfill mode
+                # During backfill (historical scan), process up to 500 emails per run
+                # During incremental (recent), keep at 100 to avoid long task execution
+                if processed_batch >= self.max_emails_per_run:
+                    logger.info(f"Reached max emails per run limit ({processed_batch}/{self.max_emails_per_run}), will continue in next run (backfill_mode={self.is_backfill})")
                     break
 
             # Update last seen timestamp
@@ -332,9 +360,10 @@ class EmailIngestWorker:
 
             logger.debug(f"Processing attachment: {filename} ({content_type}, {size_bytes} bytes)")
 
-            # Download file
-            file_content = await self.azure.download_attachment(message_id, attachment_id)
-            logger.debug(f"Downloaded {len(file_content)} bytes")
+            # Download file with concurrency control
+            async with self.download_semaphore:
+                file_content = await self.azure.download_attachment(message_id, attachment_id)
+                logger.debug(f"Downloaded {len(file_content)} bytes")
 
             # Calculate SHA-256
             file_hash = hashlib.sha256(file_content).hexdigest()
@@ -370,8 +399,9 @@ class EmailIngestWorker:
             storage_path = f"cvs/outlook/{datetime.now().year}/{datetime.now().month:02d}/{file_hash}/{safe_filename}"
             logger.debug(f"Uploading to storage: {storage_path}")
             try:
-                await self.storage.upload_file(storage_path, file_content, content_type)
-                logger.debug(f"Upload completed")
+                async with self.upload_semaphore:
+                    await self.storage.upload_file(storage_path, file_content, content_type)
+                    logger.debug(f"Upload completed")
             except Exception as e:
                 # If file already exists in storage (409 Duplicate), that's OK - we'll still create the DB record
                 if "409" in str(e) or "duplicate" in str(e).lower():
