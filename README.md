@@ -204,6 +204,7 @@ See [Phase 3 deployment docs](./docs/runbooks/) for instructions on deploying to
 - **CLAUDE.md** — Complete system specification
 - **FRONTEND_SETUP.md** — Frontend setup guide with automation scripts
 - **FRONTEND_API_VALIDATION.md** — API configuration & troubleshooting
+- **EMAIL_BACKFILL_GUIDE.md** — Historical email scanning with 5-10x performance boost
 - **docs/decisions/** — Architecture decision records
 - **docs/prompts/** — LLM prompt templates
 - **docs/runbooks/** — Operations & troubleshooting guides
