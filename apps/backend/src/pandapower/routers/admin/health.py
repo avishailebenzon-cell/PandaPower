@@ -151,13 +151,19 @@ async def scheduler_heartbeat():
     tasks: List[TaskHeartbeat] = []
     stalled_count = 0
     failing_count = 0
+    pending_count = 0  # ran-never-yet since monitoring started (not an error)
 
     for task_name, meta in SCHEDULED_TASKS.items():
         row = rows_by_task.get(task_name)
         interval = (row or {}).get("expected_interval_seconds") or meta["interval"]
         last_run_at_str = (row or {}).get("last_run_at")
         seconds_since = None
-        is_stalled = True  # no heartbeat yet => stalled until proven otherwise
+        # A task is "stalled" ONLY if it has run before but its last run is too
+        # old. A task that has NEVER written a heartbeat is "pending" (e.g. a
+        # long-interval task right after a deploy, or just after the heartbeat
+        # table was created) — that is NOT an error and must not be flagged as
+        # stalled, otherwise the dashboard goes red on every fresh boot.
+        is_stalled = False
 
         if last_run_at_str:
             try:
@@ -168,10 +174,12 @@ async def scheduler_heartbeat():
                 is_stalled = seconds_since > (2 * interval)
             except Exception:
                 seconds_since = None
-                is_stalled = True
+                is_stalled = False
 
         consecutive_failures = (row or {}).get("consecutive_failures", 0) or 0
-        if is_stalled:
+        if last_run_at_str is None:
+            pending_count += 1
+        elif is_stalled:
             stalled_count += 1
         if consecutive_failures >= 3:
             failing_count += 1
@@ -188,15 +196,25 @@ async def scheduler_heartbeat():
             last_error=(row or {}).get("last_error"),
         ))
 
+    ran_count = len(tasks) - pending_count
     if stalled_count == 0 and failing_count == 0:
         overall = "healthy"
-        summary = f"כל {len(tasks)} התהליכים פעילים ורצים בזמן."
-    elif stalled_count >= len(tasks) // 2:
+        if pending_count == 0:
+            summary = f"כל {len(tasks)} התהליכים פעילים ורצים בזמן."
+        else:
+            summary = (
+                f"{ran_count}/{len(tasks)} תהליכים רצו ומדווחים תקין; "
+                f"{pending_count} ממתינים להרצה ראשונה (מרווח ארוך / לאחר פריסה)."
+            )
+    elif stalled_count >= max(1, len(tasks) // 2):
         overall = "error"
         summary = f"{stalled_count} תהליכים תקועים — ייתכן שה-scheduler לא רץ."
     else:
         overall = "degraded"
-        summary = f"{stalled_count} תקועים, {failing_count} עם כשלים חוזרים מתוך {len(tasks)}."
+        summary = (
+            f"{stalled_count} תקועים, {failing_count} עם כשלים חוזרים, "
+            f"{pending_count} ממתינים — מתוך {len(tasks)}."
+        )
 
     return SchedulerHeartbeatResponse(
         timestamp=now.isoformat(),

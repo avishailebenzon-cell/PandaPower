@@ -48,6 +48,8 @@ function statusBadge(task: TaskHeartbeat): { text: string; cls: string } {
   if (task.is_stalled) return { text: "תקוע", cls: "bg-red-100 text-red-800 border-red-300" };
   if (task.consecutive_failures >= 3)
     return { text: "כשלים חוזרים", cls: "bg-red-100 text-red-800 border-red-300" };
+  if (!task.last_run_at)
+    return { text: "ממתין להרצה", cls: "bg-blue-100 text-blue-800 border-blue-300" };
   if (task.last_status === "failed" || task.last_status === "crashed")
     return { text: "כשל אחרון", cls: "bg-amber-100 text-amber-800 border-amber-300" };
   if (task.last_status === "skipped")
