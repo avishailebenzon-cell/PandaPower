@@ -18,7 +18,22 @@ else:
     app.conf.broker_url = "memory://"
     app.conf.result_backend = "cache+memory://"
 
-app.conf.beat_schedule = {
+# ---------------------------------------------------------------------------
+# Celery Beat is RETIRED as of Session 36. All recurring work now runs in the
+# always-on in-process scheduler inside the web service (apps/.../main.py
+# _pipeline_scheduler_loop). This is the single authoritative executor — it
+# removes the separate-worker single-point-of-failure that silently stopped the
+# matching pipeline, and avoids double-execution of the non-idempotent matching
+# tasks (carmit_route_jobs / carmit_review_matches).
+#
+# The schedule below is therefore gated behind ENABLE_CELERY_BEAT (default OFF).
+# The task DEFINITIONS remain importable for ad-hoc/manual use (.delay() or
+# direct calls). Do NOT set ENABLE_CELERY_BEAT=true while the in-process
+# scheduler is running, or matching tasks will double-run.
+# ---------------------------------------------------------------------------
+_enable_beat = os.getenv("ENABLE_CELERY_BEAT", "false").lower() == "true"
+
+_beat_schedule = {
     "ingest-emails-every-2-minutes": {
         "task": "pandapower.workers.tasks.ingest_emails_task",
         "schedule": 120.0,  # Run every 120 seconds
@@ -102,6 +117,11 @@ app.conf.beat_schedule = {
         "schedule": 60.0,  # Tick every minute - the task itself decides what (if anything) to run
     },
 }
+
+# Only register the beat schedule if explicitly enabled. By default it's empty,
+# so a Celery worker (if ever started) acts purely as an on-demand task runner
+# and does NOT compete with the in-process scheduler.
+app.conf.beat_schedule = _beat_schedule if _enable_beat else {}
 
 app.conf.timezone = "UTC"
 

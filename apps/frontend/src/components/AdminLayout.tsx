@@ -45,6 +45,11 @@ export function AdminLayout() {
                 🔔 התראות מערכת
               </a>
             </li>
+            <li>
+              <a href="/admin/system-health" className="block px-3 py-2 rounded text-slate-300 hover:bg-slate-800 transition">
+                🩺 ניטור מערכת
+              </a>
+            </li>
 
             {/* Pipedrive Data Display */}
             <div className="pt-4 pb-1 px-3 font-semibold text-green-400 border-t border-slate-700">

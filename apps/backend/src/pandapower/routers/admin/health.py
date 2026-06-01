@@ -83,7 +83,127 @@ class SystemStatsResponse(BaseModel):
     uptime_percent: float
 
 
+class TaskHeartbeat(BaseModel):
+    """Health of a single scheduled task."""
+    task_name: str
+    label: str
+    last_run_at: Optional[str] = None
+    last_status: Optional[str] = None  # completed | skipped | failed | crashed
+    consecutive_failures: int = 0
+    expected_interval_seconds: Optional[int] = None
+    seconds_since_last_run: Optional[float] = None
+    is_stalled: bool = False
+    last_error: Optional[str] = None
+
+
+class SchedulerHeartbeatResponse(BaseModel):
+    """All scheduled tasks' health, for the system monitoring dashboard."""
+    timestamp: str
+    overall_status: str  # "healthy" | "degraded" | "error"
+    summary: str
+    tasks: List[TaskHeartbeat]
+
+
+# Human-friendly labels + the full roster of tasks the in-process scheduler
+# runs (apps/backend/src/pandapower/main.py). Listed here so the dashboard shows
+# a row for every task even before its first heartbeat is written (= "never
+# run", surfaced as stalled). Keep in sync with _pipeline_scheduler_loop.stages.
+SCHEDULED_TASKS: Dict[str, Dict[str, Any]] = {
+    "ingest": {"label": "קליטת מיילים (Outlook)", "interval": 120},
+    "parse": {"label": "ניתוח קורות חיים (CV)", "interval": 180},
+    "candidates": {"label": "יצירת מועמדים", "interval": 240},
+    "skills": {"label": "נרמול כישורים", "interval": 600},
+    "score": {"label": "דירוג מועמדים", "interval": 3600},
+    "carmit_route_jobs": {"label": "כרמית — ראוטינג משרות", "interval": 600},
+    "carmit_review_matches": {"label": "כרמית — סקירת התאמות", "interval": 900},
+    "carmit_handoff_to_tal": {"label": "כרמית — העברה לטל", "interval": 600},
+    "pipeline_watchdog": {"label": "Watchdog — ריפוי עצמי", "interval": 1800},
+    "pipedrive_field_sync": {"label": "Pipedrive — סנכרון שדות", "interval": 3600},
+    "pipedrive_historical_import": {"label": "Pipedrive — ייבוא היסטורי", "interval": 14400},
+}
+
+
 # Endpoints
+
+
+@router.get("/system/heartbeat", response_model=SchedulerHeartbeatResponse)
+async def scheduler_heartbeat():
+    """Real per-task health for ALL scheduled processes.
+
+    Reads the scheduler_heartbeats table (written by the in-process scheduler on
+    every run) and flags any task whose last run is older than 2x its expected
+    interval as stalled. This is the single endpoint that answers "is the whole
+    automation actually running right now?".
+    """
+    now = datetime.utcnow()
+    rows_by_task: Dict[str, Dict[str, Any]] = {}
+
+    try:
+        supabase = await get_supabase_client()
+        resp = await supabase.table("scheduler_heartbeats").select("*").execute()
+        for row in (resp.data or []):
+            rows_by_task[row["task_name"]] = row
+    except Exception as e:
+        # Table may not exist yet (migration not applied) — degrade gracefully:
+        # every task shows as "never run / stalled" rather than 500-ing.
+        logger.warning(f"Could not read scheduler_heartbeats: {e}")
+
+    tasks: List[TaskHeartbeat] = []
+    stalled_count = 0
+    failing_count = 0
+
+    for task_name, meta in SCHEDULED_TASKS.items():
+        row = rows_by_task.get(task_name)
+        interval = (row or {}).get("expected_interval_seconds") or meta["interval"]
+        last_run_at_str = (row or {}).get("last_run_at")
+        seconds_since = None
+        is_stalled = True  # no heartbeat yet => stalled until proven otherwise
+
+        if last_run_at_str:
+            try:
+                last_dt = datetime.fromisoformat(last_run_at_str.replace("Z", "+00:00"))
+                # Compare in naive-UTC space to avoid tz mismatch.
+                last_naive = last_dt.replace(tzinfo=None)
+                seconds_since = (now - last_naive).total_seconds()
+                is_stalled = seconds_since > (2 * interval)
+            except Exception:
+                seconds_since = None
+                is_stalled = True
+
+        consecutive_failures = (row or {}).get("consecutive_failures", 0) or 0
+        if is_stalled:
+            stalled_count += 1
+        if consecutive_failures >= 3:
+            failing_count += 1
+
+        tasks.append(TaskHeartbeat(
+            task_name=task_name,
+            label=meta["label"],
+            last_run_at=last_run_at_str,
+            last_status=(row or {}).get("last_status"),
+            consecutive_failures=consecutive_failures,
+            expected_interval_seconds=interval,
+            seconds_since_last_run=seconds_since,
+            is_stalled=is_stalled,
+            last_error=(row or {}).get("last_error"),
+        ))
+
+    if stalled_count == 0 and failing_count == 0:
+        overall = "healthy"
+        summary = f"כל {len(tasks)} התהליכים פעילים ורצים בזמן."
+    elif stalled_count >= len(tasks) // 2:
+        overall = "error"
+        summary = f"{stalled_count} תהליכים תקועים — ייתכן שה-scheduler לא רץ."
+    else:
+        overall = "degraded"
+        summary = f"{stalled_count} תקועים, {failing_count} עם כשלים חוזרים מתוך {len(tasks)}."
+
+    return SchedulerHeartbeatResponse(
+        timestamp=now.isoformat(),
+        overall_status=overall,
+        summary=summary,
+        tasks=tasks,
+    )
 
 @router.get("/health", response_model=SystemHealthResponse)
 async def system_health_check():
@@ -189,66 +309,71 @@ async def system_health_check():
 @router.get("/pipeline-status", response_model=PipelineStatusResponse)
 async def pipeline_status():
     """
-    Get pipeline queue status by state
-
-    Returns mock data for now (database tables may not exist yet)
-    Will be updated with real database queries once tables are created
+    Get pipeline queue status by state — real counts from the matches table.
     """
 
-    # Define all states in order
+    # Define all states in order. Terminal states don't count as bottlenecks.
     STATES = [
-        ("found", "התאמה נמצאה"),
-        ("carmit_approved", "אושרה על ידי כרמית"),
-        ("sent_to_tal", "הועברה לטל"),
-        ("tal_conversation", "שיחה עם טל"),
-        ("tal_approved", "אושר על ידי טל"),
-        ("sent_to_elad", "הועבר לאלעד"),
-        ("elad_conversation", "שיחה עם אלעד"),
-        ("offer_sent", "הצעה נשלחה ללקוח"),
-        ("hired", "התקבל לעבודה"),
-        ("placement_failed", "ממקום נכשל"),
-        ("carmit_rejected", "נדחה על ידי כרמית"),
-        ("tal_rejected", "נדחה על ידי טל"),
+        ("found", "התאמה נמצאה", False),
+        ("carmit_approved", "אושרה על ידי כרמית", False),
+        ("sent_to_tal", "הועברה לטל", False),
+        ("tal_conversation", "שיחה עם טל", False),
+        ("tal_approved", "אושר על ידי טל", False),
+        ("sent_to_elad", "הועבר לאלעד", False),
+        ("elad_conversation", "שיחה עם אלעד", False),
+        ("offer_sent", "הצעה נשלחה ללקוח", False),
+        ("hired", "התקבל לעבודה", True),
+        ("placement_failed", "מימוש נכשל", True),
+        ("carmit_rejected", "נדחה על ידי כרמית", True),
+        ("tal_rejected", "נדחה על ידי טל", True),
     ]
 
-    # Mock data (replace with real database queries once tables exist)
-    mock_distribution = {
-        "found": 5,
-        "carmit_approved": 3,
-        "sent_to_tal": 2,
-        "tal_conversation": 1,
-        "tal_approved": 0,
-        "sent_to_elad": 0,
-        "elad_conversation": 0,
-        "offer_sent": 0,
-        "hired": 0,
-        "placement_failed": 0,
-        "carmit_rejected": 2,
-        "tal_rejected": 0,
-    }
+    distribution: Dict[str, int] = {code: 0 for code, _, _ in STATES}
 
-    total_matches = sum(mock_distribution.values())
+    try:
+        supabase = await get_supabase_client()
+        # One count query per state (small, fixed number of states).
+        for code, _label, _terminal in STATES:
+            try:
+                resp = supabase.table("matches").select("id", count="exact").eq(
+                    "current_state", code
+                ).execute()
+                distribution[code] = resp.count if hasattr(resp, "count") and resp.count else 0
+            except Exception as e:
+                logger.warning(f"pipeline-status count failed for {code}: {e}")
+    except Exception as e:
+        logger.error(f"pipeline-status: DB unavailable: {e}")
+
+    total_matches = sum(distribution.values())
     stages = []
-    recommendations = []
+    bottleneck: Optional[str] = None
+    max_active_count = 0
 
-    for state_code, state_label in STATES:
-        count = mock_distribution.get(state_code, 0)
+    for state_code, state_label, is_terminal in STATES:
+        count = distribution.get(state_code, 0)
         percentage = (count / total_matches * 100) if total_matches > 0 else 0
-
         stages.append(PipelineStageCount(
             stage=state_code,
             stage_label=state_label,
             count=count,
             percentage=round(percentage, 2),
-            avg_wait_time_hours=round(1.5 if count > 0 else 0, 2)
+            avg_wait_time_hours=0.0,
         ))
+        # Bottleneck = the non-terminal stage holding the most matches.
+        if not is_terminal and count > max_active_count:
+            max_active_count = count
+            bottleneck = state_label
 
-    # Calculate conversion rate
-    hired_count = mock_distribution.get("hired", 0)
+    hired_count = distribution.get("hired", 0)
     conversion_rate = (hired_count / total_matches * 100) if total_matches > 0 else 0
 
-    recommendations.append("✅ Pipeline flowing smoothly (using mock data)")
-    recommendations.append("💡 Generate test data with: python3 scripts/generate_test_data.py")
+    recommendations = []
+    if total_matches == 0:
+        recommendations.append("אין התאמות פעילות במערכת כרגע.")
+    elif bottleneck:
+        recommendations.append(f"צוואר בקבוק נוכחי: '{bottleneck}' ({max_active_count} התאמות).")
+    else:
+        recommendations.append("הפייפליין זורם — אין צוואר בקבוק פעיל.")
 
     return PipelineStatusResponse(
         timestamp=datetime.utcnow().isoformat(),
@@ -263,78 +388,87 @@ async def pipeline_status():
 @router.get("/agents/status", response_model=AgentStatusResponse)
 async def agents_status():
     """
-    Get agent activity and success rates
-
-    Returns mock data for now (database tables may not exist yet)
-    Will be updated with real database queries once tables are created
+    Get agent activity and success rates — real, derived from the matches table
+    grouped by matched_by_agent_code.
     """
 
-    # Mock agent data (replace with real database queries once tables exist)
-    mock_agents = [
-        {
-            "code": "naama",
-            "name": "Naama",
-            "matches_found": 45,
-            "matches_approved": 32,
-            "approval_rate": 71.1,
-            "recent_activity": datetime.utcnow().isoformat(),
-            "status": "active"
-        },
-        {
-            "code": "alik",
-            "name": "Alik",
-            "matches_found": 38,
-            "matches_approved": 24,
-            "approval_rate": 63.2,
-            "recent_activity": (datetime.utcnow() - timedelta(hours=1)).isoformat(),
-            "status": "active"
-        },
-        {
-            "code": "dganit",
-            "name": "Dganit",
-            "matches_found": 32,
-            "matches_approved": 20,
-            "approval_rate": 62.5,
-            "recent_activity": (datetime.utcnow() - timedelta(hours=3)).isoformat(),
-            "status": "idle"
-        },
-    ]
+    # States that count as "the match progressed past Carmit approval".
+    APPROVED_STATES = {
+        "carmit_approved", "sent_to_tal", "tal_conversation", "tal_approved",
+        "sent_to_elad", "elad_conversation", "offer_sent", "hired",
+    }
+
+    # Aggregate per agent in Python (matches volume is small).
+    agg: Dict[str, Dict[str, Any]] = {}
+    total_matches_today = 0
+
+    try:
+        supabase = await get_supabase_client()
+        resp = supabase.table("matches").select(
+            "matched_by_agent_code, current_state, created_at, updated_at"
+        ).limit(5000).execute()
+        rows = resp.data or []
+
+        today_str = datetime.utcnow().date().isoformat()
+        for row in rows:
+            code = row.get("matched_by_agent_code") or "unassigned"
+            entry = agg.setdefault(code, {"found": 0, "approved": 0, "recent": None})
+            entry["found"] += 1
+            if row.get("current_state") in APPROVED_STATES:
+                entry["approved"] += 1
+            updated = row.get("updated_at") or row.get("created_at")
+            if updated and (entry["recent"] is None or updated > entry["recent"]):
+                entry["recent"] = updated
+            created = row.get("created_at") or ""
+            if created.startswith(today_str):
+                total_matches_today += 1
+    except Exception as e:
+        logger.error(f"agents/status: DB unavailable: {e}")
 
     agents_metrics = []
     approval_rates = []
-    total_matches = 0
     most_active_agent = None
     max_matches = 0
+    now = datetime.utcnow()
 
-    for agent_data in mock_agents:
-        agent = AgentMetric(
-            agent_code=agent_data["code"],
-            agent_name=agent_data["name"],
-            matches_found=agent_data["matches_found"],
-            matches_approved=agent_data["matches_approved"],
-            approval_rate=agent_data["approval_rate"],
-            recent_activity=agent_data["recent_activity"],
-            status=agent_data["status"]
-        )
-        agents_metrics.append(agent)
-        approval_rates.append(agent_data["approval_rate"])
-        total_matches += agent_data["matches_found"]
+    for code, data in agg.items():
+        found = data["found"]
+        approved = data["approved"]
+        rate = (approved / found * 100) if found > 0 else 0.0
 
-        if agent_data["matches_found"] > max_matches:
-            max_matches = agent_data["matches_found"]
-            most_active_agent = agent_data["code"]
+        # active if activity within last 24h, idle if within 7d, else no_recent_activity
+        status = "no_recent_activity"
+        recent = data["recent"]
+        if recent:
+            try:
+                recent_dt = datetime.fromisoformat(recent.replace("Z", "+00:00")).replace(tzinfo=None)
+                age_h = (now - recent_dt).total_seconds() / 3600
+                status = "active" if age_h <= 24 else ("idle" if age_h <= 168 else "no_recent_activity")
+            except Exception:
+                pass
 
-    # Calculate average approval rate
+        agents_metrics.append(AgentMetric(
+            agent_code=code,
+            agent_name=code,
+            matches_found=found,
+            matches_approved=approved,
+            approval_rate=round(rate, 2),
+            recent_activity=recent,
+            status=status,
+        ))
+        approval_rates.append(rate)
+        if found > max_matches:
+            max_matches = found
+            most_active_agent = code
+
     avg_approval_rate = (sum(approval_rates) / len(approval_rates)) if approval_rates else 0
-
-    # Sort by approval rate (descending)
-    agents_metrics.sort(key=lambda x: x.approval_rate, reverse=True)
+    agents_metrics.sort(key=lambda x: x.matches_found, reverse=True)
 
     return AgentStatusResponse(
         timestamp=datetime.utcnow().isoformat(),
         agents=agents_metrics,
         most_active_agent=most_active_agent,
-        total_matches_today=0,
+        total_matches_today=total_matches_today,
         average_approval_rate=round(avg_approval_rate, 2)
     )
 

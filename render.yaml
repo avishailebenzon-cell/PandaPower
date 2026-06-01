@@ -28,36 +28,24 @@ services:
     autoDeploy: true
 
   # ─────────────────────────────────────────────────────────────────────────
-  # Background worker — runs Celery worker + Celery Beat in a single process.
-  # Without this service, scheduled tasks (carmit_review_matches_task,
-  # carmit_handoff_to_tal_task, ingest_emails_task, pipedrive sync, etc.)
-  # never run — which was the silent root cause of "Tal doesn't get matches"
-  # and "email backfill progress stays at 0%".
+  # NOTE (Session 36): The separate Celery beat worker has been RETIRED.
   #
-  # REQUIRES: a Render Key-Value (Redis) instance + REDIS_URL env var set on
-  # BOTH this worker and the web service. Provision in Render dashboard,
-  # then add REDIS_URL to env on each service.
+  # All recurring work — email ingest, CV parse, candidate creation, skill
+  # normalization, scoring, Carmit job-routing / match-review / handoff-to-Tal,
+  # the pipeline watchdog, and Pipedrive sync — now runs inside the always-on
+  # web service via the in-process scheduler (apps/backend/src/pandapower/
+  # main.py :: _pipeline_scheduler_loop). Render keeps the web service alive via
+  # the /health check, so the automation runs as long as the API is up.
+  #
+  # Why removed: the old worker was a silent single point of failure (if it
+  # crashed or REDIS_URL was missing, the matching pipeline stopped while email
+  # intake kept going — invisibly). Consolidating onto the web service removes
+  # that failure mode and the Redis dependency, and prevents double-execution of
+  # the non-idempotent matching tasks.
+  #
+  # Per-task health is now persisted to the scheduler_heartbeats table and
+  # surfaced at GET /admin/system/heartbeat (+ the "ניטור מערכת" dashboard).
+  #
+  # If you ever need Celery again for ad-hoc work, you can run a worker, but do
+  # NOT set ENABLE_CELERY_BEAT=true while the in-process scheduler is running.
   # ─────────────────────────────────────────────────────────────────────────
-  - type: worker
-    name: pandapower-worker
-    runtime: python
-    region: frankfurt
-    plan: starter
-    rootDir: apps/backend
-    buildCommand: pip install -r requirements.txt
-    # -B = embed beat scheduler in this same worker process so we only pay
-    # for one service. The single-worker beat is fine for our scale.
-    # `cd src` is critical: the pandapower package lives at apps/backend/src/
-    # — the web service uses `--app-dir src` for the same reason, celery
-    # doesn't have an equivalent flag so we cd into it instead.
-    startCommand: cd src && celery -A pandapower.workers.celery_app worker -B --loglevel=info --concurrency=2
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.12.0
-      - key: APP_ENV
-        value: production
-      - key: DEBUG
-        value: "false"
-      # Same Supabase / Anthropic / Pipedrive / Resend secrets the web service
-      # uses, plus REDIS_URL pointing at the Key-Value instance.
-    autoDeploy: true

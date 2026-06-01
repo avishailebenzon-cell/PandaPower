@@ -93,6 +93,8 @@ app.include_router(pandi_outreach.router)
 
 import asyncio
 import logging
+import os
+from datetime import datetime
 
 _logger = logging.getLogger(__name__)
 
@@ -125,62 +127,151 @@ async def _pipedrive_scheduler_loop():
             # Don't crash the loop - keep going on next tick
 
 
+async def _record_heartbeat(
+    task_name: str,
+    status: str,
+    interval: float,
+    result: dict | None = None,
+    error: str | None = None,
+    consecutive_failures: int = 0,
+) -> None:
+    """Persist one task's heartbeat to scheduler_heartbeats (best-effort).
+
+    This is the single source of truth for "is this process running?" that
+    survives process restarts. Never raises — monitoring must not break the
+    pipeline. Degrades silently if the table doesn't exist yet (migration
+    20260601000001 not applied).
+    """
+    try:
+        from pandapower.core.supabase import get_supabase_client
+        client = await get_supabase_client()
+        await client.table("scheduler_heartbeats").upsert(
+            {
+                "task_name": task_name,
+                "last_run_at": datetime.utcnow().isoformat(),
+                "last_status": status,
+                "last_result": result,
+                "last_error": error,
+                "consecutive_failures": consecutive_failures,
+                "expected_interval_seconds": int(interval),
+                "updated_at": datetime.utcnow().isoformat(),
+            },
+            on_conflict="task_name",
+        ).execute()
+    except Exception as e:
+        _logger.debug(f"heartbeat upsert failed for {task_name} (non-fatal): {e}")
+
+
 async def _pipeline_scheduler_loop():
     """
-    Background loop that runs the full CV processing pipeline autonomously.
+    Background loop that runs the FULL automation pipeline autonomously.
+
+    This is the single authoritative scheduler for ALL recurring work. It runs
+    inside the always-on web service (which Render keeps alive via the health
+    check), so as long as the API is up, every stage below keeps ticking. The
+    separate Celery beat is intentionally retired (see celery_app.py) to avoid
+    double-execution of non-idempotent matching tasks.
 
     Stages and intervals:
-      - Email ingest         : every 120s  (poll Outlook, save CVs to storage)
-      - CV parsing           : every 180s  (extract text + Claude analysis)
-      - Candidate creation   : every 240s  (create candidate records from parsed CVs)
-      - Skill normalization  : every 600s  (map raw skills to canonical skills)
+      CV intake pipeline:
+        - ingest               : 120s   (poll Outlook, save CVs to storage)
+        - parse                : 180s   (extract text + Claude analysis)
+        - candidates           : 240s   (create candidate records)
+        - skills               : 600s   (normalize raw skills → canonical)
+        - score                : 3600s  (score candidate readiness)
+      Matching pipeline (Carmit → Tal):
+        - carmit_route_jobs    : 600s   (route open jobs to agents via Opus)
+        - carmit_review_matches: 900s   (Carmit approves/rejects found matches)
+        - carmit_handoff_to_tal: 600s   (move approved matches into Tal's queue)
+        - pipeline_watchdog    : 1800s  (re-kick matches stuck > threshold)
+      Pipedrive metadata:
+        - pipedrive_field_sync       : 3600s   (custom field definitions)
+        - pipedrive_historical_import: 14400s  (historical rejection reasons)
 
     Each stage runs independently and skips silently if its prerequisites
     (Azure creds, Anthropic key, etc.) are not configured. Failures in one
-    stage don't block the others.
+    stage don't block the others. Every run writes a heartbeat row.
     """
     from pandapower.workers.tasks import (
         _ingest_emails_async,
         _parse_cvs_async,
         _create_candidates_async,
         _normalize_skills_async,
+        _score_candidates_async,
+        _carmit_route_jobs_async,
+        _carmit_review_matches_async,
+        _carmit_handoff_to_tal_async,
+        _pipeline_watchdog_async,
+        _pipedrive_field_sync_async,
+        _pipedrive_historical_import_async,
     )
 
-    # Track when each stage last ran so we can pace them independently.
-    last_run: dict[str, float] = {
-        "ingest": 0.0,
-        "parse": 0.0,
-        "candidates": 0.0,
-        "skills": 0.0,
+    # Each stage: (async factory, interval seconds, initial stagger offset).
+    # The stagger offset seeds last_run so heavy Opus stages (route/review)
+    # don't all fire on the same tick right after boot — it spreads the first
+    # firing of each stage across the first couple of minutes.
+    stages: dict[str, tuple] = {
+        # name                    factory                          interval  stagger
+        "ingest":                (_ingest_emails_async,            120.0,    0.0),
+        "parse":                 (_parse_cvs_async,                180.0,    10.0),
+        "candidates":            (_create_candidates_async,        240.0,    20.0),
+        "skills":                (_normalize_skills_async,         600.0,    30.0),
+        "score":                 (_score_candidates_async,         3600.0,   40.0),
+        "carmit_route_jobs":     (_carmit_route_jobs_async,        600.0,    50.0),
+        "carmit_review_matches": (_carmit_review_matches_async,    900.0,    65.0),
+        "carmit_handoff_to_tal": (_carmit_handoff_to_tal_async,    600.0,    80.0),
+        "pipeline_watchdog":     (_pipeline_watchdog_async,        1800.0,   95.0),
+        "pipedrive_field_sync":  (_pipedrive_field_sync_async,     3600.0,   110.0),
+        "pipedrive_historical_import": (_pipedrive_historical_import_async, 14400.0, 125.0),
     }
-    intervals = {
-        "ingest": 120.0,
-        "parse": 180.0,
-        "candidates": 240.0,
-        "skills": 600.0,
+
+    intervals = {name: spec[1] for name, spec in stages.items()}
+    # Seed last_run so the FIRST firing happens `interval - stagger` from now,
+    # i.e. quickly for short-interval stages but spread out, while long-interval
+    # stages still wait roughly their full interval before first run.
+    loop_now = asyncio.get_event_loop().time()
+    last_run: dict[str, float] = {
+        name: loop_now - max(0.0, spec[1] - spec[2]) for name, spec in stages.items()
     }
 
     # Track consecutive failures per stage so we don't alert on every single tick,
     # but DO alert if a stage is consistently broken.
-    consecutive_failures: dict[str, int] = {"ingest": 0, "parse": 0, "candidates": 0, "skills": 0}
+    consecutive_failures: dict[str, int] = {name: 0 for name in stages}
     FAILURE_ALERT_THRESHOLD = 3  # alert after 3 consecutive failures
 
-    async def _run_stage(name: str, coro_factory):
-        """Run a single pipeline stage, swallowing errors so other stages keep ticking."""
+    async def _run_stage(name: str, coro_factory, interval: float):
+        """Run a single pipeline stage, swallowing errors so other stages keep ticking.
+
+        Always records a heartbeat (success or failure) so the monitoring layer
+        can tell the stage is alive.
+        """
         from pandapower.integrations.alert_service import alert_admin
 
+        hb_status = "completed"
+        hb_error: str | None = None
+        hb_result: dict | None = None
         try:
             result = await coro_factory()
+            hb_result = result if isinstance(result, dict) else {"raw": str(result)}
             status = result.get("status", "unknown")
-            if status == "completed":
+            if status == "completed" or status == "success" or status == "ok":
                 consecutive_failures[name] = 0  # reset counter on success
+                hb_status = "completed"
                 # Only log when something actually happened
-                if any(result.get(k, 0) for k in ("total_processed", "success", "created", "candidates_updated")):
+                if any(result.get(k, 0) for k in (
+                    "total_processed", "success", "created", "candidates_updated",
+                    "jobs_routed", "matches_reviewed", "handed_off", "candidates_scored",
+                )):
                     _logger.info(f"[pipeline:{name}] {result}")
             elif status == "skipped":
+                consecutive_failures[name] = 0
+                hb_status = "skipped"
+                hb_error = result.get("reason")
                 _logger.debug(f"[pipeline:{name}] skipped - {result.get('reason')}")
             elif status == "failed":
                 consecutive_failures[name] += 1
+                hb_status = "failed"
+                hb_error = result.get("error", "(no error message)")
                 _logger.warning(f"[pipeline:{name}] failed ({consecutive_failures[name]}x consecutive): {result}")
                 if consecutive_failures[name] >= FAILURE_ALERT_THRESHOLD:
                     await alert_admin(
@@ -196,9 +287,14 @@ async def _pipeline_scheduler_loop():
                         severity="error",
                     )
             else:
+                # Unknown status — treat as completed-ish but record it.
+                consecutive_failures[name] = 0
+                hb_status = status or "unknown"
                 _logger.warning(f"[pipeline:{name}] {status}: {result}")
         except Exception as e:
             consecutive_failures[name] += 1
+            hb_status = "crashed"
+            hb_error = f"{type(e).__name__}: {e}"
             _logger.error(f"[pipeline:{name}] crashed: {e}", exc_info=True)
             if consecutive_failures[name] >= FAILURE_ALERT_THRESHOLD:
                 await alert_admin(
@@ -213,30 +309,32 @@ async def _pipeline_scheduler_loop():
                     ),
                     severity="critical",
                 )
+        finally:
+            await _record_heartbeat(
+                task_name=name,
+                status=hb_status,
+                interval=interval,
+                result=hb_result,
+                error=hb_error,
+                consecutive_failures=consecutive_failures[name],
+            )
 
-    _logger.info("Pipeline scheduler started: email→parse→candidate→skills running autonomously")
-    print("[PIPELINE] Loop entered, ticking every 30s", flush=True)
+    _logger.info(
+        "Pipeline scheduler started: intake (ingest→parse→candidate→skills→score) + "
+        "matching (route→review→handoff→watchdog) + pipedrive metadata, all running autonomously"
+    )
+    print(f"[PIPELINE] Loop entered, ticking every 30s, {len(stages)} stages registered", flush=True)
 
     while True:
         try:
             now = asyncio.get_event_loop().time()
 
-            if now - last_run["ingest"] >= intervals["ingest"]:
-                last_run["ingest"] = now
-                print(f"[PIPELINE] tick: triggering email ingest at t={now:.0f}", flush=True)
-                asyncio.create_task(_run_stage("ingest", _ingest_emails_async))
-
-            if now - last_run["parse"] >= intervals["parse"]:
-                last_run["parse"] = now
-                asyncio.create_task(_run_stage("parse", _parse_cvs_async))
-
-            if now - last_run["candidates"] >= intervals["candidates"]:
-                last_run["candidates"] = now
-                asyncio.create_task(_run_stage("candidates", _create_candidates_async))
-
-            if now - last_run["skills"] >= intervals["skills"]:
-                last_run["skills"] = now
-                asyncio.create_task(_run_stage("skills", _normalize_skills_async))
+            for name, (factory, interval, _stagger) in stages.items():
+                if now - last_run[name] >= interval:
+                    last_run[name] = now
+                    if name == "ingest":
+                        print(f"[PIPELINE] tick: triggering email ingest at t={now:.0f}", flush=True)
+                    asyncio.create_task(_run_stage(name, factory, interval))
 
             await asyncio.sleep(30)  # Check every 30s which stages are due
 
@@ -254,11 +352,23 @@ async def startup():
     global _pipedrive_scheduler_task, _pipeline_scheduler_task
     await init_supabase()
 
-    # Start the autonomous CV processing pipeline (email → parse → candidate → skills)
+    # Singleton guard: the in-process scheduler is the ONE authoritative
+    # executor for all recurring work. It must run in exactly one process.
+    # The web service runs at --workers 1 (see render.yaml), so this is the
+    # single process. SCHEDULER_ENABLED lets ops disable it (e.g. if ever
+    # moving scheduling back to a dedicated worker). If the web service is ever
+    # scaled to >1 worker, gate this with a Postgres advisory lock instead so
+    # the non-idempotent matching stages (route/review) don't double-run.
+    scheduler_enabled = os.getenv("SCHEDULER_ENABLED", "true").lower() != "false"
+    if not scheduler_enabled:
+        _logger.warning("SCHEDULER_ENABLED=false — in-process scheduler NOT started")
+        return
+
+    # Start the autonomous automation pipeline (intake + matching + pipedrive).
     # Use print so this is visible even if structlog isn't piping to stdout.
-    print("[STARTUP] Starting autonomous CV processing pipeline scheduler", flush=True)
+    print("[STARTUP] Starting autonomous automation pipeline scheduler", flush=True)
     _pipeline_scheduler_task = asyncio.create_task(_pipeline_scheduler_loop())
-    _logger.info("Started autonomous CV processing pipeline scheduler")
+    _logger.info("Started autonomous automation pipeline scheduler")
 
     # Start the user-driven Pipedrive sync scheduler in the background
     if settings.PIPEDRIVE_API_TOKEN:
