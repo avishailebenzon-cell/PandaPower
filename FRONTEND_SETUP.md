@@ -168,10 +168,29 @@ apps/frontend/
 4. **Test components** - Write tests for complex components
 5. **Use React hooks** - Build custom hooks for shared logic
 
+## Validation
+
+Before starting development, validate your setup:
+
+```bash
+cd apps/frontend
+bash validate-api-setup.sh
+```
+
+This script checks:
+- ✅ .env file exists
+- ✅ VITE_API_URL is configured
+- ✅ No old variable names (VITE_API_BASE, VITE_API_BASE_URL)
+- ✅ All critical files use API_BASE
+- ✅ No unprotected fetch calls
+- ✅ Supabase credentials configured
+
 ## Support
 
 If you encounter issues:
-1. Check this troubleshooting guide
-2. Check `README.md` troubleshooting section
-3. Check recent commits for changes to env variable names
-4. Ask in team chat with error message and what you've tried
+1. Run: `bash validate-api-setup.sh` to identify configuration problems
+2. Check [FRONTEND_API_VALIDATION.md](./FRONTEND_API_VALIDATION.md) for detailed API troubleshooting
+3. Check this troubleshooting guide
+4. Check `README.md` troubleshooting section
+5. Check recent commits for changes to env variable names
+6. Ask in team chat with error message and what you've tried

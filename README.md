@@ -202,6 +202,8 @@ See [Phase 3 deployment docs](./docs/runbooks/) for instructions on deploying to
 ## Documentation
 
 - **CLAUDE.md** — Complete system specification
+- **FRONTEND_SETUP.md** — Frontend setup guide with automation scripts
+- **FRONTEND_API_VALIDATION.md** — API configuration & troubleshooting
 - **docs/decisions/** — Architecture decision records
 - **docs/prompts/** — LLM prompt templates
 - **docs/runbooks/** — Operations & troubleshooting guides
