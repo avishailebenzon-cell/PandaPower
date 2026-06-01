@@ -9,6 +9,7 @@ interface ReingestStatus {
   partial_remaining: number;
   failed_remaining: number;
   recoverable_total: number;
+  skipped_duplicate_person: number;
   cv_files_total: number;
   candidates_total: number;
 }
@@ -81,11 +82,12 @@ export const ReingestPage: React.FC = () => {
         <Stat label="ניתנים לשחזור" value={data?.recoverable_total} hl />
         <Stat label="קבצי CV במערכת" value={data?.cv_files_total} />
         <Stat label="מועמדים" value={data?.candidates_total} />
-        <Stat label="auto" value={undefined} />
+        <Stat label="כפילויות שדולגו" value={data?.skipped_duplicate_person} />
       </div>
       <div className="text-xs text-slate-400 mb-6">
         partial: {data?.partial_remaining?.toLocaleString() ?? "—"} · failed: {data?.failed_remaining?.toLocaleString() ?? "—"}
         {" · "}שחזור אוטומטי: <b className={data?.auto_enabled ? "text-green-600" : "text-slate-500"}>{data?.auto_enabled ? "פעיל" : "כבוי"}</b>
+        {" · "}סדר: מהחדש לישן · דילוג על אותו אדם (אימייל/טלפון)
       </div>
 
       <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm space-y-3">

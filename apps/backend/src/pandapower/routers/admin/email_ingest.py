@@ -216,6 +216,7 @@ async def reingest_status(supabase_client=Depends(get_supabase_client)) -> dict:
 
     partial = await _count("email_intake_log", status="partial")
     failed = await _count("email_intake_log", status="failed")
+    skipped_dup = await _count("email_intake_log", status="skipped_duplicate_person")
     cv_files = await _count("cv_files")
     candidates = await _count("candidates")
     enabled_row = await supabase_client.table("system_settings").select("setting_value").eq(
@@ -228,6 +229,7 @@ async def reingest_status(supabase_client=Depends(get_supabase_client)) -> dict:
         "partial_remaining": partial,
         "failed_remaining": failed,
         "recoverable_total": partial + failed,
+        "skipped_duplicate_person": skipped_dup,
         "cv_files_total": cv_files,
         "candidates_total": candidates,
     }

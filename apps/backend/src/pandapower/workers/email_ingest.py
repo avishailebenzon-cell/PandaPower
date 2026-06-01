@@ -1,15 +1,68 @@
 import asyncio
 import hashlib
 import logging
+import re
 import unicodedata
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import quote
 
 from pandapower.integrations.azure import AzureGraphClient
 from pandapower.integrations.supabase_storage import SupabaseStorageManager
+from pandapower.workers.sender_blocklist import is_likely_candidate_email
 
 logger = logging.getLogger(__name__)
+
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+# Israeli mobile/landline shapes: 05x-xxxxxxx, 0x-xxxxxxx, +9725xxxxxxxx, etc.
+_PHONE_RE = re.compile(r"(?:\+972[\-\s]?|0)(?:5\d|[2-49])[\-\s]?\d{3}[\-\s]?\d{4}")
+
+
+def _normalize_phone(raw: str) -> Optional[str]:
+    """Return digits-only national form (drops +972 → leading 0), or None."""
+    digits = re.sub(r"\D", "", raw or "")
+    if digits.startswith("972"):
+        digits = "0" + digits[3:]
+    return digits if len(digits) >= 9 else None
+
+
+def extract_candidate_identity(subject: str, body: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """Cheaply pull the candidate's (email, phone, name) from a job-board email,
+    WITHOUT calling Claude. Used to skip duplicate people before parsing.
+
+    - email: first address in the body that passes is_likely_candidate_email
+      (so shared mailboxes like info@jobnet.co.il are ignored).
+    - phone: first Israeli-looking number, normalized to national digits.
+    - name : subject tail after "–"/" - " (Jobnet/Drushim), else body "שם: <name>".
+    Returns (None, None, None) for any part that can't be determined.
+    """
+    text = body or ""
+    # email
+    cand_email = None
+    for m in _EMAIL_RE.findall(text):
+        e = m.strip().lower()
+        if is_likely_candidate_email(e):
+            cand_email = e
+            break
+    # phone
+    cand_phone = None
+    pm = _PHONE_RE.search(text)
+    if pm:
+        cand_phone = _normalize_phone(pm.group(0))
+    # name
+    cand_name = None
+    subj = subject or ""
+    for sep in ("–", " - ", " — "):
+        if sep in subj:
+            tail = subj.split(sep)[-1].strip()
+            if tail and len(tail) <= 60:
+                cand_name = tail
+            break
+    if not cand_name:
+        nm = re.search(r"שם\s*[:：]\s*([^\n\r]{2,60})", text)
+        if nm:
+            cand_name = nm.group(1).strip()
+    return cand_email, cand_phone, cand_name
 
 # Concurrent limits for API calls
 # During backfill (historical scan), we can be more aggressive
@@ -194,13 +247,26 @@ class EmailIngestWorker:
             result["errors"].append(str(e))
             return result
 
-    async def _process_message(self, msg_data: dict[str, Any]) -> dict[str, Any]:
-        """Process a single email message and extract CV attachments."""
+    async def _process_message(
+        self,
+        msg_data: dict[str, Any],
+        dedup_identity: bool = False,
+        email_body: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Process a single email message and extract CV attachments.
+
+        When dedup_identity=True (used by the newest-first recovery drain), the
+        candidate's email is extracted from the body and, if a CV for that same
+        person from a NEWER-OR-EQUAL email already exists, this email is skipped
+        (status 'skipped_duplicate_person') WITHOUT downloading/parsing — so we
+        keep each person's newest CV and don't waste parsing on older repeats.
+        """
         result = {
             "cv_count": 0,
             "duplicates": 0,
             "received_at": None,
             "error": None,
+            "skipped_duplicate": False,
         }
 
         try:
@@ -208,6 +274,13 @@ class EmailIngestWorker:
             subject = msg_data.get("subject", "")
             email_from = msg_data.get("from", {}).get("emailAddress", {}).get("address", "")
             received_datetime = msg_data.get("receivedDateTime")
+            body_text = email_body or (msg_data.get("body") or {}).get("content") or msg_data.get("bodyPreview") or ""
+
+            # Pre-parse person dedup (cheap, no Claude): find the candidate's real
+            # email from the body and resolve it once for reuse below.
+            candidate_real_email = None
+            if dedup_identity:
+                candidate_real_email, _phone, _name = extract_candidate_identity(subject, body_text)
 
             if received_datetime:
                 result["received_at"] = datetime.fromisoformat(received_datetime.replace("Z", "+00:00"))
@@ -273,12 +346,42 @@ class EmailIngestWorker:
                 ).eq("outlook_message_id", message_id).execute()
                 return result
 
+            # Person-level dedup (newest-first recovery): if we already captured a
+            # CV for this candidate from a NEWER-OR-EQUAL email, skip this older
+            # one entirely — don't download or parse. Order-independent: we compare
+            # source_email_received_at, so "keep newest" holds regardless of the
+            # processing order.
+            if dedup_identity and candidate_real_email and received_datetime:
+                try:
+                    seen = await (
+                        self.supabase.table("cv_files")
+                        .select("id")
+                        .eq("candidate_email", candidate_real_email)
+                        .gte("source_email_received_at", received_datetime)
+                        .limit(1)
+                        .execute()
+                    )
+                    if seen.data:
+                        logger.info(f"Skipping older duplicate of {candidate_real_email} ({subject[:40]})")
+                        result["skipped_duplicate"] = True
+                        await self.supabase.table("email_intake_log").update(
+                            {
+                                "status": "skipped_duplicate_person",
+                                "cv_files_extracted": 0,
+                                "processing_completed_at": datetime.utcnow().isoformat(),
+                            }
+                        ).eq("outlook_message_id", message_id).execute()
+                        return result
+                except Exception as e:
+                    logger.debug(f"identity dedup check failed (proceeding): {e}")
+
             # Process attachments concurrently with limited concurrency
             attachment_tasks = []
             for attachment in cv_attachments:
                 attachment_tasks.append(
                     self._process_attachment_with_retry(
-                        message_id, email_from, received_datetime, attachment
+                        message_id, email_from, received_datetime, attachment,
+                        candidate_email_override=candidate_real_email,
                     )
                 )
 
@@ -338,11 +441,15 @@ class EmailIngestWorker:
         received_datetime: str,
         attachment: dict[str, Any],
         max_retries: int = 3,
+        candidate_email_override: Optional[str] = None,
     ) -> dict[str, int]:
         """Process attachment with automatic retry on failure."""
         for attempt in range(max_retries):
             try:
-                return await self._process_attachment(message_id, email_from, received_datetime, attachment)
+                return await self._process_attachment(
+                    message_id, email_from, received_datetime, attachment,
+                    candidate_email_override=candidate_email_override,
+                )
             except Exception as e:
                 if attempt < max_retries - 1:
                     wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
@@ -358,6 +465,7 @@ class EmailIngestWorker:
         email_from: str,
         received_datetime: str,
         attachment: dict[str, Any],
+        candidate_email_override: Optional[str] = None,
     ) -> dict[str, int]:
         """Download and store a single attachment."""
         result = {"created": 0, "duplicates": 0}
@@ -439,11 +547,12 @@ class EmailIngestWorker:
                     # For other upload errors, re-raise
                     raise
 
-            # Provisional candidate_email = sender (alljobs, jobnet, recruiter, etc).
-            # This is OFTEN the middleman, not the real candidate. cv_parse_worker
-            # will OVERWRITE this field after Claude extracts the candidate's
-            # real email from inside the CV.
-            candidate_email = email_from.lower() if email_from else None
+            # candidate_email: prefer the REAL candidate email parsed from the
+            # email body (override) when available — this lets person-level dedup
+            # work pre-parse and gives downstream the right identity immediately.
+            # Otherwise fall back to the sender (often the job-board middleman);
+            # cv_parse_worker overwrites it later from inside the CV.
+            candidate_email = (candidate_email_override or (email_from.lower() if email_from else None))
 
             # Check if this candidate has existing CV files
             latest_cv = None

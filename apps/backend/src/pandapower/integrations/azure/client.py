@@ -173,7 +173,7 @@ class AzureGraphClient:
         EmailIngestWorker._process_message for re-ingestion."""
         url = (
             f"{GRAPH_API_BASE}/users/{self.target_mailbox}/messages/{message_id}"
-            f"?$select=id,internetMessageId,subject,from,receivedDateTime,bodyPreview"
+            f"?$select=id,internetMessageId,subject,from,receivedDateTime,bodyPreview,body"
             f"&$expand=attachments($select=id,name,contentType,size)"
         )
         return await self._make_request("GET", url)

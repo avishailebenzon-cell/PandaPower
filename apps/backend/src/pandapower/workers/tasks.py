@@ -1405,15 +1405,18 @@ async def _reingest_missed_async(limit: int = 100) -> dict[str, Any]:
         if worker is None:
             return {"status": "skipped", "reason": "Azure settings not configured"}
 
-        WATERMARK = "reingest.watermark"
-        watermark = await _get_setting(supabase_client, WATERMARK) or "1970-01-01T00:00:00+00:00"
+        # Newest → oldest: so the FIRST CV captured per person is their most
+        # recent one, and older repeats are skipped (person dedup in
+        # _process_message). Watermark tracks the OLDEST received_at processed.
+        WATERMARK = "reingest.watermark_desc"
+        watermark = await _get_setting(supabase_client, WATERMARK) or "2999-01-01T00:00:00+00:00"
 
         resp = await (
             supabase_client.table("email_intake_log")
             .select("outlook_message_id, email_received_at, status")
             .in_("status", ["partial", "failed"])
-            .gt("email_received_at", watermark)
-            .order("email_received_at", desc=False)
+            .lt("email_received_at", watermark)
+            .order("email_received_at", desc=True)
             .limit(limit)
             .execute()
         )
@@ -1422,36 +1425,40 @@ async def _reingest_missed_async(limit: int = 100) -> dict[str, Any]:
             return {"status": "completed", "reingested": 0, "cv_created": 0, "note": "backlog drained"}
 
         sem = asyncio.Semaphore(6)  # bounded Graph concurrency
-        counters = {"reingested": 0, "cv_created": 0}
+        counters = {"reingested": 0, "cv_created": 0, "skipped_dup": 0}
         errors: list[str] = []
-        max_ts = watermark
+        min_ts = watermark
 
         async def _one(row):
-            nonlocal max_ts
+            nonlocal min_ts
             mid = row.get("outlook_message_id")
             ts = row.get("email_received_at")
-            if ts and ts > max_ts:
-                max_ts = ts
+            if ts and ts < min_ts:
+                min_ts = ts
             if not mid:
                 return
             async with sem:
                 try:
                     msg = await worker.azure.get_message_raw(mid)
-                    res = await worker._process_message(msg)
+                    body = (msg.get("body") or {}).get("content") or msg.get("bodyPreview") or ""
+                    res = await worker._process_message(msg, dedup_identity=True, email_body=body)
                     counters["reingested"] += 1
                     counters["cv_created"] += int(res.get("cv_count", 0) or 0)
+                    if res.get("skipped_duplicate"):
+                        counters["skipped_dup"] += 1
                 except Exception as e:
                     errors.append(f"{mid[:20]}: {str(e)[:120]}")
 
         await asyncio.gather(*[_one(r) for r in rows])
 
-        if max_ts != watermark:
-            await _set_setting(supabase_client, WATERMARK, max_ts)
+        if min_ts != watermark:
+            await _set_setting(supabase_client, WATERMARK, min_ts)
 
         return {
             "status": "completed",
             "reingested": counters["reingested"],
             "cv_created": counters["cv_created"],
+            "skipped_duplicate": counters["skipped_dup"],
             "scanned": len(rows),
             "errors": errors[:10],
         }
