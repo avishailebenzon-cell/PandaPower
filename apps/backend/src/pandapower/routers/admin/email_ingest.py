@@ -325,9 +325,18 @@ async def get_backfill_progress(
                 except ValueError:
                     pass
 
+        # Ensure both datetimes are either naive or aware for safe arithmetic
+        from datetime import timezone as _tz
+        if backfill_start and backfill_start.tzinfo is None:
+            backfill_start = backfill_start.replace(tzinfo=_tz.utc)
+        if last_processed and last_processed.tzinfo is None:
+            last_processed = last_processed.replace(tzinfo=_tz.utc)
+
+        now_utc = datetime.now(_tz.utc)
+
         # Calculate progress
         if backfill_start and last_processed:
-            total_days = (datetime.utcnow() - backfill_start).days
+            total_days = (now_utc - backfill_start).days
             processed_days = (last_processed - backfill_start).days
             progress_percent = min(100, int((processed_days / max(total_days, 1)) * 100))
         else:
@@ -338,7 +347,7 @@ async def get_backfill_progress(
             "backfill_start_date": backfill_start.isoformat() if backfill_start else None,
             "last_processed_at": last_processed.isoformat() if last_processed else None,
             "progress_percent": progress_percent,
-            "days_remaining": max(0, (datetime.utcnow() - (last_processed or backfill_start)).days) if backfill_start else None,
+            "days_remaining": max(0, (now_utc - (last_processed or backfill_start)).days) if backfill_start else None,
         }
 
     except Exception as e:
@@ -407,6 +416,30 @@ async def configure(
 
     except Exception as e:
         logger.error(f"Configuration save failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/reset-last-seen")
+async def reset_last_seen(
+    supabase_client=Depends(get_supabase_client),
+) -> dict[str, str]:
+    """Reset last_seen timestamp to null to force backfill from backfill_start_date."""
+    try:
+        await supabase_client.table("system_settings").upsert(
+            {
+                "setting_key": "azure.last_seen_message_received_at",
+                "setting_value": "null",
+                "updated_at": datetime.utcnow().isoformat(),
+            },
+            on_conflict="setting_key",
+        ).execute()
+
+        logger.info("Reset last_seen_message_received_at to null - backfill will start from backfill_start_date")
+
+        return {"status": "reset", "message": "last_seen reset to null - backfill resuming"}
+
+    except Exception as e:
+        logger.error(f"Reset last_seen failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
