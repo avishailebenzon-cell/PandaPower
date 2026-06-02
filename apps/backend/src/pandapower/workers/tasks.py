@@ -143,6 +143,8 @@ async def _parse_cvs_async() -> dict[str, Any]:
         if cv_model:
             claude_client.model = cv_model
             logger.info(f"CV parsing using model: {cv_model}")
+        # Tag every call from this client as the 'cv_parse' stage for the cost dashboard.
+        claude_client.usage_stage = "cv_parse"
         storage_manager = SupabaseStorageManager(supabase_client)
 
         worker = CVParseWorker(

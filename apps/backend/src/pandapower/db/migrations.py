@@ -250,6 +250,21 @@ SCHEMA_MIGRATIONS = {
     CREATE INDEX IF NOT EXISTS idx_job_changes_job ON job_changes(job_id);
     CREATE INDEX IF NOT EXISTS idx_job_changes_created ON job_changes(created_at DESC);
     """,
+    "llm_usage": """
+    CREATE TABLE IF NOT EXISTS llm_usage (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        stage TEXT NOT NULL,
+        model TEXT NOT NULL,
+        input_tokens INT DEFAULT 0,
+        output_tokens INT DEFAULT 0,
+        total_tokens INT DEFAULT 0,
+        estimated_cost_usd NUMERIC(12,6) DEFAULT 0,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_llm_usage_stage ON llm_usage(stage);
+    CREATE INDEX IF NOT EXISTS idx_llm_usage_model ON llm_usage(model);
+    CREATE INDEX IF NOT EXISTS idx_llm_usage_created ON llm_usage(created_at DESC);
+    """,
 }
 
 

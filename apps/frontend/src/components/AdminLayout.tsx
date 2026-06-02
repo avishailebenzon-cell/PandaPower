@@ -51,6 +51,11 @@ export function AdminLayout() {
               </a>
             </li>
             <li>
+              <a href="/admin/usage" className="block px-3 py-2 rounded text-slate-300 hover:bg-slate-800 transition">
+                💰 צריכת Anthropic
+              </a>
+            </li>
+            <li>
               <a href="/admin/telegram-bot" className="block px-3 py-2 rounded text-slate-300 hover:bg-slate-800 transition">
                 🤖 בוט טלגרם — כרמית
               </a>

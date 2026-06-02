@@ -78,6 +78,8 @@ class AgentMatchingWorker:
     def __init__(self, supabase_client: Any, claude_client: AnthropicClient):
         self.supabase = supabase_client
         self.claude = claude_client
+        # Attribute all Claude calls from this worker to the 'agent_match' stage.
+        self.claude.usage_stage = "agent_match"
 
     async def find_matches_for_job(self, job_id: str, agent_code: str) -> dict:
         """Find candidate matches for a specific job assigned to agent.

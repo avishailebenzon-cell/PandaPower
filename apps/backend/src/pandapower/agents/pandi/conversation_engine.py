@@ -524,6 +524,18 @@ Focus on: what the client is looking for (job type, requirements, preferences)."
             if hasattr(block, "text"):
                 text_content += block.text
 
+        # Record token usage for the cost dashboard (best-effort).
+        try:
+            from pandapower.integrations.usage_tracker import record_usage
+            await record_usage(
+                stage="pandi_conversation",
+                model=model,
+                input_tokens=response.usage.input_tokens,
+                output_tokens=response.usage.output_tokens,
+            )
+        except Exception:
+            pass
+
         return {
             "text": text_content,
             "input_tokens": response.usage.input_tokens,

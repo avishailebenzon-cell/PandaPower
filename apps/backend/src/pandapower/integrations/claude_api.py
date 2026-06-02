@@ -18,6 +18,10 @@ class AnthropicClient:
         self.api_key = api_key
         self.http_client = httpx.AsyncClient(timeout=120.0)
         self.model = "claude-opus-4-1"
+        # Logical pipeline stage for token-usage attribution. Callers set this
+        # (e.g. "cv_parse", "agent_match") before invoking, so the central
+        # request method can record every call to the llm_usage table.
+        self.usage_stage = "unknown"
 
     async def close(self):
         """Close HTTP client."""
@@ -411,6 +415,20 @@ Return ONLY this JSON structure (every field is REQUIRED — use null/[]/{{}} wh
                 # Success
                 data = response.json()
                 logger.debug(f"Claude API request succeeded")
+
+                # Record token usage for the cost dashboard (best-effort).
+                try:
+                    usage = data.get("usage", {}) or {}
+                    from pandapower.integrations.usage_tracker import record_usage
+                    await record_usage(
+                        stage=getattr(self, "usage_stage", "unknown"),
+                        model=data.get("model", self.model),
+                        input_tokens=usage.get("input_tokens", 0),
+                        output_tokens=usage.get("output_tokens", 0),
+                    )
+                except Exception:
+                    pass
+
                 return data
 
             except (httpx.TimeoutException, httpx.ConnectError) as e:
