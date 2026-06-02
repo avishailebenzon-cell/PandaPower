@@ -465,13 +465,52 @@ export const CarmitPage = () => {
                     </div>
                   </div>
 
-                  {/* Decision Reasoning */}
-                  {decision.reasoning && (
-                    <div className="mb-4 bg-gray-900 border-l-4 border-purple-500 p-3 rounded">
-                      <p className="text-sm font-semibold text-gray-300 mb-1">💭 נימוק ההחלטה:</p>
-                      <p className="text-sm text-gray-400">{decision.reasoning}</p>
+                  {/* Decision Reasoning - Enhanced with detailed explanation */}
+                  <div className="mb-4 space-y-3">
+                    {/* Main Decision Reasoning */}
+                    <div className={`border-l-4 p-3 rounded ${
+                      decision.decision === 'approved'
+                        ? 'bg-green-900/20 border-green-500'
+                        : 'bg-red-900/20 border-red-500'
+                    }`}>
+                      <p className="text-sm font-semibold text-gray-300 mb-2">
+                        {decision.decision === 'approved' ? '✅ סיבות האישור:' : '❌ סיבות הדחייה:'}
+                      </p>
+                      {decision.reasoning ? (
+                        <p className="text-sm text-gray-300 leading-relaxed">{decision.reasoning}</p>
+                      ) : (
+                        <p className="text-sm text-gray-500 italic">לא צוינה הנמקה</p>
+                      )}
                     </div>
-                  )}
+
+                    {/* Gate-by-Gate Analysis */}
+                    {Object.entries(decision.gate_results).length > 0 && (
+                      <div className="bg-gray-900 border border-gray-700 p-3 rounded">
+                        <p className="text-sm font-semibold text-gray-300 mb-3">📊 ניתוח שערים מפורט:</p>
+                        <div className="space-y-2">
+                          {Object.entries(decision.gate_results).map(([gate, result]) => (
+                            <div key={gate} className={`p-2.5 rounded border ${
+                              result.passed
+                                ? 'bg-green-900/15 border-green-700/30 text-green-200'
+                                : 'bg-red-900/15 border-red-700/30 text-red-200'
+                            }`}>
+                              <div className="flex items-start gap-2">
+                                <span className="text-lg mt-0.5">{result.passed ? '✅' : '❌'}</span>
+                                <div className="flex-1">
+                                  <p className="font-semibold text-sm capitalize">
+                                    {gate.replace(/_/g, ' ')}
+                                  </p>
+                                  {result.reason && (
+                                    <p className="text-xs text-gray-300 mt-1">{result.reason}</p>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
 
                   {/* Decision Timestamp */}
                   <p className="text-xs text-gray-500">
