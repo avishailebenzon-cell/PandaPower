@@ -122,7 +122,7 @@ SCHEMA_MIGRATIONS = {
     CREATE TABLE IF NOT EXISTS pipedrive_sync_schedule (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         entity_type TEXT UNIQUE NOT NULL,
-        sync_interval_minutes INT DEFAULT 30,
+        sync_interval_minutes INT DEFAULT 240,
         sync_direction TEXT DEFAULT 'bidirectional',
         sync_enabled BOOLEAN DEFAULT true,
         filter_by_contact_type TEXT,

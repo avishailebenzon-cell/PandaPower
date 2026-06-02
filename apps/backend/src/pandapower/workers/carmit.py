@@ -50,8 +50,8 @@ class CarmitOrchestrator:
         self.pipedrive = pipedrive_client
         self.settings = settings or {}
 
-        # Configuration
-        self.match_score_threshold = self.settings.get("CARMIT_MATCH_SCORE_THRESHOLD", 0.70)
+        # Configuration - RAISED to 0.80 (80%) for higher quality matches to Tal
+        self.match_score_threshold = self.settings.get("CARMIT_MATCH_SCORE_THRESHOLD", 0.80)
         self.clearance_levels = self.settings.get("CARMIT_CLEARANCE_LEVELS", CLEARANCE_LEVELS)
 
         # Agent specialties (from Phase 4)
@@ -214,6 +214,14 @@ class CarmitOrchestrator:
             if not score_gate["passed"]:
                 gates_passed = False
                 logger.info(f"Match failed quality score gate: {score_gate['reason']}")
+
+            # GATE 6: Relevant skills matching
+            logger.debug(f"GATE 6: Checking relevant skills for job")
+            skills_gate = await self._check_relevant_skills_gate(candidate, job)
+            gate_results["relevant_skills"] = skills_gate
+            if not skills_gate["passed"]:
+                gates_passed = False
+                logger.info(f"Match failed skills gate: {skills_gate['reason']}")
 
             # Determine final decision
             if gates_passed:
@@ -460,7 +468,7 @@ Return ONLY valid JSON (no markdown, no extra text):
         """
         try:
             candidate_clearance = str(candidate.get("clearance_level", "none")).lower()
-            job_required_clearance = str(job.get("required_clearance", "none")).lower()
+            job_required_clearance = str(job.get("job_security_clearance", "none")).lower()
 
             # Get clearance levels
             candidate_level = self.clearance_levels.get(candidate_clearance, 0)
@@ -476,7 +484,7 @@ Return ONLY valid JSON (no markdown, no extra text):
 
         except Exception as e:
             logger.error(f"Clearance gate check failed: {str(e)}")
-            return {"passed": True, "reason": None}
+            return {"passed": False, "reason": f"Clearance check error: {str(e)}"}
 
     async def _check_quality_score_gate(self, match: dict) -> dict[str, Any]:
         """GATE 5: Check if match score meets minimum threshold.
@@ -501,6 +509,47 @@ Return ONLY valid JSON (no markdown, no extra text):
         except Exception as e:
             logger.error(f"Quality score gate check failed: {str(e)}")
             return {"passed": True, "reason": None}
+
+    async def _check_relevant_skills_gate(self, candidate: dict, job: dict) -> dict[str, Any]:
+        """GATE 6: Check if candidate has relevant skills for the job.
+
+        Args:
+            candidate: Candidate object with key_skills
+            job: Job object with job_qualifications and job_description
+
+        Returns:
+            {passed: bool, reason: str}
+        """
+        try:
+            candidate_skills = candidate.get("key_skills", []) or []
+            job_qualifications = str(job.get("job_qualifications", "")).lower()
+            job_description = str(job.get("job_description", "")).lower()
+
+            # If no skills recorded, it's a red flag
+            if not candidate_skills:
+                return {
+                    "passed": False,
+                    "reason": "Candidate has no recorded skills",
+                }
+
+            # Check if at least one skill appears in job qualifications/description
+            job_text = f"{job_qualifications} {job_description}".lower()
+            has_relevant_skill = any(
+                skill.lower() in job_text
+                for skill in candidate_skills
+            )
+
+            if not has_relevant_skill:
+                return {
+                    "passed": False,
+                    "reason": f"No relevant skills found. Candidate has: {', '.join(candidate_skills[:3])}",
+                }
+
+            return {"passed": True, "reason": f"Has relevant skills: found match in job requirements"}
+
+        except Exception as e:
+            logger.error(f"Skills gate check failed: {str(e)}")
+            return {"passed": False, "reason": f"Skills check error: {str(e)}"}
 
     # ==================== Helper Methods: Database Operations ====================
 

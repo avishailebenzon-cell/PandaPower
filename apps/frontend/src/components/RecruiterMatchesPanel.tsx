@@ -349,7 +349,7 @@ function MatchActionsMenu({
         ⋮
       </button>
       {isOpen && (
-        <div className="absolute right-0 top-full mt-1 bg-gray-700 border border-gray-600 rounded-lg shadow-xl z-[100] min-w-max">
+        <div className="absolute left-0 top-full mt-1 bg-gray-700 border border-gray-600 rounded-lg shadow-xl z-[100] min-w-max">
           {isInQueue && (
             <>
               <button

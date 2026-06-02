@@ -390,8 +390,8 @@ async def debug_data_quality():
             logger.info(f"Fetched {len(candidates)} candidates: {candidates}")
 
         if job_ids:
-            resp = await supabase.table("jobs").select("id, title").in_("id", job_ids).execute()
-            jobs = {j["id"]: j.get("title", "?") for j in (resp.data or [])}
+            resp = await supabase.table("jobs").select("id, job_title").in_("id", job_ids).execute()
+            jobs = {j["id"]: j.get("job_title", "?") for j in (resp.data or [])}
             logger.info(f"Fetched {len(jobs)} jobs: {jobs}")
 
         # Enrich samples

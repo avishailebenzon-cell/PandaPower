@@ -583,8 +583,8 @@ def _determine_agent_for_job(job: dict) -> str:
     Based on job domain/title. Enhanced in later phase with Claude routing.
     """
     required_domain = job.get("required_domain", "").lower()
-    title = job.get("title", "").lower()
-    description = job.get("description", "").lower()
+    title = job.get("job_title", "").lower()
+    description = job.get("job_description", "").lower()
 
     # Simple keyword matching for agent routing
     if any(word in required_domain or word in title for word in ["fpga", "verilog", "vhdl", "pcb", "rf", "analog", "electronics", "hardware"]):
@@ -1337,7 +1337,7 @@ async def _notify_telegram_async() -> dict[str, Any]:
                         "id", m["job_id"]
                     ).limit(1).execute()
                     if j.data:
-                        job_name = j.data[0].get("job_title") or j.data[0].get("title") or job_name
+                        job_name = j.data[0].get("job_title") or job_name
             except Exception:
                 pass
 

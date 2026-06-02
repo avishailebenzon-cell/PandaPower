@@ -594,7 +594,7 @@ async def get_jobs_to_route():
         for job in jobs_response.data or []:
             jobs.append({
                 "id": job.get("id"),
-                "title": job.get("title", "Unknown"),
+                "title": job.get("job_title", "Unknown"),
                 "description": job.get("description", ""),
                 "priority": job.get("priority", 5),
                 "candidateCount": 0,  # Placeholder - can be computed from matches if needed
@@ -673,27 +673,23 @@ async def get_carmit_decisions(
             try:
                 if candidate_id:
                     candidate_query = supabase.table("candidates").select(
-                        "full_name_he, full_name_en"
+                        "name"
                     ).eq("id", candidate_id)
                     candidate_response = await candidate_query.execute()
                     if candidate_response.data and len(candidate_response.data) > 0:
                         cand_data = candidate_response.data[0]
-                        candidate_name = (
-                            cand_data.get("full_name_he") or
-                            cand_data.get("full_name_en") or
-                            "Unknown"
-                        )
+                        candidate_name = cand_data.get("name") or "Unknown"
             except Exception as e:
                 logger.warning(f"Failed to fetch candidate {candidate_id}: {str(e)}")
 
             # Fetch job title
             try:
                 if job_id:
-                    job_query = supabase.table("jobs").select("title").eq("id", job_id)
+                    job_query = supabase.table("jobs").select("job_title").eq("id", job_id)
                     job_response = await job_query.execute()
                     if job_response.data and len(job_response.data) > 0:
                         job_data = job_response.data[0]
-                        job_title = job_data.get("title", "Unknown")
+                        job_title = job_data.get("job_title", "Unknown")
             except Exception as e:
                 logger.warning(f"Failed to fetch job {job_id}: {str(e)}")
 

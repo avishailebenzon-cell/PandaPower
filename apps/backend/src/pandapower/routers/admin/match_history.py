@@ -39,74 +39,67 @@ class StateTransitionInfo(BaseModel):
 
 
 @router.get("/{match_id}/history", response_model=MatchHistoryResponse)
-async def get_match_history(match_id: str, db: Session = Depends(get_db)):
+async def get_match_history(match_id: str):
     """
     Get complete state history for a match
     Returns the journey of the match through all states
     """
-    
+    supabase = await get_supabase_client()
+
     # Get match details
-    match = db.execute(
-        select(Matches).where(Matches.id == match_id)
-    ).scalar_one_or_none()
-    
+    match_response = await supabase.table("matches").select("*").eq("id", match_id).single().execute()
+    match = match_response.data if match_response else None
+
     if not match:
         raise HTTPException(status_code=404, detail="Match not found")
-    
+
     # Get candidate name
-    candidate = db.execute(
-        select(Candidates).where(Candidates.id == match.candidate_id)
-    ).scalar_one_or_none()
-    candidate_name = candidate.name if candidate else "Unknown"
-    
+    candidate_response = await supabase.table("candidates").select("name").eq("id", match["candidate_id"]).single().execute()
+    candidate_name = candidate_response.data.get("name") if candidate_response else "Unknown"
+
     # Get job title
-    job = db.execute(
-        select(Jobs).where(Jobs.id == match.job_id)
-    ).scalar_one_or_none()
-    job_title = job.title if job else "Unknown"
-    
+    job_response = await supabase.table("jobs").select("job_title").eq("id", match["job_id"]).single().execute()
+    job_title = job_response.data.get("job_title") if job_response else "Unknown"
+
     # Get state history (ordered by timestamp)
-    state_history = db.execute(
-        select(MatchStateHistory)
-        .where(MatchStateHistory.match_id == match_id)
-        .order_by(MatchStateHistory.created_at.asc())
-    ).scalars().all()
+    state_history_response = await supabase.table("match_state_history").select("*").eq("match_id", match_id).order("created_at", desc=False).execute()
+    state_history = state_history_response.data if state_history_response else []
     
     # Format state history entries
     history_entries = []
     for entry in state_history:
         history_entries.append(
             StateHistoryEntry(
-                from_state=entry.from_state,
-                to_state=entry.to_state,
-                created_at=entry.created_at.isoformat() if entry.created_at else "",
-                details=entry.details or {}
+                from_state=entry.get("from_state", ""),
+                to_state=entry.get("to_state", ""),
+                created_at=entry.get("created_at", ""),
+                details=entry.get("details") or {}
             )
         )
-    
+
     return MatchHistoryResponse(
         matchId=match_id,
         candidateName=candidate_name,
         jobTitle=job_title,
-        currentState=match.current_state or "found",
+        currentState=match.get("current_state") or "found",
         stateHistory=history_entries
     )
 
 
 @router.get("/{match_id}/state-summary")
-async def get_match_state_summary(match_id: str, db: Session = Depends(get_db)):
+async def get_match_state_summary(match_id: str):
     """
     Get summary of match state with next expected transitions
     """
-    
-    match = db.execute(
-        select(Matches).where(Matches.id == match_id)
-    ).scalar_one_or_none()
-    
+    supabase = await get_supabase_client()
+
+    match_response = await supabase.table("matches").select("*").eq("id", match_id).single().execute()
+    match = match_response.data if match_response else None
+
     if not match:
         raise HTTPException(status_code=404, detail="Match not found")
-    
-    current_state = match.current_state or "found"
+
+    current_state = match.get("current_state") or "found"
     
     # Define state machine flow
     STATE_FLOW = {

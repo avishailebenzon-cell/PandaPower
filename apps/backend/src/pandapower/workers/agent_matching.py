@@ -119,7 +119,7 @@ class AgentMatchingWorker:
                 logger.error(f"Unknown agent: {agent_code}")
                 return result
 
-            logger.info(f"Starting matching for job {job_id} ({job['title']}) with agent {agent_code}")
+            logger.info(f"Starting matching for job {job_id} ({job.get('job_title', 'Unknown')}) with agent {agent_code}")
 
             # Fetch candidates matching agent's domain (limit to 100 per run to avoid overload)
             candidates = await self._fetch_domain_candidates(agent_config, limit=100)
@@ -156,13 +156,13 @@ class AgentMatchingWorker:
 
                         logger.info(
                             f"[{idx+1}/{len(candidates)}] Match found: {candidate['name']} -> "
-                            f"{job['title']} (score: {match_info['score']})"
+                            f"{job.get('job_title', 'Unknown')} (score: {match_info['score']})"
                         )
                     else:
                         result["tokens_used"] += match_info["tokens_used"]
                         logger.debug(
                             f"[{idx+1}/{len(candidates)}] Score {match_info['score']} < threshold: "
-                            f"{candidate['name']} vs {job['title']}"
+                            f"{candidate['name']} vs {job.get('job_title', 'Unknown')}"
                         )
 
                 except Exception as e:
@@ -283,7 +283,7 @@ class AgentMatchingWorker:
 
                         logger.info(
                             f"[{idx+1}/{len(jobs)}] Match found: {candidate['name']} -> "
-                            f"{job['title']} ({match_info['score']})"
+                            f"{job.get('job_title', 'Unknown')} ({match_info['score']})"
                         )
                     else:
                         result["tokens_used"] += match_info["tokens_used"]
@@ -392,7 +392,7 @@ class AgentMatchingWorker:
         clearance_evidence = candidate.get("clearance_keywords_matched", []) or []
 
         # Extract job info
-        job_title = job.get("title", "")
+        job_title = job.get("job_title", "")
         job_desc = job.get("description", "")
         job_quals = job.get("qualifications", "")  # CRITICAL: qualifications more important than description
         job_clearance = job.get("required_security_clearance")
@@ -688,9 +688,9 @@ Return ONLY valid JSON (no extra text):
             # Fetch candidates AND their most recent CV analysis
             # Using LEFT JOIN to get candidates with/without recent CVs
             response = await self.supabase.table("candidates").select(
-                "id, full_name_he, full_name_en, email, phone, city, country, "
-                "primary_domain, secondary_domains, years_experience, "
-                "security_clearance_level, languages, is_active, "
+                "id, name, email, phone, location, country, "
+                "primary_domain, secondary_domains, years_of_experience, "
+                "clearance_level, languages, is_active, "
                 "cv_files(id, llm_analysis, source_email_received_at)"
             ).eq("is_active", True).limit(limit).order("created_at", desc=True).execute()
 
@@ -718,15 +718,15 @@ Return ONLY valid JSON (no extra text):
                     # Merge extracted fields into candidate for easier access by matching prompt
                     enriched = {
                         "id": cand.get("id"),
-                        "name": cand.get("full_name_he") or cand.get("full_name_en", "Unknown"),
+                        "name": cand.get("name", "Unknown"),
                         "email": cand.get("email"),
                         "phone": cand.get("phone"),
-                        "location": cand.get("city"),
+                        "location": cand.get("location"),
                         "country": cand.get("country"),
                         "primary_domain": cand.get("primary_domain"),
                         "secondary_domains": cand.get("secondary_domains", []),
-                        "years_of_experience": cand.get("years_experience"),
-                        "clearance_level": cand.get("security_clearance_level"),
+                        "years_of_experience": cand.get("years_of_experience"),
+                        "clearance_level": cand.get("clearance_level"),
                         "languages": cand.get("languages", []),
                         # Raw CV metadata (for reference)
                         "cv_metadata": {
@@ -759,9 +759,9 @@ Return ONLY valid JSON (no extra text):
                     # Still add the basic candidate even if CV enrichment fails
                     enriched_candidates.append({
                         "id": cand.get("id"),
-                        "name": cand.get("full_name_he") or cand.get("full_name_en", "Unknown"),
-                        "location": cand.get("city"),
-                        "years_of_experience": cand.get("years_experience"),
+                        "name": cand.get("name", "Unknown"),
+                        "location": cand.get("location"),
+                        "years_of_experience": cand.get("years_of_experience"),
                         "clearance_level": cand.get("security_clearance_level"),
                     })
 

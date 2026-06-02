@@ -62,13 +62,13 @@ class CandidateMatchingEngine:
             # Query active candidates from database
             candidates_result = await supabase.table("candidates").select(
                 """
-                id, candidate_number, full_name_he, years_experience,
-                security_clearance_level, security_clearance_confidence,
-                city, primary_domain, languages, cv_summary
+                id, name, years_of_experience,
+                clearance_level,
+                location, primary_domain, languages
                 """
-            ).eq("is_active", True).limit(100)  # Fetch batch for scoring
+            ).eq("is_active", True).limit(100).execute()  # Fetch batch for scoring
 
-            candidates = candidates_result if isinstance(candidates_result, list) else []
+            candidates = candidates_result.data if candidates_result else []
 
             if not candidates:
                 logger.warning("no_active_candidates_found")
@@ -117,14 +117,13 @@ class CandidateMatchingEngine:
         """Calculate match score for a single candidate."""
 
         candidate_id = candidate["id"]
-        candidate_number = candidate["candidate_number"]
 
         # Fetch candidate skills
         skills_result = await supabase.table("candidate_skills").select(
             "skill_name, years_in_skill, proficiency"
-        ).eq("candidate_id", str(candidate_id))
+        ).eq("candidate_id", str(candidate_id)).execute()
 
-        candidate_skills = skills_result if isinstance(skills_result, list) else []
+        candidate_skills = skills_result.data if skills_result else []
         candidate_skill_names = {skill["skill_name"].lower() for skill in candidate_skills}
 
         # Calculate skill match scores
@@ -147,7 +146,7 @@ class CandidateMatchingEngine:
         )
 
         # Experience match
-        candidate_years = candidate.get("years_experience") or 0
+        candidate_years = candidate.get("years_of_experience") or 0
         experience_score = min(
             100,
             (candidate_years / max(min_years_experience, 1) * 100)
@@ -157,14 +156,14 @@ class CandidateMatchingEngine:
 
         # Security clearance match
         clearance_score = self._calculate_clearance_score(
-            candidate.get("security_clearance_level"),
-            candidate.get("security_clearance_confidence"),
+            candidate.get("clearance_level"),
+            None,
             required_clearance,
         )
 
         # Location match (simple string comparison)
         location_score = 100 if self._location_matches(
-            candidate.get("city", ""), location_preference
+            candidate.get("location", ""), location_preference
         ) else 70
 
         # Composite score: weight the components
@@ -185,18 +184,18 @@ class CandidateMatchingEngine:
             nice_to_have_total,
             candidate_years,
             min_years_experience,
-            candidate.get("security_clearance_level"),
+            candidate.get("clearance_level"),
             required_clearance,
             location_preference,
-            candidate.get("city"),
+            candidate.get("location"),
         )
 
         return {
-            "candidate_number": candidate_number,
+            "candidate_number": candidate.get("id"),
             "match_score": round(composite_score, 1),
             "years_experience": float(candidate_years),
-            "security_clearance": candidate.get("security_clearance_level", "unknown"),
-            "location": candidate.get("city", ""),
+            "security_clearance": candidate.get("clearance_level", "unknown"),
+            "location": candidate.get("location", ""),
             "languages": candidate.get("languages", []),
             "top_skills": self._get_top_skills(candidate_skills, 4),
             "summary": candidate.get("cv_summary", "")[:200],  # Truncate for readability
