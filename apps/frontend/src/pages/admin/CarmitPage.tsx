@@ -145,6 +145,8 @@ export const CarmitPage = () => {
   const [jobToOverride, setJobToOverride] = useState<any | null>(null);
   const [selectedNewAgent, setSelectedNewAgent] = useState('');
   const [overrideError, setOverrideError] = useState('');
+  const [agentMatchesGroupBy, setAgentMatchesGroupBy] = useState<'none' | 'state' | 'agent' | 'clearance'>('none');
+  const [allJobsGroupBy, setAllJobsGroupBy] = useState<'none' | 'priority' | 'assigned_agent' | 'status'>('none');
 
   // Fetch KPI metrics
   const { data: metrics } = useQuery({
@@ -550,25 +552,41 @@ export const CarmitPage = () => {
             </div>
           </div>
 
-          {/* Toolbar: score-floor filter. Lives above the loading/empty
+          {/* Toolbar: score-floor filter & grouping. Lives above the loading/empty
               guard so the user always sees the controls. */}
-          <div className="flex items-center gap-3 flex-wrap">
-            <label className="text-sm text-gray-300 font-semibold">סינון לפי ציון:</label>
-            <select
-              value={agentMatchesMinScore}
-              onChange={(e) => {
-                setAgentMatchesMinScore(parseFloat(e.target.value));
-                setAgentMatchesPage(0); // jumping to page 1 — the page count just changed
-              }}
-              className="bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-1.5 focus:border-blue-500 outline-none"
-            >
-              <option value={0}>הכל</option>
-              <option value={0.5}>50% ומעלה</option>
-              <option value={0.6}>60% ומעלה</option>
-              <option value={0.7}>70% ומעלה</option>
-              <option value={0.8}>80% ומעלה</option>
-              <option value={0.9}>90% ומעלה</option>
-            </select>
+          <div className="flex items-center gap-4 flex-wrap">
+            <div className="flex items-center gap-3">
+              <label className="text-sm text-gray-300 font-semibold">סינון לפי ציון:</label>
+              <select
+                value={agentMatchesMinScore}
+                onChange={(e) => {
+                  setAgentMatchesMinScore(parseFloat(e.target.value));
+                  setAgentMatchesPage(0); // jumping to page 1 — the page count just changed
+                }}
+                className="bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-1.5 focus:border-blue-500 outline-none"
+              >
+                <option value={0}>הכל</option>
+                <option value={0.5}>50% ומעלה</option>
+                <option value={0.6}>60% ומעלה</option>
+                <option value={0.7}>70% ומעלה</option>
+                <option value={0.8}>80% ומעלה</option>
+                <option value={0.9}>90% ומעלה</option>
+              </select>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <label className="text-sm text-gray-300 font-semibold">קיבוץ לפי:</label>
+              <select
+                value={agentMatchesGroupBy}
+                onChange={(e) => setAgentMatchesGroupBy(e.target.value as 'none' | 'state' | 'agent' | 'clearance')}
+                className="bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-1.5 focus:border-blue-500 outline-none"
+              >
+                <option value="none">ללא קיבוץ</option>
+                <option value="state">מצב</option>
+                <option value="agent">סוכן</option>
+                <option value="clearance">סיווג בטחוני</option>
+              </select>
+            </div>
           </div>
 
           {agentMatchesLoading ? (
@@ -583,7 +601,8 @@ export const CarmitPage = () => {
             </div>
           ) : (
             <>
-              <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+              {agentMatchesGroupBy === 'none' ? (
+                <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
                 <div className="overflow-x-auto">
                   <table className="w-full text-right text-sm">
                     <thead className="bg-gray-700 border-b border-gray-600 text-gray-200">
@@ -757,7 +776,6 @@ export const CarmitPage = () => {
                     </tbody>
                   </table>
                 </div>
-              </div>
 
               {/* Pagination footer */}
               {(() => {
@@ -792,6 +810,79 @@ export const CarmitPage = () => {
                   </div>
                 );
               })()}
+              </div>
+              ) : (
+                // Grouped view
+                <div className="space-y-6">
+                  {(() => {
+                    const matches = agentMatchesData!.matches;
+                    const groups: Record<string, typeof matches> = {};
+
+                    matches.forEach(m => {
+                      let groupKey = '';
+                      if (agentMatchesGroupBy === 'state') {
+                        groupKey = m.current_state || 'Unknown';
+                      } else if (agentMatchesGroupBy === 'agent') {
+                        groupKey = m.agent_code || 'Unknown';
+                      } else if (agentMatchesGroupBy === 'clearance') {
+                        groupKey = m.clearance_match || 'unknown';
+                      }
+                      if (!groups[groupKey]) groups[groupKey] = [];
+                      groups[groupKey].push(m);
+                    });
+
+                    return Object.entries(groups).map(([groupName, groupMatches]) => (
+                      <div key={groupName} className="bg-gray-800 rounded-lg border border-gray-700 p-4">
+                        <h3 className="text-lg font-semibold text-white mb-4">
+                          {agentMatchesGroupBy === 'state' && `מצב: ${groupName}`}
+                          {agentMatchesGroupBy === 'agent' && `סוכן: ${groupName}`}
+                          {agentMatchesGroupBy === 'clearance' && `סיווג בטחוני: ${groupName}`}
+                          <span className="text-sm text-gray-400 ml-2">({groupMatches.length})</span>
+                        </h3>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-right text-sm">
+                            <thead className="bg-gray-700 border-b border-gray-600 text-gray-200">
+                              <tr>
+                                <th className="px-4 py-3 font-semibold">ציון</th>
+                                <th className="px-4 py-3 font-semibold">מועמד</th>
+                                <th className="px-4 py-3 font-semibold">משרה</th>
+                                <th className="px-4 py-3 font-semibold">סוכן</th>
+                                <th className="px-4 py-3 font-semibold">מצב</th>
+                                <th className="px-4 py-3 font-semibold">סיווג ביטחוני</th>
+                                <th className="px-4 py-3 font-semibold">נוצר</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {groupMatches.map((m) => {
+                                const pct = Math.round(m.match_score * 100);
+                                const scoreCls = pct >= 90 ? 'bg-green-900 text-green-200' : pct >= 80 ? 'bg-emerald-900 text-emerald-200' : 'bg-yellow-900 text-yellow-200';
+                                const clrCfg: Record<ClearanceMatch, { icon: string; label: string; cls: string }> = {
+                                  match: { icon: '🟢', label: 'תואם', cls: 'border-green-700 text-green-200' },
+                                  partial: { icon: '🟡', label: 'חלקי', cls: 'border-yellow-700 text-yellow-200' },
+                                  mismatch: { icon: '🔴', label: 'לא תואם', cls: 'border-red-700 text-red-200' },
+                                  unknown: { icon: '⚪', label: 'לא ידוע', cls: 'border-gray-600 text-gray-300' },
+                                };
+                                const cfg = clrCfg[m.clearance_match] || clrCfg.unknown;
+                                return (
+                                  <tr key={m.id} className="border-b border-gray-700 hover:bg-gray-750 transition">
+                                    <td className="px-4 py-3"><button onClick={() => setSelectedAgentMatchForDetail({ id: m.id, candidateName: m.candidate_name, candidateId: m.candidate_id, jobId: m.job_id, jobTitle: m.job_title, company: 'Unknown Company', phone: m.candidate_phone || undefined, email: m.candidate_email || undefined, status: m.current_state, matchScore: m.match_score, dateAdded: m.created_at, lastActivity: m.updated_at, matchReasoning: m.match_reasoning, strengths: m.strengths, gaps: m.gaps, candidateClearance: m.candidate_clearance || undefined, requiredClearance: m.required_clearance || undefined, clearanceMatch: m.clearance_match })} className={`inline-block px-2 py-1 rounded text-xs font-bold cursor-pointer ${scoreCls}`}>{pct}%</button></td>
+                                    <td className="px-4 py-3"><button onClick={() => setSelectedAgentCandidate(m)} className="text-white font-semibold hover:text-blue-300 text-right">{m.candidate_name}</button></td>
+                                    <td className="px-4 py-3 text-gray-300">{m.job_title}</td>
+                                    <td className="px-4 py-3"><span className="px-2 py-0.5 rounded bg-indigo-900/40 border border-indigo-700 text-indigo-200 text-xs font-semibold">{m.agent_code}</span></td>
+                                    <td className="px-4 py-3"><span className="px-2 py-0.5 rounded text-xs font-semibold bg-gray-700 text-gray-200">{m.current_state}</span></td>
+                                    <td className="px-4 py-3 text-xs"><div className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border font-bold ${cfg.cls}`}><span>{cfg.icon}</span><span>{cfg.label}</span></div></td>
+                                    <td className="px-4 py-3 text-xs text-gray-500">{m.created_at ? new Date(m.created_at).toLocaleDateString('he-IL') : '—'}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    ));
+                  })()}
+                </div>
+              )}
             </>
           )}
         </div>
@@ -800,11 +891,28 @@ export const CarmitPage = () => {
       {/* All Jobs Tab */}
       {activeTab === 'all-jobs' && (
         <div className="space-y-4">
+          {/* Grouping dropdown for jobs */}
+          <div className="flex items-center gap-3">
+            <label className="text-sm text-gray-300 font-semibold">קיבוץ לפי:</label>
+            <select
+              value={allJobsGroupBy}
+              onChange={(e) => setAllJobsGroupBy(e.target.value as 'none' | 'priority' | 'assigned_agent' | 'status')}
+              className="bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-1.5 focus:border-blue-500 outline-none"
+            >
+              <option value="none">ללא קיבוץ</option>
+              <option value="priority">עדיפות</option>
+              <option value="assigned_agent">סוכן מוקצה</option>
+              <option value="status">סטטוס</option>
+            </select>
+          </div>
+
           {allJobsLoading ? (
             <div className="text-center py-8 text-gray-400">טוען...</div>
-          ) : (allJobsData?.jobs.length || 0) > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="w-full">
+          ) : ((allJobsData?.jobs.length || 0) > 0) ? (
+            allJobsGroupBy === 'none' ? (
+              <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full">
                 <thead>
                   <tr className="border-b border-gray-700">
                     <th className="text-right px-4 py-3 text-gray-300 font-semibold">כותרת משרה</th>
@@ -892,7 +1000,67 @@ export const CarmitPage = () => {
                   ))}
                 </tbody>
               </table>
-            </div>
+                </div>
+              </div>
+            ) : (
+              // Grouped view for jobs
+              <div className="space-y-6">
+                {(() => {
+                  const jobs = allJobsData!.jobs;
+                  const groups: Record<string, typeof jobs> = {};
+
+                  jobs.forEach(job => {
+                    let groupKey = '';
+                    if (allJobsGroupBy === 'priority') {
+                      groupKey = `עדיפות ${job.priority}`;
+                    } else if (allJobsGroupBy === 'assigned_agent') {
+                      groupKey = job.assigned_agent_name || 'לא הוקצה';
+                    } else if (allJobsGroupBy === 'status') {
+                      groupKey = job.status || 'Unknown';
+                    }
+                    if (!groups[groupKey]) groups[groupKey] = [];
+                    groups[groupKey].push(job);
+                  });
+
+                  return Object.entries(groups).map(([groupName, groupJobs]) => (
+                    <div key={groupName} className="bg-gray-800 rounded-lg border border-gray-700 p-4">
+                      <h3 className="text-lg font-semibold text-white mb-4">
+                        {groupName}
+                        <span className="text-sm text-gray-400 ml-2">({groupJobs.length})</span>
+                      </h3>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead className="bg-gray-700 border-b border-gray-600 text-gray-300">
+                            <tr>
+                              <th className="text-right px-4 py-3 font-semibold">כותרת משרה</th>
+                              <th className="text-right px-4 py-3 font-semibold">עדיפות</th>
+                              <th className="text-right px-4 py-3 font-semibold">ארגון</th>
+                              <th className="text-right px-4 py-3 font-semibold">סוכן מוקצה</th>
+                              <th className="text-right px-4 py-3 font-semibold">סטטוס</th>
+                              <th className="text-right px-4 py-3 font-semibold">תאריך יצירה</th>
+                              <th className="text-right px-4 py-3 font-semibold">פעולות</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {groupJobs.map((job) => (
+                              <tr key={job.id} className="border-b border-gray-700 hover:bg-gray-750 transition">
+                                <td className="px-4 py-3 text-white">{job.title}</td>
+                                <td className="px-4 py-3"><span className={`px-2 py-1 rounded text-xs font-semibold ${job.priority === 1 ? 'bg-red-900 text-red-300' : job.priority <= 2 ? 'bg-orange-900 text-orange-300' : job.priority <= 3 ? 'bg-yellow-900 text-yellow-300' : 'bg-gray-700 text-gray-300'}`}>{job.priority}</span></td>
+                                <td className="px-4 py-3 text-gray-300 text-sm">{job.organization_name || '-'}</td>
+                                <td className="px-4 py-3">{job.assigned_agent_name ? (<span className="px-2 py-1 bg-green-900 text-green-300 rounded text-xs font-semibold">{job.assigned_agent_name}</span>) : (<span className="text-gray-500 text-xs">לא הוקצה</span>)}</td>
+                                <td className="px-4 py-3"><span className={`px-2 py-1 rounded text-xs ${job.status === 'open' ? 'bg-blue-900 text-blue-300' : job.status === 'closed' ? 'bg-gray-700 text-gray-300' : 'bg-gray-600 text-gray-300'}`}>{job.status}</span></td>
+                                <td className="px-4 py-3 text-gray-400 text-sm">{new Date(job.created_at).toLocaleDateString('he-IL')}</td>
+                                <td className="px-4 py-3"><button onClick={() => { setJobToOverride(job); setSelectedNewAgent(''); setOverrideError(''); setShowOverrideModal(true); }} className="px-3 py-1 bg-orange-600 hover:bg-orange-700 text-white rounded text-xs font-semibold transition">⚙️ עדכן</button></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ));
+                })()}
+              </div>
+            )
           ) : (
             <div className="text-center py-8 text-gray-400">אין משרות</div>
           )}
