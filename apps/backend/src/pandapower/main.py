@@ -177,8 +177,8 @@ async def _pipeline_scheduler_loop():
 
     Stages and intervals:
       CV intake pipeline:
-        - ingest               : 120s   (poll Outlook, save CVs to storage)
-        - parse                : 180s   (extract text + Claude analysis)
+        - ingest               : 60s    (poll Outlook, save CVs to storage) - ACCELERATED for backfill
+        - parse                : 120s   (extract text + Claude analysis) - ACCELERATED for backfill
         - candidates           : 240s   (create candidate records)
         - skills               : 600s   (normalize raw skills → canonical)
         - score                : 3600s  (score candidate readiness)
@@ -218,8 +218,8 @@ async def _pipeline_scheduler_loop():
     # firing of each stage across the first couple of minutes.
     stages: dict[str, tuple] = {
         # name                    factory                          interval  stagger
-        "ingest":                (_ingest_emails_async,            120.0,    0.0),
-        "parse":                 (_parse_cvs_async,                180.0,    10.0),
+        "ingest":                (_ingest_emails_async,            60.0,     0.0),
+        "parse":                 (_parse_cvs_async,                120.0,    10.0),
         "candidates":            (_create_candidates_async,        240.0,    20.0),
         "skills":                (_normalize_skills_async,         600.0,    30.0),
         "score":                 (_score_candidates_async,         3600.0,   40.0),

@@ -65,19 +65,19 @@ def extract_candidate_identity(subject: str, body: str) -> tuple[Optional[str], 
     return cand_email, cand_phone, cand_name
 
 # Concurrent limits for API calls
-# During backfill (historical scan), we can be more aggressive
-# During incremental (recent emails), we stay conservative to avoid hammering Azure
-MAX_CONCURRENT_DOWNLOADS_INCREMENTAL = 3
-MAX_CONCURRENT_DOWNLOADS_BACKFILL = 10
-MAX_CONCURRENT_UPLOADS_INCREMENTAL = 3
-MAX_CONCURRENT_UPLOADS_BACKFILL = 10
+# During backfill (historical scan), be aggressive to accelerate scanning
+# During incremental (recent emails), balance speed with load
+MAX_CONCURRENT_DOWNLOADS_INCREMENTAL = 5
+MAX_CONCURRENT_DOWNLOADS_BACKFILL = 30
+MAX_CONCURRENT_UPLOADS_INCREMENTAL = 5
+MAX_CONCURRENT_UPLOADS_BACKFILL = 30
 MAX_ATTACHMENT_SIZE_MB = 50
 
 # Batch processing limits
-# During backfill, process up to 500 emails per run to accelerate historical scanning
-# During incremental, keep conservative to avoid long Celery task execution
-MAX_EMAILS_PER_RUN_INCREMENTAL = 100
-MAX_EMAILS_PER_RUN_BACKFILL = 500
+# During backfill, process up to 2000 emails per run for rapid historical scanning
+# During incremental, process 200 for faster daily catch-up
+MAX_EMAILS_PER_RUN_INCREMENTAL = 200
+MAX_EMAILS_PER_RUN_BACKFILL = 2000
 
 
 class EmailIngestWorker:
