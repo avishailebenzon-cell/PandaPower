@@ -60,9 +60,19 @@ async def _ingest_emails_async(batch_size: int = 20) -> dict[str, Any]:
         is_backfill = False
         if settings_dict.get("backfill_start_date") and settings_dict.get("backfill_start_date") != "null":
             last_processed_value = settings_dict.get("last_processed_message_received_at", "null")
-            is_backfill = last_processed_value == "null" or last_processed_value is None
+            backfill_start = settings_dict.get("backfill_start_date")
+
+            # Backfill is active if:
+            # 1. last_processed is null (never started), OR
+            # 2. last_processed is still AFTER backfill_start (still scanning backward)
+            is_null = last_processed_value == "null" or last_processed_value is None
+            is_after_start = last_processed_value and backfill_start and last_processed_value > backfill_start
+
+            is_backfill = is_null or is_after_start
             if is_backfill:
                 logger.info(f"Backward scan active: will process more emails per run for faster historical scanning")
+                if not is_null:
+                    logger.info(f"Resuming from {last_processed_value} until {backfill_start}")
 
         azure_client = AzureGraphClient(
             tenant_id=settings_dict["tenant_id"],
