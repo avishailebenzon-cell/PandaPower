@@ -103,13 +103,12 @@ class EmailIngestWorker:
             self.max_concurrent_uploads = MAX_CONCURRENT_UPLOADS_INCREMENTAL
             self.max_emails_per_run = MAX_EMAILS_PER_RUN_INCREMENTAL
 
-    async def ingest_recent_emails(self, batch_size: int = 20) -> dict[str, Any]:
-        """Poll and ingest recent emails from target mailbox.
+    async def ingest_incremental_emails(self, batch_size: int = 20) -> dict[str, Any]:
+        """Scan recent emails forward in time (daily incoming emails).
 
-        Args:
-            batch_size: Number of messages to process per batch (optimal for backfill)
+        Process new emails that arrive today, keeping track of the latest timestamp
+        so we don't reprocess the same emails.
         """
-        # Create semaphores for concurrency control
         self.download_semaphore = asyncio.Semaphore(self.max_concurrent_downloads)
         self.upload_semaphore = asyncio.Semaphore(self.max_concurrent_uploads)
 
@@ -118,13 +117,12 @@ class EmailIngestWorker:
             "cv_files_extracted": 0,
             "duplicates_found": 0,
             "errors": [],
-            "backfill_progress": None,
+            "type": "incremental",
         }
 
         try:
-            # Fetch last processed timestamp
+            # Fetch last_seen for incremental scan
             last_seen = None
-            backfill_start = None
             try:
                 settings_response = await self.supabase.table("system_settings").select(
                     "setting_value"
@@ -135,35 +133,15 @@ class EmailIngestWorker:
                         iso_cleaned = iso_str.strip('"').replace('Z', '+00:00')
                         last_seen = datetime.fromisoformat(iso_cleaned)
             except Exception as e:
-                logger.debug(f"last_seen lookup failed (treating as cold start): {e}")
+                logger.debug(f"last_seen lookup failed: {e}")
 
-            # If no last_seen (backfill mode), check for backfill_start_date
             if last_seen is None:
-                try:
-                    backfill_response = await self.supabase.table("system_settings").select(
-                        "setting_value"
-                    ).eq("setting_key", "azure.backfill_start_date").limit(1).execute()
-                    if backfill_response.data and backfill_response.data[0].get("setting_value"):
-                        date_str = str(backfill_response.data[0]["setting_value"]).strip('"')
-                        if date_str and date_str != "null":
-                            backfill_start = datetime.fromisoformat(date_str)
-                            # Force UTC tz-awareness: setting is usually stored
-                            # as a bare date ("2021-05-01"), which gives a naive
-                            # datetime that can't be compared with Microsoft
-                            # Graph's tz-aware receivedDateTime down at line 109
-                            # — that's where this code crashed.
-                            from datetime import timezone as _tz
-                            if backfill_start.tzinfo is None:
-                                backfill_start = backfill_start.replace(tzinfo=_tz.utc)
-                            last_seen = backfill_start
-                            logger.info(f"Starting backfill from date: {last_seen}")
-                except Exception as e:
-                    logger.debug(f"Backfill date lookup failed: {e}")
+                from datetime import timezone as _tz
+                last_seen = datetime.now(_tz.utc) - timedelta(hours=1)
+                logger.info(f"Starting incremental scan from 1 hour ago: {last_seen}")
 
-            # Same guard for the other branch: if last_seen came from
-            # azure.last_seen_message_received_at, normalise to tz-aware UTC
-            # so the comparison below is always safe.
-            if last_seen is not None and last_seen.tzinfo is None:
+            # Ensure tz-aware
+            if last_seen.tzinfo is None:
                 from datetime import timezone as _tz
                 last_seen = last_seen.replace(tzinfo=_tz.utc)
 
@@ -171,21 +149,23 @@ class EmailIngestWorker:
             max_received = last_seen
             processed_batch = 0
 
-            logger.info(f"Email ingest: last_seen = {last_seen}, will fetch emails since this timestamp")
+            logger.info(f"Email ingest (incremental): fetching new emails since {last_seen}")
 
             while True:
-                logger.debug(f"Fetching messages with since={last_seen}, next_link={next_link is not None}")
+                # Forward scan: fetch emails newer than last_seen
+                logger.debug(f"Fetching new emails since={last_seen}, next_link={next_link is not None}")
                 response = await self.azure.list_messages(since=last_seen, next_link=next_link, page_size=batch_size)
                 messages = response.get("value", [])
-                logger.info(f"Azure returned {len(messages)} messages in this batch")
+                logger.info(f"Azure returned {len(messages)} new messages in this batch")
 
                 if not messages:
+                    logger.info("No new messages")
                     break
 
-                # Process messages concurrently with semaphore to limit parallelism
+                # Process messages (no dedup - we want to capture all recent emails)
                 tasks = []
                 for msg_data in messages:
-                    tasks.append(self._process_message(msg_data))
+                    tasks.append(self._process_message(msg_data, dedup_identity=False))
 
                 processed_messages = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -200,8 +180,6 @@ class EmailIngestWorker:
                     result["duplicates_found"] += processed["duplicates"]
                     processed_batch += 1
 
-                    # Belt-and-suspenders: even if upstream forgot, force
-                    # both sides of the comparison to be tz-aware UTC.
                     recv = processed.get("received_at")
                     if recv is not None and getattr(recv, "tzinfo", None) is None:
                         from datetime import timezone as _tz
@@ -209,25 +187,19 @@ class EmailIngestWorker:
                     if recv and (max_received is None or recv > max_received):
                         max_received = recv
 
-                # Update progress for backfill
-                if backfill_start:
-                    days_processed = (max_received - backfill_start).days if max_received else 0
-                    result["backfill_progress"] = f"Processing {max_received.date() if max_received else 'recent'}"
-                    logger.info(f"Backfill progress: {days_processed} days processed, {result['total_processed']} emails, {result['cv_files_extracted']} CVs")
+                result["progress"] = f"Processed up to {max_received.date() if max_received else 'recent'}"
+                logger.info(f"Incremental scan progress: {result['total_processed']} emails, {result['cv_files_extracted']} CVs")
 
                 next_link = response.get("@odata.nextLink")
                 if not next_link:
-                    logger.info(f"Completed batch of {processed_batch} messages, no more pages")
+                    logger.info("Completed batch, no more pages")
                     break
 
-                # Limit emails per run based on backfill mode
-                # During backfill (historical scan), process up to 500 emails per run
-                # During incremental (recent), keep at 100 to avoid long task execution
                 if processed_batch >= self.max_emails_per_run:
-                    logger.info(f"Reached max emails per run limit ({processed_batch}/{self.max_emails_per_run}), will continue in next run (backfill_mode={self.is_backfill})")
+                    logger.info(f"Reached max emails per run ({processed_batch}/{self.max_emails_per_run})")
                     break
 
-            # Update last seen timestamp
+            # Update last_seen timestamp
             if max_received:
                 await self.supabase.table("system_settings").upsert(
                     {
@@ -238,6 +210,154 @@ class EmailIngestWorker:
                     on_conflict="setting_key",
                 ).execute()
                 logger.info(f"Updated last_seen to: {max_received.isoformat()}")
+
+            logger.info(f"Incremental ingest completed: {result}")
+            return result
+
+        except Exception as e:
+            logger.error(f"Incremental email ingest failed: {e}", exc_info=True)
+            result["errors"].append(str(e))
+            return result
+
+    async def ingest_recent_emails(self, batch_size: int = 20) -> dict[str, Any]:
+        """Scan emails backward in time, starting from today until backfill_start_date.
+
+        The backward scan strategy:
+        1. Start from today (or last_processed if resuming)
+        2. Fetch emails older than that date
+        3. Skip candidates that already exist in the system
+        4. Ingest new candidates
+        5. Continue until backfill_start_date is reached
+        6. Track last_processed as the oldest date we've seen
+        """
+        self.download_semaphore = asyncio.Semaphore(self.max_concurrent_downloads)
+        self.upload_semaphore = asyncio.Semaphore(self.max_concurrent_uploads)
+
+        result = {
+            "total_processed": 0,
+            "cv_files_extracted": 0,
+            "duplicates_found": 0,
+            "errors": [],
+            "backfill_progress": None,
+        }
+
+        try:
+            # Fetch the starting point for backward scan (today or resume point)
+            last_processed = None
+            backfill_start = None
+            try:
+                settings_response = await self.supabase.table("system_settings").select(
+                    "setting_value"
+                ).eq("setting_key", "azure.last_processed_message_received_at").limit(1).execute()
+                if settings_response.data and settings_response.data[0].get("setting_value"):
+                    iso_str = str(settings_response.data[0]["setting_value"])
+                    if iso_str.strip('"') and iso_str.strip('"') != "null":
+                        iso_cleaned = iso_str.strip('"').replace('Z', '+00:00')
+                        last_processed = datetime.fromisoformat(iso_cleaned)
+            except Exception as e:
+                logger.debug(f"last_processed lookup failed: {e}")
+
+            # Get backfill_start_date (when to stop going backward)
+            try:
+                backfill_response = await self.supabase.table("system_settings").select(
+                    "setting_value"
+                ).eq("setting_key", "azure.backfill_start_date").limit(1).execute()
+                if backfill_response.data and backfill_response.data[0].get("setting_value"):
+                    date_str = str(backfill_response.data[0]["setting_value"]).strip('"')
+                    if date_str and date_str != "null":
+                        backfill_start = datetime.fromisoformat(date_str)
+                        from datetime import timezone as _tz
+                        if backfill_start.tzinfo is None:
+                            backfill_start = backfill_start.replace(tzinfo=_tz.utc)
+                        logger.info(f"Backward scan: will stop at {backfill_start}")
+            except Exception as e:
+                logger.debug(f"Backfill date lookup failed: {e}")
+
+            # If no last_processed, start from today
+            if last_processed is None:
+                from datetime import timezone as _tz
+                last_processed = datetime.now(_tz.utc)
+                logger.info(f"Starting backward scan from today: {last_processed}")
+
+            # Ensure tz-aware
+            if last_processed.tzinfo is None:
+                from datetime import timezone as _tz
+                last_processed = last_processed.replace(tzinfo=_tz.utc)
+
+            next_link = None
+            min_received = last_processed  # Track oldest date we've seen
+            processed_batch = 0
+
+            logger.info(f"Email ingest (backward): scanning until {last_processed}, stop at {backfill_start}")
+
+            while True:
+                # Backward scan: fetch emails older than last_processed
+                logger.debug(f"Fetching emails until={last_processed}, next_link={next_link is not None}")
+                response = await self.azure.list_messages(until=last_processed, next_link=next_link, page_size=batch_size)
+                messages = response.get("value", [])
+                logger.info(f"Azure returned {len(messages)} messages in this batch (oldest first)")
+
+                if not messages:
+                    logger.info("No more messages returned from Azure")
+                    break
+
+                # Process with dedup_identity=True to skip existing candidates
+                tasks = []
+                for msg_data in messages:
+                    tasks.append(self._process_message(msg_data, dedup_identity=True))
+
+                processed_messages = await asyncio.gather(*tasks, return_exceptions=True)
+
+                for processed in processed_messages:
+                    if isinstance(processed, Exception):
+                        logger.error(f"Error processing message: {processed}")
+                        result["errors"].append(str(processed))
+                        continue
+
+                    result["total_processed"] += 1
+                    result["cv_files_extracted"] += processed["cv_count"]
+                    result["duplicates_found"] += processed["duplicates"]
+                    processed_batch += 1
+
+                    # Track the oldest date we've seen
+                    recv = processed.get("received_at")
+                    if recv is not None and getattr(recv, "tzinfo", None) is None:
+                        from datetime import timezone as _tz
+                        recv = recv.replace(tzinfo=_tz.utc)
+                    if recv and (min_received is None or recv < min_received):
+                        min_received = recv
+
+                # Check if we've reached the backfill start date
+                if min_received and backfill_start and min_received <= backfill_start:
+                    logger.info(f"Reached backfill start date ({backfill_start}), stopping backward scan")
+                    break
+
+                # Update progress
+                if min_received:
+                    result["backfill_progress"] = f"Scanned back to {min_received.date()}"
+                    logger.info(f"Backward scan progress: {result['total_processed']} emails, {result['cv_files_extracted']} CVs, oldest: {min_received.date()}")
+
+                next_link = response.get("@odata.nextLink")
+                if not next_link:
+                    logger.info("Completed batch, no more pagination links")
+                    break
+
+                # Limit per run
+                if processed_batch >= self.max_emails_per_run:
+                    logger.info(f"Reached max emails per run ({processed_batch}/{self.max_emails_per_run}), will resume in next run")
+                    break
+
+            # Update last_processed to the oldest date we've seen
+            if min_received:
+                await self.supabase.table("system_settings").upsert(
+                    {
+                        "setting_key": "azure.last_processed_message_received_at",
+                        "setting_value": f'"{min_received.isoformat()}"',
+                        "updated_at": datetime.utcnow().isoformat(),
+                    },
+                    on_conflict="setting_key",
+                ).execute()
+                logger.info(f"Updated last_processed to: {min_received.isoformat()}")
 
             logger.info(f"Email ingest completed: {result}")
             return result

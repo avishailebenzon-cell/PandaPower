@@ -350,7 +350,8 @@ async def init_system_settings(supabase_client: Any) -> None:
         "azure.client_secret": "",
         "azure.target_mailbox": "",
         "azure.last_seen_message_received_at": "null",
-        "azure.backfill_start_date": "2021-05-01",
+        "azure.last_processed_message_received_at": "null",
+        "azure.backfill_start_date": "2026-05-27",
     }
 
     for key, value in default_settings.items():

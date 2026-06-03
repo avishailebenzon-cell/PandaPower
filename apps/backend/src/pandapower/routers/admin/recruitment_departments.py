@@ -146,6 +146,21 @@ class RecordConversationRequest(BaseModel):
     timestamp: Optional[str] = None
 
 
+class EvaluatedCandidate(BaseModel):
+    """Candidate evaluated against a job (pass or fail)."""
+    id: str  # match record ID
+    candidateId: str
+    candidateName: str
+    candidateEmail: Optional[str] = None
+    score: int  # 0-100 absolute score
+    isPassing: bool  # True if ≥70, False if <70
+    reasoning: Optional[str] = None
+    strengths: List[str] = []
+    gaps: List[str] = []
+    evaluatedAt: str  # ISO timestamp
+    evaluatedByAgent: str  # agent code
+
+
 class AssignedJob(BaseModel):
     """Job assigned to an agent."""
     id: str
@@ -193,16 +208,28 @@ async def get_assigned_jobs(
         if not jobs_result.data:
             return []
 
-        # First pass: keep only this department's open jobs.
+        # First pass: keep only this department's open jobs (not expired).
         # We do this so we can batch-load contact names by pipedrive_person_id below
         # (avoids an N+1 lookup per job).
         relevant_jobs = []
+        today = datetime.now().date()
         for job in jobs_result.data:
             agent_code = job.get("assigned_agent_code") or job.get("agent_code")
             if agent_code != department_code:
                 continue
             if job.get("status") != "open":
                 continue
+            # Skip jobs with passed deadlines
+            deadline_str = job.get("deadline")
+            if deadline_str:
+                try:
+                    deadline_date = datetime.fromisoformat(deadline_str.replace('Z', '+00:00')).date()
+                    if deadline_date < today:
+                        # Job deadline has passed — skip it (don't show to agent)
+                        continue
+                except (ValueError, AttributeError):
+                    # Invalid deadline format — include job anyway (let user deal with it)
+                    pass
             relevant_jobs.append(job)
 
         # Batch-resolve contact names: contacts.pipedrive_person_id BIGINT -> full_name.
@@ -572,3 +599,146 @@ async def record_conversation(
     except Exception as e:
         logger.error(f"Record conversation failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to record conversation")
+
+
+@router.get(
+    "/{department_code}/jobs/{job_id}/evaluated-candidates",
+    response_model=List[EvaluatedCandidate],
+)
+async def get_evaluated_candidates(
+    department_code: str,
+    job_id: str,
+    supabase = Depends(get_supabase_client),
+) -> List[EvaluatedCandidate]:
+    """Get all candidates evaluated against a specific job.
+
+    Returns ALL evaluations (both passing ≥70 and failing <70) with reasoning.
+
+    Args:
+        department_code: Agent code who performed evaluations
+        job_id: Job ID to get evaluations for
+        supabase: Supabase client
+
+    Returns:
+        List of evaluated candidates sorted by: is_passing DESC, score DESC
+    """
+    try:
+        # Get all matches for this job+agent (all evaluations)
+        result = await supabase.table("matches").select(
+            "*, "
+            "candidates(id,name,email)"
+        ).eq("job_id", job_id).eq(
+            "matched_by_agent_code", department_code
+        ).order("is_passing", desc=True).order(
+            "evaluated_score_raw", desc=True
+        ).execute()
+
+        matches = result.data or []
+
+        if not matches:
+            return []
+
+        # Batch-load strengths/gaps from agent_logs
+        match_ids = [str(m["id"]) for m in matches]
+        strengths_by_match = {}
+        gaps_by_match = {}
+
+        if match_ids:
+            try:
+                logs_result = await supabase.table("agent_logs").select(
+                    "related_match_id, output_payload"
+                ).in_("related_match_id", match_ids).eq("action", "find_match").execute()
+                for log in logs_result.data or []:
+                    mid = str(log.get("related_match_id") or "")
+                    payload = log.get("output_payload") or {}
+                    if isinstance(payload, dict):
+                        s = payload.get("strengths") or []
+                        g = payload.get("gaps") or []
+                        if isinstance(s, list) and s and mid not in strengths_by_match:
+                            strengths_by_match[mid] = [str(x) for x in s]
+                        if isinstance(g, list) and g and mid not in gaps_by_match:
+                            gaps_by_match[mid] = [str(x) for x in g]
+            except Exception as log_err:
+                logger.warning(f"Could not load strengths/gaps from agent_logs: {log_err}")
+
+        # Map to response model
+        candidates = []
+        for row in matches:
+            candidate = row.get("candidates", {}) or {}
+            match_id = str(row.get("id", ""))
+
+            # Default to 0 if evaluated_score_raw is NULL (for old matches pre-migration)
+            score = row.get("evaluated_score_raw") or 0
+            if score == 0 and row.get("match_score"):
+                # Fallback: convert normalized score to 0-100
+                score = round(float(row["match_score"]) * 100)
+
+            candidates.append(
+                EvaluatedCandidate(
+                    id=match_id,
+                    candidateId=str(candidate.get("id", "")),
+                    candidateName=candidate.get("name") or "Unknown",
+                    candidateEmail=candidate.get("email"),
+                    score=score,
+                    isPassing=row.get("is_passing", False),
+                    reasoning=row.get("match_reasoning"),
+                    strengths=strengths_by_match.get(match_id, []),
+                    gaps=gaps_by_match.get(match_id, []),
+                    evaluatedAt=row.get("created_at", ""),
+                    evaluatedByAgent=department_code,
+                )
+            )
+
+        return candidates
+
+    except Exception as e:
+        logger.error(f"Get evaluated candidates failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to get evaluated candidates")
+
+
+@router.delete("/{department_code}/jobs/{job_id}")
+async def delete_job(
+    department_code: str,
+    job_id: str,
+    supabase = Depends(get_supabase_client),
+) -> dict:
+    """Delete a job from the database.
+
+    This is for cleanup of expired or irrelevant jobs.
+
+    Args:
+        department_code: Agent code (for audit trail)
+        job_id: Job ID to delete
+        supabase: Supabase client
+
+    Returns:
+        Success response
+    """
+    try:
+        # Verify job exists and is assigned to this agent
+        job_result = await supabase.table("jobs").select("id, assigned_agent_code").eq("id", job_id).execute()
+
+        if not job_result.data:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        job = job_result.data[0]
+        assigned_agent = job.get("assigned_agent_code")
+        if assigned_agent != department_code:
+            raise HTTPException(status_code=403, detail="Not authorized to delete this job")
+
+        # Delete job (cascades handled by database constraints)
+        result = await supabase.table("jobs").delete().eq("id", job_id).execute()
+
+        logger.info(f"Job {job_id} deleted by agent {department_code}")
+
+        return {
+            "status": "success",
+            "message": f"Job {job_id} deleted",
+            "job_id": job_id,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Delete job failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to delete job")

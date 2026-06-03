@@ -120,27 +120,42 @@ class AzureGraphClient:
         self,
         folder: str = "inbox",
         since: datetime | None = None,
+        until: datetime | None = None,
         page_size: int = 50,
         next_link: str | None = None,
     ) -> dict[str, Any]:
+        """Fetch messages from mailbox.
+
+        Args:
+            folder: Mail folder name (default: 'inbox')
+            since: Only fetch messages with receivedDateTime >= since (forward scan)
+            until: Only fetch messages with receivedDateTime <= until (backward scan)
+            page_size: Number of messages per page
+            next_link: Continuation token for pagination
+
+        Note: Use `since` for forward chronological scanning. Use `until` for
+        backward scanning (older emails first). Do not combine both.
+        """
         if next_link:
             response = await self._make_request("GET", next_link)
             return response
 
         filter_param = []
         if since:
-            # Format datetime for Azure Graph API
-            # Convert to UTC if timezone-aware, then use Z format
             if since.tzinfo is not None:
-                # Timezone-aware: convert to UTC
                 since_utc = since.astimezone(timezone.utc).replace(tzinfo=None)
             else:
-                # Naive datetime: assume UTC
                 since_utc = since
-
-            # Use Z format for UTC: 2026-05-21T18:56:00Z
             iso_date = since_utc.isoformat() + "Z"
             filter_param.append(f"receivedDateTime ge {iso_date}")
+
+        if until:
+            if until.tzinfo is not None:
+                until_utc = until.astimezone(timezone.utc).replace(tzinfo=None)
+            else:
+                until_utc = until
+            iso_date = until_utc.isoformat() + "Z"
+            filter_param.append(f"receivedDateTime le {iso_date}")
 
         filter_query = " and ".join(filter_param) if filter_param else ""
         url = (

@@ -81,13 +81,13 @@ async def start_backfill(
     request: StartBackfillRequest,
     supabase_client=Depends(get_supabase_client),
 ) -> dict[str, str]:
-    """Start backfill of historical emails.
+    """Start backward scan of emails from today until start_date.
 
-    This will override the last_seen_message_received_at to start from the specified date.
-    The email ingest task will then process all emails from that date forward.
+    Strategy: Scan backward in time from today, skipping candidates that already exist,
+    until reaching start_date. New candidates are ingested, old ones are skipped.
     """
     try:
-        start_date = request.start_date or "2021-05-01"
+        start_date = request.start_date or "2026-05-27"
 
         # Validate date format
         try:
@@ -104,21 +104,22 @@ async def start_backfill(
             on_conflict="setting_key",
         ).execute()
 
+        # Reset last_processed so we start from today
         await supabase_client.table("system_settings").upsert(
             {
-                "setting_key": "azure.last_seen_message_received_at",
+                "setting_key": "azure.last_processed_message_received_at",
                 "setting_value": "null",
                 "updated_at": datetime.utcnow().isoformat(),
             },
             on_conflict="setting_key",
         ).execute()
 
-        logger.info(f"Backfill started from {start_date}")
+        logger.info(f"Backward scan started: will scan until {start_date}")
 
         return {
             "status": "started",
             "start_date": start_date,
-            "note": "Backfill will process ~100 emails per run. Check progress in status endpoint.",
+            "note": "Backward scan will start from today. Existing candidates are skipped. New candidates ingested.",
         }
 
     except HTTPException:
@@ -131,13 +132,13 @@ async def start_backfill(
 @router.post("/run-now")
 async def run_now(
     supabase_client=Depends(get_supabase_client),
-) -> dict[str, str]:
-    """Manually trigger email ingest worker."""
+) -> dict:
+    """Manually trigger both email ingest scans (incremental + backward)."""
     try:
         # Fetch Azure settings
         settings_response = await supabase_client.table("system_settings").select(
             "setting_key,setting_value"
-        ).in_("setting_key", ["azure.tenant_id", "azure.app_client_id", "azure.client_secret", "azure.target_mailbox"]).execute()
+        ).in_("setting_key", ["azure.tenant_id", "azure.app_client_id", "azure.client_secret", "azure.target_mailbox", "azure.backfill_start_date", "azure.last_processed_message_received_at"]).execute()
 
         settings_dict = {}
         for row in settings_response.data or []:
@@ -148,6 +149,12 @@ async def run_now(
         if not all(k in settings_dict for k in ["tenant_id", "app_client_id", "client_secret", "target_mailbox"]):
             raise HTTPException(status_code=400, detail="Azure settings not configured")
 
+        # Detect backfill mode
+        is_backfill = False
+        if settings_dict.get("backfill_start_date") and settings_dict.get("backfill_start_date") != "null":
+            last_processed_value = settings_dict.get("last_processed_message_received_at", "null")
+            is_backfill = last_processed_value == "null" or last_processed_value is None
+
         azure_client = AzureGraphClient(
             tenant_id=settings_dict["tenant_id"],
             client_id=settings_dict["app_client_id"],
@@ -156,13 +163,32 @@ async def run_now(
         )
 
         storage_manager = SupabaseStorageManager(supabase_client)
-        worker = EmailIngestWorker(supabase_client, azure_client, storage_manager)
-        result = await worker.ingest_recent_emails()
+        results = {}
+
+        # 1. Incremental scan (new emails)
+        logger.info("Running incremental scan (new emails)")
+        worker_incremental = EmailIngestWorker(supabase_client, azure_client, storage_manager, is_backfill=False)
+        results["incremental"] = await worker_incremental.ingest_incremental_emails()
+
+        # 2. Backward scan (if enabled)
+        if is_backfill:
+            logger.info("Running backward scan (historical emails)")
+            worker_backfill = EmailIngestWorker(supabase_client, azure_client, storage_manager, is_backfill=True)
+            results["backfill"] = await worker_backfill.ingest_recent_emails()
+        else:
+            results["backfill"] = {"status": "skipped"}
 
         return {
             "status": "completed",
-            "total_processed": str(result.get("total_processed", 0)),
-            "cv_files_extracted": str(result.get("cv_files_extracted", 0)),
+            "incremental": {
+                "total_processed": str(results["incremental"].get("total_processed", 0)),
+                "cv_files_extracted": str(results["incremental"].get("cv_files_extracted", 0)),
+            },
+            "backfill": {
+                "total_processed": str(results["backfill"].get("total_processed", 0)),
+                "cv_files_extracted": str(results["backfill"].get("cv_files_extracted", 0)),
+                "progress": results["backfill"].get("backfill_progress"),
+            },
         }
 
     except Exception as e:
@@ -295,9 +321,9 @@ async def get_status(
 async def get_backfill_progress(
     supabase_client=Depends(get_supabase_client),
 ) -> dict:
-    """Get backfill progress."""
+    """Get backward scan progress."""
     try:
-        # Get backfill start date (use limit(1) instead of single() to avoid error when row missing)
+        # Get backfill end date (where backward scan stops)
         backfill_response = await supabase_client.table("system_settings").select(
             "setting_value"
         ).eq("setting_key", "azure.backfill_start_date").limit(1).execute()
@@ -311,21 +337,20 @@ async def get_backfill_progress(
                 except ValueError:
                     pass
 
-        # Get last processed timestamp
-        last_seen_response = await supabase_client.table("system_settings").select(
+        # Get oldest email processed (going backward in time)
+        last_processed_response = await supabase_client.table("system_settings").select(
             "setting_value"
-        ).eq("setting_key", "azure.last_seen_message_received_at").limit(1).execute()
+        ).eq("setting_key", "azure.last_processed_message_received_at").limit(1).execute()
 
         last_processed = None
-        if last_seen_response.data and last_seen_response.data[0].get("setting_value"):
-            iso_str = str(last_seen_response.data[0]["setting_value"]).strip('"')
+        if last_processed_response.data and last_processed_response.data[0].get("setting_value"):
+            iso_str = str(last_processed_response.data[0]["setting_value"]).strip('"')
             if iso_str and iso_str != "null":
                 try:
                     last_processed = datetime.fromisoformat(iso_str.replace('Z', '+00:00'))
                 except ValueError:
                     pass
 
-        # Ensure both datetimes are either naive or aware for safe arithmetic
         from datetime import timezone as _tz
         if backfill_start and backfill_start.tzinfo is None:
             backfill_start = backfill_start.replace(tzinfo=_tz.utc)
@@ -334,11 +359,11 @@ async def get_backfill_progress(
 
         now_utc = datetime.now(_tz.utc)
 
-        # Calculate progress
+        # Calculate progress (backward scan: from today down to backfill_start)
         if backfill_start and last_processed:
             total_days = (now_utc - backfill_start).days
-            processed_days = (last_processed - backfill_start).days
-            progress_percent = min(100, int((processed_days / max(total_days, 1)) * 100))
+            scanned_days = (now_utc - last_processed).days
+            progress_percent = min(100, int((scanned_days / max(total_days, 1)) * 100))
         else:
             progress_percent = 0 if backfill_start else None
 
@@ -347,11 +372,94 @@ async def get_backfill_progress(
             "backfill_start_date": backfill_start.isoformat() if backfill_start else None,
             "last_processed_at": last_processed.isoformat() if last_processed else None,
             "progress_percent": progress_percent,
-            "days_remaining": max(0, (now_utc - (last_processed or backfill_start)).days) if backfill_start else None,
+            "days_remaining": max(0, (last_processed - backfill_start).days) if (last_processed and backfill_start) else None,
         }
 
     except Exception as e:
-        logger.error(f"Backfill progress fetch failed: {e}")
+        logger.error(f"Progress fetch failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/scan-status")
+async def get_scan_status(
+    supabase_client=Depends(get_supabase_client),
+) -> dict:
+    """Get status of both email scan processes (incremental + backward)."""
+    try:
+        from datetime import timezone as _tz
+
+        # Incremental scan (new emails)
+        last_seen_response = await supabase_client.table("system_settings").select(
+            "setting_value"
+        ).eq("setting_key", "azure.last_seen_message_received_at").limit(1).execute()
+
+        last_seen = None
+        if last_seen_response.data and last_seen_response.data[0].get("setting_value"):
+            iso_str = str(last_seen_response.data[0]["setting_value"]).strip('"')
+            if iso_str and iso_str != "null":
+                try:
+                    last_seen = datetime.fromisoformat(iso_str.replace('Z', '+00:00'))
+                except ValueError:
+                    pass
+
+        # Backward scan (historical emails)
+        backfill_response = await supabase_client.table("system_settings").select(
+            "setting_value"
+        ).eq("setting_key", "azure.backfill_start_date").limit(1).execute()
+
+        backfill_start = None
+        if backfill_response.data and backfill_response.data[0].get("setting_value"):
+            date_str = str(backfill_response.data[0]["setting_value"]).strip('"')
+            if date_str and date_str != "null":
+                try:
+                    backfill_start = datetime.fromisoformat(date_str)
+                    if backfill_start.tzinfo is None:
+                        backfill_start = backfill_start.replace(tzinfo=_tz.utc)
+                except ValueError:
+                    pass
+
+        last_processed_response = await supabase_client.table("system_settings").select(
+            "setting_value"
+        ).eq("setting_key", "azure.last_processed_message_received_at").limit(1).execute()
+
+        last_processed = None
+        if last_processed_response.data and last_processed_response.data[0].get("setting_value"):
+            iso_str = str(last_processed_response.data[0]["setting_value"]).strip('"')
+            if iso_str and iso_str != "null":
+                try:
+                    last_processed = datetime.fromisoformat(iso_str.replace('Z', '+00:00'))
+                except ValueError:
+                    pass
+
+        now_utc = datetime.now(_tz.utc)
+
+        # Calculate backfill progress
+        backfill_progress = None
+        if backfill_start and last_processed:
+            total_days = (now_utc - backfill_start).days
+            scanned_days = (now_utc - last_processed).days
+            backfill_progress = min(100, int((scanned_days / max(total_days, 1)) * 100))
+
+        return {
+            "incremental": {
+                "enabled": True,
+                "description": "Scans new incoming emails (runs every cycle)",
+                "last_scan": last_seen.isoformat() if last_seen else None,
+                "status": "active" if last_seen else "not_started",
+            },
+            "backward": {
+                "enabled": backfill_start is not None,
+                "description": f"Scans historical emails back to {backfill_start.date() if backfill_start else 'N/A'}",
+                "start_date": backfill_start.isoformat() if backfill_start else None,
+                "last_scan": last_processed.isoformat() if last_processed else None,
+                "progress_percent": backfill_progress,
+                "days_remaining": max(0, (last_processed - backfill_start).days) if (last_processed and backfill_start) else None,
+                "status": "active" if (backfill_start and backfill_progress and backfill_progress < 100) else "complete" if backfill_progress == 100 else "not_started",
+            },
+        }
+
+    except Exception as e:
+        logger.error(f"Scan status fetch failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -423,23 +531,23 @@ async def configure(
 async def reset_last_seen(
     supabase_client=Depends(get_supabase_client),
 ) -> dict[str, str]:
-    """Reset last_seen timestamp to null to force backfill from backfill_start_date."""
+    """Reset last_processed to null to restart backward scan from today."""
     try:
         await supabase_client.table("system_settings").upsert(
             {
-                "setting_key": "azure.last_seen_message_received_at",
+                "setting_key": "azure.last_processed_message_received_at",
                 "setting_value": "null",
                 "updated_at": datetime.utcnow().isoformat(),
             },
             on_conflict="setting_key",
         ).execute()
 
-        logger.info("Reset last_seen_message_received_at to null - backfill will start from backfill_start_date")
+        logger.info("Reset last_processed to null - backward scan will restart from today")
 
-        return {"status": "reset", "message": "last_seen reset to null - backfill resuming"}
+        return {"status": "reset", "message": "Backward scan restarting from today"}
 
     except Exception as e:
-        logger.error(f"Reset last_seen failed: {e}")
+        logger.error(f"Reset failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -447,7 +555,7 @@ async def reset_last_seen(
 async def cancel_backfill(
     supabase_client=Depends(get_supabase_client),
 ) -> dict[str, str]:
-    """Cancel backfill and resume normal email intake from current date."""
+    """Cancel backward scan."""
     try:
         await supabase_client.table("system_settings").update(
             {
@@ -458,17 +566,17 @@ async def cancel_backfill(
 
         await supabase_client.table("system_settings").update(
             {
-                "setting_value": f'"{datetime.utcnow().isoformat()}"',
+                "setting_value": "null",
                 "updated_at": datetime.utcnow().isoformat(),
             }
-        ).eq("setting_key", "azure.last_seen_message_received_at").execute()
+        ).eq("setting_key", "azure.last_processed_message_received_at").execute()
 
-        logger.info("Backfill cancelled, resumed normal intake from current time")
+        logger.info("Backward scan cancelled")
 
-        return {"status": "cancelled", "message": "Backfill cancelled, normal intake resumed"}
+        return {"status": "cancelled", "message": "Backward scan cancelled"}
 
     except Exception as e:
-        logger.error(f"Backfill cancellation failed: {e}")
+        logger.error(f"Cancellation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -268,27 +268,26 @@ class AgentMatchingWorker:
                         candidate, job, agent_code, agent_config
                     )
 
-                    if match_info["score"] >= 70:
-                        await self._create_match(
-                            candidate_id=candidate_id,
-                            job_id=job["id"],
-                            score=match_info["score"],
-                            reasoning=match_info["reasoning"],
-                            strengths=match_info["strengths"],
-                            gaps=match_info["gaps"],
-                            agent_code=agent_code,
-                            tokens_used=match_info["tokens_used"],
-                            duration_ms=match_info["duration_ms"],
-                        )
-                        result["matches_found"] += 1
-                        result["tokens_used"] += match_info["tokens_used"]
+                    # Always create match record (both passing and failing evaluations)
+                    # is_passing flag distinguishes viable (≥70) from evaluated-but-rejected (<70)
+                    await self._create_match(
+                        candidate_id=candidate_id,
+                        job_id=job["id"],
+                        score=match_info["score"],
+                        reasoning=match_info["reasoning"],
+                        strengths=match_info["strengths"],
+                        gaps=match_info["gaps"],
+                        agent_code=agent_code,
+                        tokens_used=match_info["tokens_used"],
+                        duration_ms=match_info["duration_ms"],
+                    )
+                    result["matches_found"] += 1
+                    result["tokens_used"] += match_info["tokens_used"]
 
-                        logger.info(
-                            f"[{idx+1}/{len(jobs)}] Match found: {candidate['name']} -> "
-                            f"{job.get('job_title', 'Unknown')} ({match_info['score']})"
-                        )
-                    else:
-                        result["tokens_used"] += match_info["tokens_used"]
+                    logger.info(
+                        f"[{idx+1}/{len(jobs)}] Match found: {candidate['name']} -> "
+                        f"{job.get('job_title', 'Unknown')} ({match_info['score']})"
+                    )
 
                 except Exception as e:
                     logger.error(f"Error scoring job {job['id']}: {e}")
@@ -581,15 +580,19 @@ Return ONLY valid JSON (no extra text):
 
         try:
             # Insert match record
+            # Always create matches (both pass ≥70 and fail <70)
+            # is_passing flag indicates if viable match (score >= 70)
             match_data = {
                 "candidate_id": candidate_id,
                 "job_id": job_id,
                 "match_score": float(score) / 100.0,  # Normalize to 0-1
                 "match_reasoning": reasoning,
                 "matched_by_agent_code": agent_code,
-                "current_state": "found",  # Initial state
+                "current_state": "found" if score >= 70 else "evaluated_but_rejected",  # Pass vs fail
                 "state_updated_at": datetime.utcnow().isoformat(),
                 "state_updated_by_agent": agent_code,
+                "is_passing": score >= 70,  # Distinguish viable (≥70) from evaluated (<70)
+                "evaluated_score_raw": score,  # Store absolute score 0-100
             }
 
             result = await self.supabase.table("matches").insert(match_data).execute()
@@ -618,6 +621,7 @@ Return ONLY valid JSON (no extra text):
                             "strengths": strengths,
                             "gaps": gaps,
                             "match_status": "found",
+                            "is_passing": score >= 70,  # Track pass/fail status
                             "milestone": "candidate_match_created",
                             # Metrics that don't have dedicated columns
                             "llm_model": "claude-sonnet-4-5",

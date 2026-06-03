@@ -12,8 +12,11 @@ import {
   fetchAssignedJobs,
   updateMatchStatus,
   getDepartmentStats,
+  fetchEvaluatedCandidates,
+  deleteJob,
   DepartmentMatch,
   AssignedJob,
+  EvaluatedCandidate,
 } from '@/api/recruitment-departments';
 import { useParams } from 'react-router-dom';
 import { getAgent } from '@/data/agents';
@@ -70,6 +73,10 @@ export const RecruitmentDepartment: React.FC = () => {
   const [rejectionReason, setRejectionReason] = useState('');
   const [newCVsCount, setNewCVsCount] = useState(0);
   const [lastCVCheck, setLastCVCheck] = useState<Date | null>(null);
+  // Evaluated candidates side panel
+  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+  const [showEvaluatedPanel, setShowEvaluatedPanel] = useState(false);
+  const [deletingJobId, setDeletingJobId] = useState<string | null>(null);
 
   // Get agent details
   const agent = getAgent(departmentCode || '');
@@ -94,6 +101,24 @@ export const RecruitmentDepartment: React.FC = () => {
       ),
     refetchInterval: 10000, // Check every 10 seconds for new CVs
     retry: 2,
+  });
+
+  // Fetch evaluated candidates for selected job
+  const { data: evaluatedCandidates = [] } = useQuery({
+    queryKey: ['evaluated-candidates', departmentCode, selectedJobId],
+    queryFn: () => fetchEvaluatedCandidates(departmentCode || '', selectedJobId || ''),
+    enabled: !!selectedJobId && !!departmentCode,
+    retry: 2,
+  });
+
+  // Delete job mutation
+  const deleteJobMutation = useMutation({
+    mutationFn: (jobId: string) => deleteJob(departmentCode || '', jobId),
+    onSuccess: () => {
+      setDeletingJobId(null);
+      // Refetch assigned jobs to update the list
+      window.location.reload();
+    },
   });
 
   // Track new CVs detected
@@ -463,6 +488,37 @@ export const RecruitmentDepartment: React.FC = () => {
                       <span className="text-blue-300 font-semibold">{job.match_count} התאמות</span>
                       <span className="text-green-300">{job.found_count} חדשות</span>
                       <span className="text-cyan-300">{job.approved_count} אושרו</span>
+                    </div>
+
+                    {/* Action buttons */}
+                    <div className="flex gap-2 mt-3">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedJobId(job.id);
+                          setShowEvaluatedPanel(true);
+                        }}
+                        className="flex-1 px-2 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded transition"
+                        title="View all evaluated candidates for this job"
+                      >
+                        📋 הערכות
+                      </button>
+                      {daysUntil(job.deadline) !== null && daysUntil(job.deadline)! < 0 && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (confirm(`Are you sure you want to delete "${job.job_title}"?`)) {
+                              setDeletingJobId(job.id);
+                              deleteJobMutation.mutate(job.id);
+                            }
+                          }}
+                          disabled={deleteJobMutation.isPending || deletingJobId === job.id}
+                          className="px-2 py-1.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-xs font-semibold rounded transition"
+                          title="Delete this expired job"
+                        >
+                          🗑️ מחק
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
@@ -848,6 +904,126 @@ export const RecruitmentDepartment: React.FC = () => {
 
       {/* Match Detail Modal — strengths/gaps/reasoning/clearance comparison */}
       <MatchDetailModal match={detailMatch} onClose={() => setDetailMatch(null)} />
+
+      {/* Evaluated Candidates Side Panel */}
+      {showEvaluatedPanel && selectedJobId && (
+        <div className="fixed inset-0 z-50">
+          {/* Overlay */}
+          <div
+            className="absolute inset-0 bg-black bg-opacity-50"
+            onClick={() => setShowEvaluatedPanel(false)}
+          />
+
+          {/* Side Panel */}
+          <div className="absolute right-0 top-0 bottom-0 w-96 bg-gray-800 border-l-2 border-gray-700 shadow-2xl flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 border-b border-gray-700 flex-shrink-0">
+              <button
+                onClick={() => setShowEvaluatedPanel(false)}
+                className="text-gray-400 hover:text-white"
+                title="Close"
+              >
+                ✕
+              </button>
+              <h3 className="text-lg font-bold text-white">הערכות מועמדים</h3>
+              <div className="text-sm text-gray-400">
+                {evaluatedCandidates.length} הערכות
+              </div>
+            </div>
+
+            {/* Scrollable Content */}
+            <div className="overflow-y-auto flex-1 p-4">
+              {evaluatedCandidates.length === 0 ? (
+                <div className="text-center py-8 text-gray-400">
+                  <p>אין עדיין הערכות למשרה זו</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {evaluatedCandidates.map((candidate) => (
+                    <div
+                      key={candidate.id}
+                      className={`p-3 rounded-lg border-l-4 ${
+                        candidate.isPassing
+                          ? 'bg-green-900 bg-opacity-30 border-green-500'
+                          : 'bg-red-900 bg-opacity-30 border-red-500'
+                      }`}
+                    >
+                      {/* Candidate Name + Score */}
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm font-semibold text-white">
+                          {candidate.candidateName}
+                        </span>
+                        <span className={`text-sm font-bold px-2 py-0.5 rounded ${
+                          candidate.isPassing
+                            ? 'bg-green-600 text-white'
+                            : 'bg-red-600 text-white'
+                        }`}>
+                          {candidate.score}%
+                        </span>
+                      </div>
+
+                      {/* Email */}
+                      {candidate.candidateEmail && (
+                        <p className="text-xs text-gray-400 mb-2">📧 {candidate.candidateEmail}</p>
+                      )}
+
+                      {/* Status Badge */}
+                      <div className="mb-2">
+                        {candidate.isPassing ? (
+                          <span className="inline-block px-2 py-0.5 bg-green-600 text-white text-xs rounded font-semibold">
+                            ✅ התאמה
+                          </span>
+                        ) : (
+                          <span className="inline-block px-2 py-0.5 bg-red-600 text-white text-xs rounded font-semibold">
+                            ❌ לא התאמה
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Reasoning */}
+                      {candidate.reasoning && (
+                        <div className="mb-2">
+                          <p className="text-xs text-gray-300 font-semibold mb-1">הנמקה:</p>
+                          <p className="text-xs text-gray-300">{candidate.reasoning}</p>
+                        </div>
+                      )}
+
+                      {/* Strengths */}
+                      {candidate.strengths && candidate.strengths.length > 0 && (
+                        <div className="mb-2">
+                          <p className="text-xs text-green-300 font-semibold mb-1">💪 חוזקות:</p>
+                          <ul className="text-xs text-green-200 space-y-0.5 mr-2">
+                            {candidate.strengths.map((s, i) => (
+                              <li key={i}>• {s}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {/* Gaps */}
+                      {candidate.gaps && candidate.gaps.length > 0 && (
+                        <div>
+                          <p className="text-xs text-orange-300 font-semibold mb-1">⚠️ פערים:</p>
+                          <ul className="text-xs text-orange-200 space-y-0.5 mr-2">
+                            {candidate.gaps.map((g, i) => (
+                              <li key={i}>• {g}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {/* Evaluated Date */}
+                      <p className="text-xs text-gray-500 mt-2">
+                        📅 {formatDateHe(candidate.evaluatedAt)}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

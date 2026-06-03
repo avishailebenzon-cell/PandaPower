@@ -22,10 +22,11 @@ logger = logging.getLogger(__name__)
 
 
 async def _ingest_emails_async(batch_size: int = 20) -> dict[str, Any]:
-    """Async implementation of email ingest.
+    """Async implementation of dual email ingest (incremental + backward scan).
 
-    Args:
-        batch_size: Number of messages to fetch per API call (20 is optimal for backfill)
+    Runs both:
+    1. Incremental scan: Recent emails (since last_seen) - fast, handles daily incoming
+    2. Backward scan: Historical emails (until backfill_start_date) - slower, fills gaps
     """
     try:
         supabase_client = await get_supabase_client()
@@ -41,7 +42,7 @@ async def _ingest_emails_async(batch_size: int = 20) -> dict[str, Any]:
                 "azure.client_secret",
                 "azure.target_mailbox",
                 "azure.backfill_start_date",
-                "azure.last_seen_message_received_at",
+                "azure.last_processed_message_received_at",
             ],
         ).execute()
 
@@ -55,17 +56,13 @@ async def _ingest_emails_async(batch_size: int = 20) -> dict[str, Any]:
             logger.warning("Azure settings not fully configured, skipping email ingest")
             return {"status": "skipped", "reason": "Azure settings not configured"}
 
-        # Detect if we're in backfill mode
-        # Backfill mode is active when:
-        # 1. backfill_start_date is set AND
-        # 2. last_seen is null (not yet started) OR we're still processing historical emails
+        # Detect if we're in backfill mode (backward scan)
         is_backfill = False
         if settings_dict.get("backfill_start_date") and settings_dict.get("backfill_start_date") != "null":
-            # Only consider it backfill if last_seen is not set yet or is set to null
-            last_seen_value = settings_dict.get("last_seen_message_received_at", "null")
-            is_backfill = last_seen_value == "null" or last_seen_value is None
+            last_processed_value = settings_dict.get("last_processed_message_received_at", "null")
+            is_backfill = last_processed_value == "null" or last_processed_value is None
             if is_backfill:
-                logger.info(f"Backfill mode detected: will process more emails per run for faster historical scanning")
+                logger.info(f"Backward scan active: will process more emails per run for faster historical scanning")
 
         azure_client = AzureGraphClient(
             tenant_id=settings_dict["tenant_id"],
@@ -75,15 +72,33 @@ async def _ingest_emails_async(batch_size: int = 20) -> dict[str, Any]:
         )
 
         storage_manager = SupabaseStorageManager(supabase_client)
-        worker = EmailIngestWorker(supabase_client, azure_client, storage_manager, is_backfill=is_backfill)
-        result = await worker.ingest_recent_emails(batch_size=batch_size)
+        results = {}
+
+        # 1. Incremental scan (always run) - handles daily incoming emails
+        logger.info("Starting incremental scan (new emails)")
+        worker_incremental = EmailIngestWorker(supabase_client, azure_client, storage_manager, is_backfill=False)
+        results["incremental"] = await worker_incremental.ingest_incremental_emails(batch_size=batch_size)
+
+        # 2. Backward scan (if backfill enabled) - fills historical gaps
+        if is_backfill:
+            logger.info("Starting backward scan (historical emails)")
+            worker_backfill = EmailIngestWorker(supabase_client, azure_client, storage_manager, is_backfill=True)
+            results["backfill"] = await worker_backfill.ingest_recent_emails(batch_size=batch_size)
+        else:
+            logger.info("Backward scan disabled (backfill complete or not configured)")
+            results["backfill"] = {"status": "skipped", "reason": "backfill not configured"}
 
         return {
             "status": "completed",
-            "total_processed": result.get("total_processed", 0),
-            "cv_files_extracted": result.get("cv_files_extracted", 0),
-            "duplicates_found": result.get("duplicates_found", 0),
-            "backfill_progress": result.get("backfill_progress"),
+            "incremental": {
+                "total_processed": results["incremental"].get("total_processed", 0),
+                "cv_files_extracted": results["incremental"].get("cv_files_extracted", 0),
+            },
+            "backfill": {
+                "total_processed": results["backfill"].get("total_processed", 0),
+                "cv_files_extracted": results["backfill"].get("cv_files_extracted", 0),
+                "progress": results["backfill"].get("backfill_progress"),
+            },
         }
 
     except Exception as e:
