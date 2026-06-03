@@ -280,7 +280,7 @@ class EmailIngestWorker:
                 logger.info(f"Starting backward scan from today: {last_processed}")
 
             # Ensure tz-aware
-            if last_processed.tzinfo is None:
+            if last_processed and last_processed.tzinfo is None:
                 from datetime import timezone as _tz
                 last_processed = last_processed.replace(tzinfo=_tz.utc)
 
@@ -292,6 +292,11 @@ class EmailIngestWorker:
 
             while True:
                 # Backward scan: fetch emails older than last_processed
+                # Ensure last_processed is a datetime object before passing to list_messages
+                if not isinstance(last_processed, datetime):
+                    logger.error(f"last_processed is not a datetime: {type(last_processed)} = {last_processed}")
+                    break
+
                 logger.debug(f"Fetching emails until={last_processed}, next_link={next_link is not None}")
                 response = await self.azure.list_messages(until=last_processed, next_link=next_link, page_size=batch_size)
                 messages = response.get("value", [])
