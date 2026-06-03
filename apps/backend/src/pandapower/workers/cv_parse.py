@@ -55,7 +55,7 @@ class CVParseWorker:
         try:
             # Query pending CVs with limit
             logger.info(f"Querying pending CVs with batch size {self.batch_size}")
-            query = await (
+            query = (
                 self.supabase.table("cv_files")
                 .select("*")
                 .eq("parse_status", "pending")
