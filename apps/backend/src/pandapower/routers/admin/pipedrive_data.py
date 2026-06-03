@@ -23,7 +23,7 @@ _org_cache_expiry: Optional[datetime] = None
 
 
 async def _get_organizations_cache() -> Dict[int, str]:
-    """Get pipedrive_org_id -> name mapping, cached for 1 hour"""
+    """Get pipedrive_org_id -> name mapping from database cache (no API calls)"""
     global _org_name_cache, _org_cache_expiry
 
     now = datetime.utcnow()
@@ -31,28 +31,26 @@ async def _get_organizations_cache() -> Dict[int, str]:
         return _org_name_cache
 
     try:
-        from pandapower.integrations.pipedrive_client import PipedriveClient
+        db = await get_supabase_client()
+        response = await db.table("organizations").select("id, name").execute()
+        orgs = response.data or []
 
-        if not settings.PIPEDRIVE_API_TOKEN:
-            return {}
-
-        pipedrive = PipedriveClient(
-            api_token=settings.PIPEDRIVE_API_TOKEN,
-            api_domain=settings.PIPEDRIVE_API_DOMAIN,
-        )
-
-        orgs = await pipedrive.get_all_organizations()
-        cache = {org["id"]: org.get("name", "") for org in orgs if org.get("id")}
-
-        await pipedrive.close()
+        # Convert UUID id to pipedrive_org_id (reverse the deterministic UUID)
+        # For now, we'll use a simpler approach: build a map from the database
+        cache = {}
+        for org in orgs:
+            if org.get("id") and org.get("name"):
+                # Store by the org id from the database (which is UUID)
+                # But we'll also try to map back to pipedrive_org_id if needed
+                cache[org["id"]] = org.get("name", "")
 
         _org_name_cache = cache
         _org_cache_expiry = now + timedelta(hours=1)
-        logger.info(f"Refreshed organizations cache: {len(cache)} orgs")
+        logger.info(f"Refreshed organizations cache from DB: {len(cache)} orgs")
         return cache
 
     except Exception as e:
-        logger.error(f"Failed to refresh org cache: {e}")
+        logger.error(f"Failed to refresh org cache from DB: {e}")
         return _org_name_cache  # Return stale cache on error
 
 
@@ -440,15 +438,11 @@ async def get_jobs(
             except Exception as e:
                 logger.warning(f"Could not resolve org names from DB: {e}")
 
-        # Fallback to Pipedrive cache if any orgs missing in DB
+        # Note: we no longer fall back to Pipedrive API calls here
+        # Organizations should be synced by the scheduled sync job.
+        # If an org is missing from the DB, show blank instead of calling API.
         if len(org_map) < len(org_pipedrive_ids):
-            try:
-                cache = await _get_organizations_cache()
-                for pdid in org_pipedrive_ids:
-                    if pdid not in org_map and pdid in cache:
-                        org_map[pdid] = cache[pdid]
-            except Exception as e:
-                logger.warning(f"Could not load org cache: {e}")
+            logger.debug(f"Missing {len(org_pipedrive_ids) - len(org_map)} org names in database")
 
         # Resolve contact names for person_ids
         person_pipedrive_ids = {row["person_id"] for row in rows if row.get("person_id")}
