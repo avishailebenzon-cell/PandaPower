@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 _supabase_client: Any | None = None
 _client_loop: asyncio.AbstractEventLoop | None = None
 
+# Sync client for workers that can't use async (like email_ingest)
+_supabase_sync_client: Any | None = None
+
 
 def _current_loop() -> asyncio.AbstractEventLoop | None:
     try:
@@ -50,8 +53,24 @@ async def close_supabase():
         logger.info("Supabase client closed")
 
 
+def get_supabase_sync_client() -> Any:
+    """Get a SYNC Supabase client for blocking operations (like email_ingest).
+
+    This creates a synchronous client that doesn't require await.
+    Used for workers that operate in sync context.
+    """
+    global _supabase_sync_client
+    if _supabase_sync_client is None:
+        _supabase_sync_client = create_client(
+            supabase_url=settings.SUPABASE_URL,
+            supabase_key=settings.SUPABASE_SERVICE_ROLE_KEY,
+        )
+        logger.info("Supabase sync client initialized with SERVICE_ROLE_KEY")
+    return _supabase_sync_client
+
+
 async def get_supabase_client() -> Any:
-    """Get a Supabase client valid for the current event loop.
+    """Get an ASYNC Supabase client valid for the current event loop.
 
     Rebuilds the cached client when called from a fresh event loop, so
     Celery prefork tasks don't reuse a client whose httpx connection
