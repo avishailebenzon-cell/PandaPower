@@ -295,15 +295,21 @@ class EmailIngestWorker:
                 # Ensure last_processed is a datetime object before passing to list_messages
                 if not isinstance(last_processed, datetime):
                     logger.error(f"last_processed is not a datetime: {type(last_processed)} = {last_processed}")
+                    result["errors"].append(f"Invalid type for last_processed: {type(last_processed)}")
                     break
 
-                logger.debug(f"Fetching emails until={last_processed}, next_link={next_link is not None}")
-                response = await self.azure.list_messages(until=last_processed, next_link=next_link, page_size=batch_size)
-                messages = response.get("value", [])
-                logger.info(f"Azure returned {len(messages)} messages in this batch (oldest first)")
+                logger.info(f"[BACKFILL] Fetching emails until={last_processed}, next_link={next_link is not None}")
+                try:
+                    response = await self.azure.list_messages(until=last_processed, next_link=next_link, page_size=batch_size)
+                    messages = response.get("value", [])
+                    logger.info(f"[BACKFILL] Azure returned {len(messages)} messages in this batch")
+                except Exception as e:
+                    logger.error(f"[BACKFILL] Azure query failed: {e}", exc_info=True)
+                    result["errors"].append(f"Azure query error: {str(e)}")
+                    break
 
                 if not messages:
-                    logger.info("No more messages returned from Azure")
+                    logger.info(f"[BACKFILL] No more messages returned from Azure, backfill complete!")
                     break
 
                 # Process with dedup_identity=True to skip existing candidates
