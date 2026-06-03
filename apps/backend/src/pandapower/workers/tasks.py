@@ -1584,3 +1584,46 @@ async def _telegram_daily_summary_async() -> dict[str, Any]:
     except Exception as e:
         logger.error(f"Telegram daily summary failed: {e}", exc_info=True)
         return {"status": "failed", "error": str(e)}
+
+
+async def _health_check_async() -> dict[str, Any]:
+    """Async implementation of health check across all integrations."""
+    try:
+        supabase_client = await get_supabase_client()
+        from pandapower.workers.health_check import HealthCheckWorker
+
+        worker = HealthCheckWorker(supabase_client)
+        result = await worker.run_checks()
+
+        return {
+            "status": result["overall_status"],
+            "issues_count": len(result["issues"]),
+            "checks": result["checks"],
+        }
+
+    except Exception as e:
+        logger.error(f"Health check task failed: {e}", exc_info=True)
+        return {"status": "failed", "error": str(e)}
+
+
+@app.task(bind=True, max_retries=2)
+def health_check_task(self) -> dict[str, Any]:
+    """Celery task to check all system integrations every 10 minutes.
+
+    Monitors ConvertAPI, Pipedrive, Azure email, Supabase, and Anthropic.
+    Sends alert email if any integration is unhealthy.
+    """
+    logger.info("Starting health check task")
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(_health_check_async())
+            logger.info(f"Health check completed: {result['status']}")
+            return result
+        finally:
+            loop.close()
+    except Exception as e:
+        logger.error(f"Health check task failed: {e}", exc_info=True)
+        retry_in = 2 ** self.request.retries
+        raise self.retry(exc=e, countdown=retry_in)
