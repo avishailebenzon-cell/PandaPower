@@ -40,6 +40,7 @@ class EmailStatusResponse(BaseModel):
     emails_processed_today: int = 0
     cv_files_extracted_total: int = 0
     cv_files_extracted_today: int = 0
+    current_file_scanning: str | None = None
 
 
 @router.post("/test-connection", response_model=TestConnectionResponse)
@@ -303,6 +304,20 @@ async def get_status(
                 last_run_response.data[0]["processing_completed_at"].replace("Z", "+00:00")
             )
 
+        # Get current file being scanned
+        current_file = None
+        try:
+            current_file_response = await supabase_client.table("system_settings").select(
+                "setting_value"
+            ).eq("setting_key", "email.current_file_scanning").limit(1).execute()
+
+            if current_file_response.data and current_file_response.data[0].get("setting_value"):
+                current_file = str(current_file_response.data[0]["setting_value"]).strip('"')
+                if current_file == "null":
+                    current_file = None
+        except Exception:
+            pass
+
         return EmailStatusResponse(
             last_run_at=last_run_at or datetime.utcnow(),
             last_status="active" if emails_today_count > 0 else "configured",
@@ -310,6 +325,7 @@ async def get_status(
             emails_processed_today=emails_today_count,
             cv_files_extracted_total=cv_total_count,
             cv_files_extracted_today=cv_today_count,
+            current_file_scanning=current_file,
         )
 
     except Exception as e:

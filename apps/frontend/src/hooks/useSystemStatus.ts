@@ -76,15 +76,27 @@ async function fetchSystemStatus(): Promise<SystemStatus[]> {
       });
     }
 
-    // Process analytics status (as indicator of system health)
-    if (responses[2].status === 'fulfilled') {
-      const res = await responses[2].value.json();
-      statuses.push({
-        id: 'system',
-        name: 'מערכת סריקת מיילים',
-        status: res && res.total_hired >= 0 ? 'active' : 'idle',
-        detail: '📧 עדכון אחרון: כעת',
-      });
+    // Process email scan status
+    const emailStatuses = await Promise.allSettled([
+      fetch(`${API_BASE}/admin/email/status`),
+    ]);
+
+    if (emailStatuses[0].status === 'fulfilled') {
+      const res = await emailStatuses[0].value.json();
+      if (res) {
+        let detail = '📧 מוכן';
+        if (res.current_file_scanning) {
+          detail = `📧 סורק: ${res.current_file_scanning}`;
+        } else if (res.emails_processed_today > 0) {
+          detail = `📧 ${res.emails_processed_today} מיילים היום • ${res.cv_files_extracted_today} CV`;
+        }
+        statuses.push({
+          id: 'system',
+          name: 'מערכת סריקת מיילים',
+          status: res.current_file_scanning ? 'processing' : res.emails_processed_today > 0 ? 'active' : 'idle',
+          detail,
+        });
+      }
     }
 
     return statuses;

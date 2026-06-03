@@ -443,6 +443,18 @@ class EmailIngestWorker:
             ]
 
             logger.debug(f"Message {subject}: {len(attachments)} attachments, {len(cv_attachments)} CV files")
+
+            # Update current scanning status for UI
+            if cv_attachments:
+                current_file = cv_attachments[0].get("name", "Unknown")
+                await self.supabase.table("system_settings").upsert(
+                    {
+                        "setting_key": "email.current_file_scanning",
+                        "setting_value": f'"{current_file}"',
+                        "updated_at": datetime.utcnow().isoformat(),
+                    },
+                    on_conflict="setting_key",
+                ).execute()
             if len(attachments) > 0:
                 for a in attachments:
                     name = a.get('name', 'unknown')
