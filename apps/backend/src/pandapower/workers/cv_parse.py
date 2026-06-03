@@ -73,7 +73,7 @@ class CVParseWorker:
             # Mark all as parsing to prevent duplicate processing
             cv_ids = [cv["id"] for cv in pending_cvs]
             try:
-                await self.supabase.table("cv_files").update(
+                self.supabase.table("cv_files").update(
                     {
                         "parse_status": "parsing",
                         "processing_started_at": datetime.utcnow().isoformat(),
@@ -356,7 +356,7 @@ class CVParseWorker:
         """
         try:
             # Find sibling CVs by email
-            siblings = await self.supabase.table("cv_files").select(
+            siblings = self.supabase.table("cv_files").select(
                 "id, version_number"
             ).eq("candidate_email", candidate_email).neq("id", new_cv_id).execute()
 
@@ -372,7 +372,7 @@ class CVParseWorker:
 
             # Mark all siblings as not-latest and superseded by us
             if sibling_rows:
-                await self.supabase.table("cv_files").update({
+                self.supabase.table("cv_files").update({
                     "is_latest": False,
                     "superseded_by": new_cv_id,
                 }).eq("candidate_email", candidate_email).neq("id", new_cv_id).execute()
@@ -382,7 +382,7 @@ class CVParseWorker:
                 )
 
             # Mark THIS CV as the latest, with the right version number
-            await self.supabase.table("cv_files").update({
+            self.supabase.table("cv_files").update({
                 "is_latest": True,
                 "superseded_by": None,
                 "version_number": new_version,
@@ -448,7 +448,7 @@ class CVParseWorker:
             Dict mapping level numbers (int) to lists of keyword strings.
         """
         try:
-            response = await self.supabase.table("security_levels").select(
+            response = self.supabase.table("security_levels").select(
                 "level, keywords"
             ).execute()
             security_keywords = {}
@@ -493,7 +493,7 @@ class CVParseWorker:
                 # Supabase expects JSONB as JSON string or dict, usually dict works
                 pass
 
-            await self.supabase.table("cv_files").update(updates).eq("id", cv_id).execute()
+            self.supabase.table("cv_files").update(updates).eq("id", cv_id).execute()
             logger.debug(f"Updated CV record {cv_id}")
 
         except Exception as e:
