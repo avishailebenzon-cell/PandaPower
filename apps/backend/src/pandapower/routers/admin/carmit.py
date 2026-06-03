@@ -620,10 +620,10 @@ async def get_carmit_decisions(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
-    """Get Carmit's already-made decisions with gate results and reasoning.
+    """Get Carmit's already-made decisions with current state and reasoning.
 
-    This endpoint shows matches that Carmit has already decided on
-    (carmit_approved or carmit_rejected) along with her reasoning and gate results.
+    Shows ALL matches that Carmit approved/rejected, including their current
+    state in the pipeline (e.g., if approved but already handed to Tal/Elad).
 
     Args:
         decision_filter: Filter by 'approved', 'rejected', or 'all' (default: 'all')
@@ -631,38 +631,76 @@ async def get_carmit_decisions(
         offset: Pagination offset
 
     Returns:
-        List of Carmit's decisions with detailed gate results and reasoning
+        List of Carmit's decisions with current state and status explanation
     """
     try:
         supabase = await get_supabase_client()
 
-        # Determine which states to query based on filter
-        states = []
+        # Query match_state_history to find all matches that transitioned TO carmit_approved/rejected
+        history_states = []
         if decision_filter in ["all", "approved"]:
-            states.append("carmit_approved")
+            history_states.append("carmit_approved")
         if decision_filter in ["all", "rejected"]:
-            states.append("carmit_rejected")
+            history_states.append("carmit_rejected")
 
-        if not states:
-            states = ["carmit_approved", "carmit_rejected"]
+        if not history_states:
+            history_states = ["carmit_approved", "carmit_rejected"]
 
-        # Query matches with Carmit decisions (approved or rejected)
-        query = supabase.table("matches").select(
-            "id, candidate_id, job_id, match_score, current_state, updated_at"
-        ).in_("current_state", states).eq("is_valid", True).order("updated_at", desc=True)
+        # Get ALL matches that Carmit decided on (from history)
+        history_query = supabase.table("match_state_history").select(
+            "match_id, to_state, created_at, details"
+        ).in_("to_state", history_states).order("created_at", desc=True)
 
-        # Execute query with pagination
-        response = await query.range(offset, offset + limit - 1).execute()
+        history_response = await history_query.execute()
+        history_entries = history_response.data or []
 
-        # Format response with enriched data
+        # Deduplicate by match_id (keep most recent decision for each match)
+        seen_matches = {}
+        for entry in history_entries:
+            mid = entry.get("match_id")
+            if mid not in seen_matches:
+                seen_matches[mid] = entry
+
+        # Now fetch current state for each match from the matches table
+        match_ids = list(seen_matches.keys())
+        if not match_ids:
+            return {
+                "decisions": [],
+                "total": 0,
+                "offset": offset,
+                "limit": limit,
+                "filter": decision_filter,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+
+        # Apply pagination to match_ids
+        paginated_ids = match_ids[offset : offset + limit]
+
+        # Fetch current match data
+        matches_response = await supabase.table("matches").select(
+            "id, candidate_id, job_id, match_score, current_state, updated_at, state_updated_at"
+        ).in_("id", paginated_ids).execute()
+
+        matches_by_id = {m["id"]: m for m in (matches_response.data or [])}
+
+        # Build decisions with current state and explanation
         decisions = []
-        for match in response.data or []:
+        for match_id in paginated_ids:
+            history_entry = seen_matches.get(match_id)
+            match = matches_by_id.get(match_id)
+            if not match:
+                continue
+
             match_id = match.get("id")
             candidate_id = match.get("candidate_id")
             job_id = match.get("job_id")
             match_score = float(match.get("match_score", 0))
             current_state = match.get("current_state", "")
             updated_at = match.get("updated_at", "")
+
+            # Decision from history
+            decision_made = history_entry.get("to_state", "").replace("carmit_", "")
+            decision_timestamp = history_entry.get("created_at", "")
 
             candidate_name = "Unknown"
             job_title = "Unknown"
@@ -672,59 +710,71 @@ async def get_carmit_decisions(
             # Fetch candidate name
             try:
                 if candidate_id:
-                    candidate_query = supabase.table("candidates").select(
+                    candidate_response = await supabase.table("candidates").select(
                         "name"
-                    ).eq("id", candidate_id)
-                    candidate_response = await candidate_query.execute()
-                    if candidate_response.data and len(candidate_response.data) > 0:
-                        cand_data = candidate_response.data[0]
-                        candidate_name = cand_data.get("name") or "Unknown"
+                    ).eq("id", candidate_id).execute()
+                    if candidate_response.data:
+                        candidate_name = candidate_response.data[0].get("name") or "Unknown"
             except Exception as e:
                 logger.warning(f"Failed to fetch candidate {candidate_id}: {str(e)}")
 
             # Fetch job title
             try:
                 if job_id:
-                    job_query = supabase.table("jobs").select("job_title").eq("id", job_id)
-                    job_response = await job_query.execute()
-                    if job_response.data and len(job_response.data) > 0:
-                        job_data = job_response.data[0]
-                        job_title = job_data.get("job_title", "Unknown")
+                    job_response = await supabase.table("jobs").select(
+                        "job_title"
+                    ).eq("id", job_id).execute()
+                    if job_response.data:
+                        job_title = job_response.data[0].get("job_title", "Unknown")
             except Exception as e:
                 logger.warning(f"Failed to fetch job {job_id}: {str(e)}")
 
-            # Fetch gate results and reasoning from match_state_history
+            # Extract gate results and reasoning from history entry details
             try:
-                history_query = supabase.table("match_state_history").select(
-                    "details"
-                ).eq("match_id", match_id).in_(
-                    "to_state", ["carmit_approved", "carmit_rejected"]
-                ).order("created_at", desc=True).limit(1)
-                history_response = await history_query.execute()
-
-                if history_response.data and len(history_response.data) > 0:
-                    history_entry = history_response.data[0]
-                    details = history_entry.get("details", {})
-
-                    # Extract gate results from JSONB
-                    raw_gate_results = details.get("gate_results", {})
-                    for gate_name, gate_info in raw_gate_results.items():
-                        if isinstance(gate_info, dict):
-                            gate_results[gate_name] = GateResult(
-                                passed=gate_info.get("passed", False),
-                                reason=gate_info.get("reason", "")
-                            )
-                        else:
-                            # Handle case where gate_info might be a boolean
-                            gate_results[gate_name] = GateResult(
-                                passed=bool(gate_info),
-                                reason=""
-                            )
-
-                    # Extract decision reasoning
-                    reasoning = details.get("decision_reasoning", "")
+                details = history_entry.get("details", {})
+                raw_gate_results = details.get("gate_results", {})
+                for gate_name, gate_info in raw_gate_results.items():
+                    if isinstance(gate_info, dict):
+                        gate_results[gate_name] = GateResult(
+                            passed=gate_info.get("passed", False),
+                            reason=gate_info.get("reason", "")
+                        )
+                    else:
+                        gate_results[gate_name] = GateResult(
+                            passed=bool(gate_info),
+                            reason=""
+                        )
+                reasoning = details.get("decision_reasoning", "")
             except Exception as e:
-                logger.warning(f"Failed to fetch match state history for {match_id}: {str(e)}")
+                logger.warning(f"Failed to extract gate results: {str(e)}")
+
+            # Build status explanation based on current state
+            state_display = ""
+            state_label = ""
+            if current_state == "carmit_approved":
+                state_display = "ממתינה להעברה לטל"
+                state_label = "waiting"
+            elif current_state == "sent_to_tal":
+                state_display = "הועברה לטל - בהמתנה לתגובה"
+                state_label = "with_tal"
+            elif current_state in ["tal_conversation", "tal_accepted"]:
+                state_display = "בשיחה עם טל או אושרה"
+                state_label = "tal_reviewing"
+            elif current_state == "sent_to_elad":
+                state_display = "הועברה לאלעד - בהמתנה לתגובה"
+                state_label = "with_elad"
+            elif current_state == "hired":
+                state_display = "✅ הועסקה!"
+                state_label = "hired"
+            elif current_state == "rejected_tal":
+                state_display = "דחויה על ידי טל"
+                state_label = "rejected_tal"
+            elif current_state == "rejected_elad":
+                state_display = "דחויה על ידי אלעד"
+                state_label = "rejected_elad"
+            else:
+                state_display = f"סטטוס: {current_state}"
+                state_label = current_state
 
             decisions.append({
                 "match_id": match_id,
@@ -732,16 +782,19 @@ async def get_carmit_decisions(
                 "candidate_name": candidate_name,
                 "job_id": job_id,
                 "job_title": job_title,
-                "decision": "approved" if current_state == "carmit_approved" else "rejected",
+                "decision": "approved" if "approved" in decision_made else "rejected",
                 "match_score": match_score,
                 "gate_results": {k: v.dict() for k, v in gate_results.items()},
                 "reasoning": reasoning,
-                "decided_at": updated_at,
+                "decided_at": decision_timestamp,
+                "current_state": current_state,
+                "state_display": state_display,
+                "state_label": state_label,
             })
 
         return {
             "decisions": decisions,
-            "total": len(decisions),
+            "total": len(match_ids),
             "offset": offset,
             "limit": limit,
             "filter": decision_filter,

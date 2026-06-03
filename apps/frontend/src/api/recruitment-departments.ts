@@ -52,12 +52,42 @@ export interface AssignedJob {
   pipedrive_person_id?: number;
 }
 
+export interface EvaluatedCandidate {
+  id: string; // match record ID
+  candidateId: string;
+  candidateName: string;
+  candidateEmail?: string;
+  score: number; // 0-100 absolute score
+  isPassing: boolean; // True if ≥70, False if <70
+  reasoning?: string;
+  strengths?: string[];
+  gaps?: string[];
+  evaluatedAt: string; // ISO timestamp
+  evaluatedByAgent: string; // agent code
+}
+
 export interface DepartmentStats {
   totalMatches: number;
   inProgress: number;
   approved: number;
   rejected: number;
   approvalRate: number;
+}
+
+export interface CarmitDecision {
+  match_id: string;
+  candidate_id: string;
+  candidate_name: string;
+  job_id: string;
+  job_title: string;
+  decision: 'approved' | 'rejected';
+  match_score: number;
+  gate_results: Record<string, { passed: boolean; reason?: string }>;
+  reasoning: string;
+  decided_at: string;
+  current_state: string;
+  state_display: string;
+  state_label: string;
 }
 
 /**
@@ -195,6 +225,48 @@ export async function recordConversation(
 
   if (!response.ok) {
     throw new Error(`Failed to record conversation: ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Fetch all candidates evaluated against a specific job
+ */
+export async function fetchEvaluatedCandidates(
+  departmentCode: string,
+  jobId: string
+): Promise<EvaluatedCandidate[]> {
+  const response = await fetch(
+    `${API_BASE}/admin/departments/${departmentCode}/jobs/${jobId}/evaluated-candidates`
+  );
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch evaluated candidates: ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Delete a job (hard delete)
+ */
+export async function deleteJob(
+  departmentCode: string,
+  jobId: string
+): Promise<any> {
+  const response = await fetch(
+    `${API_BASE}/admin/departments/${departmentCode}/jobs/${jobId}`,
+    {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Failed to delete job: ${response.statusText}`);
   }
 
   return response.json();

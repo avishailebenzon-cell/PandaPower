@@ -410,10 +410,10 @@ export const CarmitPage = () => {
                   key={decision.match_id}
                   className="bg-gray-800 border border-gray-700 rounded-lg p-6 hover:border-purple-500 transition"
                 >
-                  {/* Header with Decision Badge */}
+                  {/* Header with Decision Badge and Current Status */}
                   <div className="flex justify-between items-start mb-4">
                     <div className="flex-1">
-                      <div className="flex items-center gap-3 mb-2">
+                      <div className="flex items-center gap-3 mb-2 flex-wrap">
                         <h3 className="text-lg font-semibold text-white">
                           {decision.candidate_name}
                         </h3>
@@ -423,6 +423,19 @@ export const CarmitPage = () => {
                             : 'bg-red-900 text-red-300'
                         }`}>
                           {decision.decision === 'approved' ? '✅ אושרה' : '❌ דחויה'}
+                        </span>
+                        {/* Current Status Badge */}
+                        <span className={`px-3 py-1 rounded text-xs font-medium ${
+                          decision.state_label === 'waiting' ? 'bg-yellow-900 text-yellow-300' :
+                          decision.state_label === 'with_tal' ? 'bg-blue-900 text-blue-300' :
+                          decision.state_label === 'tal_reviewing' ? 'bg-cyan-900 text-cyan-300' :
+                          decision.state_label === 'with_elad' ? 'bg-purple-900 text-purple-300' :
+                          decision.state_label === 'hired' ? 'bg-emerald-900 text-emerald-300' :
+                          decision.state_label === 'rejected_tal' ? 'bg-orange-900 text-orange-300' :
+                          decision.state_label === 'rejected_elad' ? 'bg-red-900 text-red-300' :
+                          'bg-gray-700 text-gray-300'
+                        }`}>
+                          {decision.state_display}
                         </span>
                       </div>
                       <p className="text-sm text-gray-400">{decision.job_title}</p>
