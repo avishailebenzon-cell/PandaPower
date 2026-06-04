@@ -21,6 +21,9 @@ export interface Match {
 }
 
 export interface StatusMetrics {
+  pendingCarmit: number;
+  carmitApproved: number;
+  carmitRejected: number;
   pendingTal: number;
   inConversationTal: number;
   awaitingElad: number;
@@ -68,6 +71,9 @@ export async function fetchRecruiterStatus(): Promise<StatusMetrics> {
 
   // Map snake_case from API to camelCase for frontend
   return {
+    pendingCarmit: data.pending_carmit,
+    carmitApproved: data.carmit_approved,
+    carmitRejected: data.carmit_rejected,
     pendingTal: data.pending_tal,
     inConversationTal: data.in_conversation_tal,
     awaitingElad: data.awaiting_elad,

@@ -26,6 +26,9 @@ class ActionType(str, Enum):
 
 class StatusMetrics(BaseModel):
     """Recruiter status metrics."""
+    pending_carmit: int
+    carmit_approved: int
+    carmit_rejected: int
     pending_tal: int
     in_conversation_tal: int
     awaiting_elad: int
@@ -111,6 +114,22 @@ async def get_recruiter_status(
         # client returns a coroutine and forgetting `await` causes `.data`
         # to be missing and the whole endpoint to 500.
 
+        # Get Carmit-related matches
+        carmit_pending_result = await supabase.table("matches").select("id").eq(
+            "current_state", "found"
+        ).execute()
+        pending_carmit = len(carmit_pending_result.data) if carmit_pending_result.data else 0
+
+        carmit_approved_result = await supabase.table("matches").select("id").eq(
+            "current_state", "carmit_approved"
+        ).execute()
+        carmit_approved = len(carmit_approved_result.data) if carmit_approved_result.data else 0
+
+        carmit_rejected_result = await supabase.table("matches").select("id").eq(
+            "current_state", "carmit_rejected"
+        ).execute()
+        carmit_rejected = len(carmit_rejected_result.data) if carmit_rejected_result.data else 0
+
         # Get Tal-related matches
         tal_pending_result = await supabase.table("matches").select("id").eq(
             "current_state", "sent_to_tal"
@@ -145,6 +164,9 @@ async def get_recruiter_status(
         failed = len(failed_result.data) if failed_result.data else 0
 
         return StatusMetrics(
+            pending_carmit=pending_carmit,
+            carmit_approved=carmit_approved,
+            carmit_rejected=carmit_rejected,
             pending_tal=pending_tal,
             in_conversation_tal=in_conversation_tal,
             awaiting_elad=awaiting_elad,
@@ -176,7 +198,11 @@ async def get_recruiter_matches(
         offset = (page - 1) * limit
 
         # Determine which states to query based on tab
-        if tab == "tal-queue":
+        if tab == "carmit-queue":
+            states = ["found"]
+        elif tab == "carmit-history":
+            states = ["carmit_approved", "carmit_rejected"]
+        elif tab == "tal-queue":
             states = ["sent_to_tal", "tal_conversation"]
         elif tab == "tal-history":
             states = ["tal_approved", "tal_rejected"]
