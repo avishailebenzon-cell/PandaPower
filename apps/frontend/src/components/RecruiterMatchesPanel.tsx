@@ -29,7 +29,7 @@ import {
   type Match,
 } from "@/api/recruiter";
 
-type Recruiter = "tal" | "elad";
+type Recruiter = "carmit" | "tal" | "elad";
 type SubTab = "queue" | "history";
 
 interface Props {
@@ -43,6 +43,9 @@ interface Props {
 }
 
 const STATE_LABELS: Record<string, { label: string; cls: string }> = {
+  found: { label: "נמצאה התאמה", cls: "bg-yellow-900 text-yellow-200" },
+  carmit_approved: { label: "אושרה על ידי כרמית", cls: "bg-green-900 text-green-200" },
+  carmit_rejected: { label: "נדחתה על ידי כרמית", cls: "bg-red-900 text-red-200" },
   sent_to_tal: { label: "ממתינה לטל", cls: "bg-blue-900 text-blue-200" },
   tal_conversation: { label: "בשיחה עם טל", cls: "bg-indigo-900 text-indigo-200" },
   tal_approved: { label: "אושר ע״י טל", cls: "bg-green-900 text-green-200" },
@@ -88,8 +91,8 @@ export function RecruiterMatchesPanel({
   const queryClient = useQueryClient();
   const tabParam = `${recruiter}-${subTab}`; // tal-queue, elad-history, etc.
 
-  const recruiterName = recruiter === "tal" ? "טל" : "אלעד";
-  const counterparty = recruiter === "tal" ? "מועמד" : "לקוח";
+  const recruiterName = recruiter === "carmit" ? "כרמית" : recruiter === "tal" ? "טל" : "אלעד";
+  const counterparty = recruiter === "carmit" ? "התאמה" : recruiter === "tal" ? "מועמד" : "לקוח";
 
   const matchesQuery = useQuery({
     queryKey: ["recruiter-matches", tabParam],
@@ -124,7 +127,9 @@ export function RecruiterMatchesPanel({
 
   // Counts to surface in the optional status strip
   const inQueue =
-    recruiter === "tal"
+    recruiter === "carmit"
+      ? (statusQuery.data?.pendingCarmit ?? 0) + (statusQuery.data?.carmitApproved ?? 0)
+      : recruiter === "tal"
       ? (statusQuery.data?.pendingTal ?? 0) + (statusQuery.data?.inConversationTal ?? 0)
       : (statusQuery.data?.awaitingElad ?? 0) + (statusQuery.data?.inConversationElad ?? 0);
 
@@ -338,7 +343,9 @@ function MatchActionsMenu({
   onConversation: () => void;
   isLoading: boolean;
 }) {
-  const isInQueue = match.state === `sent_to_${recruiter}` || match.state === `${recruiter}_conversation`;
+  const isInQueue = recruiter === "carmit"
+    ? match.state === "found"
+    : (match.state === `sent_to_${recruiter}` || match.state === `${recruiter}_conversation`);
 
   return (
     <div className="relative inline-block z-50">

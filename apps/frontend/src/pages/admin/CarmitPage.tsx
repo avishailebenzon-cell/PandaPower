@@ -119,7 +119,7 @@ export const CarmitPage = () => {
 
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<
-    'decisions' | 'agent-matches' | 'all-jobs' | 'sent-to-tal' | 'sent-to-elad'
+    'queue' | 'history' | 'decisions' | 'agent-matches' | 'all-jobs' | 'sent-to-tal' | 'sent-to-elad'
   >('decisions');
   // Pagination state for the new "agent-matches" tab (≥70% from all 8 agents).
   const [agentMatchesPage, setAgentMatchesPage] = useState(0);
@@ -327,6 +327,28 @@ export const CarmitPage = () => {
       {/* Tab Navigation */}
       <div className="mb-6 flex gap-4 border-b border-gray-700 overflow-x-auto">
         <button
+          onClick={() => setActiveTab('queue')}
+          className={`px-6 py-3 font-semibold transition whitespace-nowrap ${
+            activeTab === 'queue'
+              ? 'text-blue-400 border-b-2 border-blue-400'
+              : 'text-gray-400 hover:text-gray-200'
+          }`}
+          title="התאמות בהמתנה לבדיקת כרמית"
+        >
+          🔍 תור ביקורת כרמית
+        </button>
+        <button
+          onClick={() => setActiveTab('history')}
+          className={`px-6 py-3 font-semibold transition whitespace-nowrap ${
+            activeTab === 'history'
+              ? 'text-blue-400 border-b-2 border-blue-400'
+              : 'text-gray-400 hover:text-gray-200'
+          }`}
+          title="החלטות כרמית (אושרו/נדחו)"
+        >
+          📋 החלטות כרמית
+        </button>
+        <button
           onClick={() => setActiveTab('decisions')}
           className={`px-6 py-3 font-semibold transition whitespace-nowrap ${
             activeTab === 'decisions'
@@ -380,6 +402,34 @@ export const CarmitPage = () => {
           📤 העברתי לאלעד (לדבר עם לקוח)
         </button>
       </div>
+
+      {/* === תור ביקורת כרמית === */}
+      {/* Matches waiting for Carmit review (found state) */}
+      {activeTab === 'queue' && (
+        <div className="space-y-4">
+          <div>
+            <h2 className="text-2xl font-bold text-white">🔍 תור ביקורת כרמית</h2>
+            <p className="text-sm text-gray-400">
+              התאמות שנמצאו על ידי סוכני הגיוס וממתינות לביקורת איכות של כרמית.
+            </p>
+          </div>
+          <RecruiterMatchesPanel recruiter="carmit" showSubTabs={false} initialSubTab="queue" />
+        </div>
+      )}
+
+      {/* === החלטות כרמית === */}
+      {/* Matches that Carmit has already reviewed (approved/rejected) */}
+      {activeTab === 'history' && (
+        <div className="space-y-4">
+          <div>
+            <h2 className="text-2xl font-bold text-white">📋 החלטות כרמית</h2>
+            <p className="text-sm text-gray-400">
+              התאמות שכרמית כבר בדקה וקיבלה החלטה (אושרו או נדחו לאחר ביקורת 5 השערים).
+            </p>
+          </div>
+          <RecruiterMatchesPanel recruiter="carmit" showSubTabs={false} initialSubTab="history" />
+        </div>
+      )}
 
       {/* Carmit Decisions Tab */}
       {activeTab === 'decisions' && (
