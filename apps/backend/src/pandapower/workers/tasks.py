@@ -81,20 +81,18 @@ async def _ingest_emails_async(batch_size: int = 20) -> dict[str, Any]:
             target_mailbox=settings_dict["target_mailbox"],
         )
 
-        # Use SYNC client for email_ingest (it operates in sync context)
-        sync_supabase_client = get_supabase_sync_client()
         storage_manager = SupabaseStorageManager(supabase_client)
         results = {}
 
         # 1. Incremental scan (always run) - handles daily incoming emails
         logger.info("Starting incremental scan (new emails)")
-        worker_incremental = EmailIngestWorker(sync_supabase_client, azure_client, storage_manager, is_backfill=False)
+        worker_incremental = EmailIngestWorker(supabase_client, azure_client, storage_manager, is_backfill=False)
         results["incremental"] = await worker_incremental.ingest_incremental_emails(batch_size=batch_size)
 
         # 2. Backward scan (if backfill enabled) - fills historical gaps
         if is_backfill:
             logger.info("Starting backward scan (historical emails)")
-            worker_backfill = EmailIngestWorker(sync_supabase_client, azure_client, storage_manager, is_backfill=True)
+            worker_backfill = EmailIngestWorker(supabase_client, azure_client, storage_manager, is_backfill=True)
             results["backfill"] = await worker_backfill.ingest_recent_emails(batch_size=batch_size)
         else:
             logger.info("Backward scan disabled (backfill complete or not configured)")

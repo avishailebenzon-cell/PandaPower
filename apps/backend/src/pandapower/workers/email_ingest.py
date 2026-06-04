@@ -201,7 +201,7 @@ class EmailIngestWorker:
 
             # Update last_seen timestamp
             if max_received:
-                self.supabase.table("system_settings").upsert(
+                await self.supabase.table("system_settings").upsert(
                     {
                         "setting_key": "azure.last_seen_message_received_at",
                         "setting_value": f'"{max_received.isoformat()}"',
