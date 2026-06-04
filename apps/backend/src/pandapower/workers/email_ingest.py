@@ -124,7 +124,7 @@ class EmailIngestWorker:
             # Fetch last_seen for incremental scan
             last_seen = None
             try:
-                settings_response = self.supabase.table("system_settings").select(
+                settings_response = await self.supabase.table("system_settings").select(
                     "setting_value"
                 ).eq("setting_key", "azure.last_seen_message_received_at").limit(1).execute()
                 if settings_response.data and settings_response.data[0].get("setting_value"):
@@ -636,7 +636,7 @@ class EmailIngestWorker:
             logger.debug(f"File hash: {file_hash}")
 
             # Check for duplicates
-            existing = self.supabase.table("cv_files").select("id").eq("file_hash", file_hash).execute()
+            existing = await self.supabase.table("cv_files").select("id").eq("file_hash", file_hash).execute()
             logger.debug(f"Duplicate check: {len(existing.data or [])} existing records")
 
             if existing.data:
