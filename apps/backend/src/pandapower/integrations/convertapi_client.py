@@ -207,6 +207,9 @@ async def get_convertapi_config(sb=None) -> dict:
         # charges. 0.98 leaves a small safety margin to cover the usage-cache
         # lag. Set to a value >1 to allow overage on purpose.
         "max_usage_pct": 0.98,
+        # Early-warning threshold: email the admin once usage crosses this
+        # fraction, BEFORE the hard stop, so there's time to upgrade the plan.
+        "warn_usage_pct": 0.90,
     }
     try:
         if sb is None:
@@ -233,6 +236,11 @@ async def get_convertapi_config(sb=None) -> dict:
             elif field == "max_usage_pct":
                 try:
                     cfg["max_usage_pct"] = float(val)
+                except (TypeError, ValueError):
+                    pass
+            elif field == "warn_usage_pct":
+                try:
+                    cfg["warn_usage_pct"] = float(val)
                 except (TypeError, ValueError):
                     pass
     except Exception as e:

@@ -210,6 +210,7 @@ async def _pipeline_scheduler_loop():
         _notify_telegram_async,
         _telegram_daily_summary_async,
         _reingest_missed_scheduled_async,
+        _health_check_async,
     )
 
     # Each stage: (async factory, interval seconds, initial stagger offset).
@@ -234,6 +235,10 @@ async def _pipeline_scheduler_loop():
         "telegram_daily_summary": (_telegram_daily_summary_async,  900.0,    140.0),
         # Recover CVs the original backfill dropped (gated by reingest.enabled).
         "reingest_missed":       (_reingest_missed_scheduled_async, 120.0,   70.0),
+        # Integration health (Azure/Pipedrive/Supabase/Anthropic/ConvertAPI).
+        # Runs every 10 min; emails the admin on ConvertAPI near/over limit and
+        # other integration failures (cooldown-protected in alert_service).
+        "health":                (_health_check_async,             600.0,    105.0),
     }
 
     intervals = {name: spec[1] for name, spec in stages.items()}

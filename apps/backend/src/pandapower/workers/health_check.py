@@ -97,24 +97,60 @@ class HealthCheckWorker:
                 total = usage.get("total")
                 remaining = usage.get("remaining")
                 used_pct = usage.get("used_pct")
+                pct_str = f"{(used_pct or 0) * 100:.0f}%"
+                max_pct = cfg.get("max_usage_pct", 0.98)
+                warn_pct = cfg.get("warn_usage_pct", 0.90)
 
                 if usage.get("over_limit"):
-                    return {
-                        "status": "error",
-                        "message": (
-                            f"OVER PLAN LIMIT: {consumed}/{total} conversions "
-                            f"({(used_pct or 0)*100:.0f}%) — overage charges accruing. "
-                            f"ConvertAPI is being skipped; using local extractors."
+                    msg = (
+                        f"OVER PLAN LIMIT: {consumed}/{total} conversions "
+                        f"({pct_str}) — overage charges accruing. ConvertAPI is "
+                        f"being skipped; using local extractors."
+                    )
+                    # Email alert (cooldown-protected). Distinct key from the
+                    # near-limit warning so both can fire as usage escalates.
+                    await alert_admin(
+                        key="convertapi-over-limit",
+                        subject=f"🔴 ConvertAPI OVER plan limit ({pct_str})",
+                        details=(
+                            f"ConvertAPI usage is {consumed}/{total} conversions "
+                            f"({pct_str}). Overage is billed on top of the plan.\n\n"
+                            f"The budget guard is now skipping ConvertAPI and using "
+                            f"free local extractors. To restore managed OCR, upgrade "
+                            f"the plan at convertapi.com or wait for the cycle reset."
                         ),
-                    }
-                if remaining is not None and remaining < 500:
+                        severity="error",
+                        include_traceback=False,
+                    )
+                    return {"status": "error", "message": msg}
+
+                # Near limit (>= warn threshold but not yet over): early heads-up.
+                if used_pct is not None and used_pct >= warn_pct:
+                    guard_note = (
+                        " The budget guard will stop ConvertAPI at "
+                        f"{int(max_pct * 100)}%."
+                    )
+                    await alert_admin(
+                        key="convertapi-usage-warning",
+                        subject=f"⚠️ ConvertAPI approaching plan limit ({pct_str})",
+                        details=(
+                            f"ConvertAPI usage is {consumed}/{total} conversions "
+                            f"({pct_str}), {remaining} left.{guard_note}\n\n"
+                            f"Upgrade the plan at convertapi.com to avoid falling "
+                            f"back to local-only extraction (lower quality on "
+                            f"scanned/image CVs)."
+                        ),
+                        severity="warning",
+                        include_traceback=False,
+                    )
                     return {
                         "status": "warning",
-                        "message": f"Near limit: {consumed}/{total} ({remaining} conversions left)",
+                        "message": f"Near limit: {consumed}/{total} ({remaining} left, {pct_str})",
                     }
+
                 return {
                     "status": "healthy",
-                    "message": f"Usage: {consumed}/{total} conversions",
+                    "message": f"Usage: {consumed}/{total} conversions ({pct_str})",
                 }
             finally:
                 await client.close()
