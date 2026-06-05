@@ -53,6 +53,29 @@ class MatchInfo(BaseModel):
     days_in_stage: int
 
 
+class CandidateMatchInfo(BaseModel):
+    """Complete match information for candidate decision matrix."""
+    id: str
+    candidate_id: str
+    candidate_name: str
+    job_id: str
+    job_title: str
+    organization_name: Optional[str] = None
+    match_score: float  # 0-1
+    current_state: str
+    matched_by_agent_code: str
+    match_reasoning: Optional[str] = None
+    created_at: str
+    evaluated_score_raw: Optional[int] = None
+
+
+class AllCandidateMatchesResponse(BaseModel):
+    """Response with all candidate matches."""
+    matches: List[CandidateMatchInfo]
+    total: int
+    jobs: List[dict] = []  # List of available jobs for filtering
+
+
 class MatchesResponse(BaseModel):
     """Response with matches list."""
     matches: List[MatchInfo]
@@ -496,3 +519,96 @@ async def list_recruiter_conversations(
     except Exception as e:
         logger.error(f"Error listing conversations: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to list conversations")
+
+
+@router.get("/all-candidate-matches", response_model=AllCandidateMatchesResponse)
+async def get_all_candidate_matches(
+    job_id: Optional[str] = Query(None, description="Filter by job ID"),
+    limit: int = Query(100, le=500),
+    page: int = Query(1, ge=1),
+    supabase = Depends(get_supabase_client)
+) -> AllCandidateMatchesResponse:
+    """Get all candidate matches with full reasoning.
+
+    Shows all matches (not just specific states) with complete match reasoning,
+    for candidate decision matrix / evaluation history.
+
+    Args:
+        job_id: Optional job ID to filter by
+        limit: Items per page (max 500)
+        page: Page number (1-indexed)
+    """
+    try:
+        offset = (page - 1) * limit
+
+        # Build query for all matches (no state filter)
+        query = supabase.table("matches").select(
+            "id, candidate_id, job_id, current_state, match_score, "
+            "matched_by_agent_code, match_reasoning, created_at, evaluated_score_raw, "
+            "candidates(name), jobs(job_title, organization_id), "
+            "organizations(name)"
+        ).eq("is_valid", True)
+
+        # Optional job filter
+        if job_id:
+            query = query.eq("job_id", job_id)
+
+        # Get total count
+        total_result = await supabase.table("matches").select(
+            "id", count="exact"
+        ).eq("is_valid", True)
+
+        if job_id:
+            total_result = total_result.eq("job_id", job_id)
+
+        total_result = await total_result.execute()
+        total = total_result.count if hasattr(total_result, "count") else 0
+
+        # Get paginated results
+        result = await query.order("created_at", desc=True).range(
+            offset, offset + limit - 1
+        ).execute()
+
+        matches = []
+        if result.data:
+            for row in result.data:
+                candidate = row.get("candidates") or {}
+                job = row.get("jobs") or {}
+                org = job.get("organization_id") and row.get("organizations") or {}
+
+                matches.append(CandidateMatchInfo(
+                    id=row["id"],
+                    candidate_id=row["candidate_id"],
+                    candidate_name=candidate.get("name", "Unknown") if isinstance(candidate, dict) else "Unknown",
+                    job_id=row["job_id"],
+                    job_title=job.get("job_title", "Unknown") if isinstance(job, dict) else "Unknown",
+                    organization_name=org.get("name") if isinstance(org, dict) else None,
+                    match_score=row.get("match_score", 0.0),
+                    current_state=row.get("current_state", "unknown"),
+                    matched_by_agent_code=row.get("matched_by_agent_code", "unknown"),
+                    match_reasoning=row.get("match_reasoning"),
+                    created_at=row["created_at"],
+                    evaluated_score_raw=row.get("evaluated_score_raw")
+                ))
+
+        # Get list of all jobs for filter dropdown
+        jobs_result = await supabase.table("jobs").select(
+            "id, job_title"
+        ).order("job_title").execute()
+
+        jobs_list = []
+        if jobs_result.data:
+            jobs_list = [
+                {"id": j["id"], "title": j.get("job_title", "Unknown")}
+                for j in jobs_result.data
+            ]
+
+        return AllCandidateMatchesResponse(
+            matches=matches,
+            total=total,
+            jobs=jobs_list
+        )
+
+    except Exception as e:
+        logger.error(f"Error getting all candidate matches: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to get candidate matches")

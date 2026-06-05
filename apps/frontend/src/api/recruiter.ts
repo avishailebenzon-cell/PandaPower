@@ -57,6 +57,27 @@ export interface ConversationInfo {
   notes?: string;
 }
 
+export interface CandidateMatch {
+  id: string;
+  candidateId: string;
+  candidateName: string;
+  jobId: string;
+  jobTitle: string;
+  organizationName?: string;
+  matchScore: number;
+  currentState: string;
+  matchedByAgentCode: string;
+  matchReasoning?: string;
+  createdAt: string;
+  evaluatedScoreRaw?: number;
+}
+
+export interface AllCandidateMatchesResponse {
+  matches: CandidateMatch[];
+  total: number;
+  jobs: Array<{ id: string; title: string }>;
+}
+
 /**
  * Fetch recruiter status metrics
  */
@@ -208,4 +229,52 @@ export async function fetchRecruiterConversations(
   }
 
   return response.json();
+}
+
+/**
+ * Fetch all candidate matches with reasoning (decision matrix)
+ */
+export async function fetchAllCandidateMatches(
+  jobId?: string,
+  limit: number = 100,
+  page: number = 1
+): Promise<AllCandidateMatchesResponse> {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    page: String(page),
+  });
+
+  if (jobId) {
+    params.append("job_id", jobId);
+  }
+
+  const response = await fetch(
+    `${API_BASE}/admin/recruiter/all-candidate-matches?${params.toString()}`
+  );
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch candidate matches: ${response.statusText}`);
+  }
+
+  const data = await response.json();
+
+  // Map snake_case from API to camelCase for frontend
+  return {
+    matches: (data.matches || []).map((m: any) => ({
+      id: m.id,
+      candidateId: m.candidate_id,
+      candidateName: m.candidate_name,
+      jobId: m.job_id,
+      jobTitle: m.job_title,
+      organizationName: m.organization_name,
+      matchScore: m.match_score,
+      currentState: m.current_state,
+      matchedByAgentCode: m.matched_by_agent_code,
+      matchReasoning: m.match_reasoning,
+      createdAt: m.created_at,
+      evaluatedScoreRaw: m.evaluated_score_raw,
+    })),
+    total: data.total,
+    jobs: data.jobs || [],
+  };
 }

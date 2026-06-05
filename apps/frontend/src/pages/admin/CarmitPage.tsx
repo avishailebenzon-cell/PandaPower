@@ -7,6 +7,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import KPICard from '@/components/KPICard';
 import { RecruiterMatchesPanel } from '@/components/RecruiterMatchesPanel';
+import { CandidateDecisionMatrix } from '@/components/CandidateDecisionMatrix';
 import { MatchDetailModal } from '@/components/MatchDetailModal';
 import type { DepartmentMatch, ClearanceMatch } from '@/api/recruitment-departments';
 
@@ -119,7 +120,7 @@ export const CarmitPage = () => {
 
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<
-    'queue' | 'history' | 'decisions' | 'agent-matches' | 'all-jobs' | 'sent-to-tal' | 'sent-to-elad'
+    'candidate-matrix' | 'queue' | 'history' | 'decisions' | 'agent-matches' | 'all-jobs' | 'sent-to-tal' | 'sent-to-elad'
   >('decisions');
   // Pagination state for the new "agent-matches" tab (≥70% from all 8 agents).
   const [agentMatchesPage, setAgentMatchesPage] = useState(0);
@@ -327,6 +328,17 @@ export const CarmitPage = () => {
       {/* Tab Navigation */}
       <div className="mb-6 flex gap-4 border-b border-gray-700 overflow-x-auto">
         <button
+          onClick={() => setActiveTab('candidate-matrix')}
+          className={`px-6 py-3 font-semibold transition whitespace-nowrap ${
+            activeTab === 'candidate-matrix'
+              ? 'text-blue-400 border-b-2 border-blue-400'
+              : 'text-gray-400 hover:text-gray-200'
+          }`}
+          title="מטריצת החלטות כל המועמדים"
+        >
+          📊 כל המועמדים
+        </button>
+        <button
           onClick={() => setActiveTab('queue')}
           className={`px-6 py-3 font-semibold transition whitespace-nowrap ${
             activeTab === 'queue'
@@ -402,6 +414,11 @@ export const CarmitPage = () => {
           📤 העברתי לאלעד (לדבר עם לקוח)
         </button>
       </div>
+
+      {/* === מטריצת החלטות מועמדים === */}
+      {activeTab === 'candidate-matrix' && (
+        <CandidateDecisionMatrix showTitle={true} />
+      )}
 
       {/* === תור ביקורת כרמית === */}
       {/* Matches waiting for Carmit review (found state) */}
