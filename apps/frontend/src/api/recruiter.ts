@@ -236,6 +236,7 @@ export async function fetchRecruiterConversations(
  */
 export async function fetchAllCandidateMatches(
   jobId?: string,
+  agentCode?: string,
   limit: number = 100,
   page: number = 1
 ): Promise<AllCandidateMatchesResponse> {
@@ -246,6 +247,10 @@ export async function fetchAllCandidateMatches(
 
   if (jobId) {
     params.append("job_id", jobId);
+  }
+
+  if (agentCode) {
+    params.append("agent_code", agentCode);
   }
 
   const response = await fetch(

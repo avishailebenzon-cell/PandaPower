@@ -40,15 +40,16 @@ const AGENT_NAMES: Record<string, string> = {
 
 interface Props {
   showTitle?: boolean;
+  agentCode?: string; // If set, show only candidates evaluated by this agent
 }
 
-export function CandidateDecisionMatrix({ showTitle = true }: Props) {
+export function CandidateDecisionMatrix({ showTitle = true, agentCode }: Props) {
   const [selectedJobId, setSelectedJobId] = useState<string>("");
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["candidate-decision-matrix", selectedJobId],
-    queryFn: () => fetchAllCandidateMatches(selectedJobId || undefined, 500, 1),
+    queryKey: ["candidate-decision-matrix", selectedJobId, agentCode],
+    queryFn: () => fetchAllCandidateMatches(selectedJobId || undefined, agentCode, 500, 1),
     refetchInterval: 60000, // Refresh every minute
   });
 

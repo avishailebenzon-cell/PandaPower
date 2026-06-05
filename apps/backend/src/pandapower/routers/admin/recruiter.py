@@ -524,6 +524,7 @@ async def list_recruiter_conversations(
 @router.get("/all-candidate-matches", response_model=AllCandidateMatchesResponse)
 async def get_all_candidate_matches(
     job_id: Optional[str] = Query(None, description="Filter by job ID"),
+    agent_code: Optional[str] = Query(None, description="Filter by agent code (agent's evaluated candidates only)"),
     limit: int = Query(100, le=500),
     page: int = Query(1, ge=1),
     supabase = Depends(get_supabase_client)
@@ -535,6 +536,7 @@ async def get_all_candidate_matches(
 
     Args:
         job_id: Optional job ID to filter by
+        agent_code: Optional agent code to show only candidates evaluated by that agent
         limit: Items per page (max 500)
         page: Page number (1-indexed)
     """
@@ -553,6 +555,10 @@ async def get_all_candidate_matches(
         if job_id:
             query = query.eq("job_id", job_id)
 
+        # Optional agent filter (show only candidates evaluated by this agent)
+        if agent_code:
+            query = query.eq("matched_by_agent_code", agent_code)
+
         # Get total count
         total_result = await supabase.table("matches").select(
             "id", count="exact"
@@ -560,6 +566,9 @@ async def get_all_candidate_matches(
 
         if job_id:
             total_result = total_result.eq("job_id", job_id)
+
+        if agent_code:
+            total_result = total_result.eq("matched_by_agent_code", agent_code)
 
         total_result = await total_result.execute()
         total = total_result.count if hasattr(total_result, "count") else 0

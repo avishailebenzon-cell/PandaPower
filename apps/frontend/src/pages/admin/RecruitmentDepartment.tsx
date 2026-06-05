@@ -21,8 +21,9 @@ import {
 import { useParams } from 'react-router-dom';
 import { getAgent } from '@/data/agents';
 import { MatchDetailModal, ClearanceBadge } from '@/components/MatchDetailModal';
+import { CandidateDecisionMatrix } from '@/components/CandidateDecisionMatrix';
 
-type TabType = 'active' | 'history';
+type TabType = 'active' | 'history' | 'evaluated';
 type GroupBy = 'none' | 'job' | 'status' | 'score';
 
 interface DepartmentJob {
@@ -654,7 +655,42 @@ export const RecruitmentDepartment: React.FC = () => {
           </div>
         </div>
 
+        {/* Tab Navigation: Active Matches vs Decision Matrix */}
+        <div className="mb-8 flex gap-4 border-b border-gray-700">
+          <button
+            onClick={() => setActiveTab('active')}
+            className={`px-6 py-3 font-semibold transition whitespace-nowrap ${
+              activeTab === 'active'
+                ? 'text-blue-400 border-b-2 border-blue-400'
+                : 'text-gray-400 hover:text-gray-200'
+            }`}
+          >
+            📋 התאמות פעילות
+          </button>
+          <button
+            onClick={() => setActiveTab('history')}
+            className={`px-6 py-3 font-semibold transition whitespace-nowrap ${
+              activeTab === 'history'
+                ? 'text-blue-400 border-b-2 border-blue-400'
+                : 'text-gray-400 hover:text-gray-200'
+            }`}
+          >
+            ✓ היסטוריה
+          </button>
+          <button
+            onClick={() => setActiveTab('evaluated')}
+            className={`px-6 py-3 font-semibold transition whitespace-nowrap ${
+              activeTab === 'evaluated'
+                ? 'text-blue-400 border-b-2 border-blue-400'
+                : 'text-gray-400 hover:text-gray-200'
+            }`}
+          >
+            📊 כל המועמדים שבדקתי
+          </button>
+        </div>
+
         {/* Real-time Matches Section */}
+        {activeTab !== 'evaluated' && (
         <div className="mb-8">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-3">
@@ -1023,7 +1059,15 @@ export const RecruitmentDepartment: React.FC = () => {
             </div>
           </div>
         </div>
-      )}
+        )}
+
+        {/* Candidate Decision Matrix - Show all candidates evaluated by this agent */}
+        {activeTab === 'evaluated' && (
+          <div className="mb-8">
+            <CandidateDecisionMatrix showTitle={true} agentCode={departmentCode} />
+          </div>
+        )}
+      </div>
     </div>
   );
 };
