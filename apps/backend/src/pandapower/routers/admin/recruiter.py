@@ -543,12 +543,14 @@ async def get_all_candidate_matches(
     try:
         offset = (page - 1) * limit
 
-        # Build query for all matches (no state filter)
+        # Build query for all matches (no state filter).
+        # NOTE: jobs carries a denormalized organization_name column — there is
+        # no matches→organizations relationship and no jobs.organization_id, so
+        # we read the org name straight off jobs (the old join 500'd in prod).
         query = supabase.table("matches").select(
             "id, candidate_id, job_id, current_state, match_score, "
             "matched_by_agent_code, match_reasoning, created_at, evaluated_score_raw, "
-            "candidates(name), jobs(job_title, organization_id), "
-            "organizations(name)"
+            "candidates(name), jobs(job_title, organization_name)"
         ).eq("is_valid", True)
 
         # Optional job filter
@@ -583,7 +585,6 @@ async def get_all_candidate_matches(
             for row in result.data:
                 candidate = row.get("candidates") or {}
                 job = row.get("jobs") or {}
-                org = job.get("organization_id") and row.get("organizations") or {}
 
                 matches.append(CandidateMatchInfo(
                     id=row["id"],
@@ -591,7 +592,7 @@ async def get_all_candidate_matches(
                     candidate_name=candidate.get("name", "Unknown") if isinstance(candidate, dict) else "Unknown",
                     job_id=row["job_id"],
                     job_title=job.get("job_title", "Unknown") if isinstance(job, dict) else "Unknown",
-                    organization_name=org.get("name") if isinstance(org, dict) else None,
+                    organization_name=job.get("organization_name") if isinstance(job, dict) else None,
                     match_score=row.get("match_score", 0.0),
                     current_state=row.get("current_state", "unknown"),
                     matched_by_agent_code=row.get("matched_by_agent_code", "unknown"),
