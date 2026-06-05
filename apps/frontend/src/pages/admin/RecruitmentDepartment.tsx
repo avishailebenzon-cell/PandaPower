@@ -90,17 +90,16 @@ export const RecruitmentDepartment: React.FC = () => {
     retry: 2,
   });
 
-  // Fetch matches - with aggressive polling for new CVs
+  // Fetch matches. We DON'T pre-filter to status='found' anymore: in this
+  // system Carmit (not the agent) actions 'found' matches, so agents were left
+  // with an empty list once Carmit had routed everything. Fetch all of the
+  // agent's evaluations (every state) and let the in-page Status/Job/Score
+  // dropdowns narrow them. Higher limit so per-job filtering has enough rows.
   const { data: matchesData = [], isLoading, refetch: refetchMatches } = useQuery({
-    queryKey: ['department-matches', departmentCode, activeTab],
+    queryKey: ['department-matches', departmentCode],
     queryFn: () =>
-      fetchDepartmentMatches(
-        departmentCode || '',
-        activeTab === 'active' ? 'found' : undefined,
-        100,
-        0
-      ),
-    refetchInterval: 10000, // Check every 10 seconds for new CVs
+      fetchDepartmentMatches(departmentCode || '', undefined, 500, 0),
+    refetchInterval: 15000,
     retry: 2,
   });
 
