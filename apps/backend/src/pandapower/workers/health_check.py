@@ -89,21 +89,32 @@ class HealthCheckWorker:
                     "message": "ConvertAPI secret missing from configuration",
                 }
 
-            # Test the API
+            # Test the API + report real conversion usage.
             client = ConvertApiClient(cfg["secret"])
             try:
-                user = await client.get_user()
-                credits = user.get("ConversionsLeft") or user.get("SecondsLeft")
+                usage = await client.get_usage()
+                consumed = usage.get("consumed")
+                total = usage.get("total")
+                remaining = usage.get("remaining")
+                used_pct = usage.get("used_pct")
 
-                if credits and credits < 100:
+                if usage.get("over_limit"):
+                    return {
+                        "status": "error",
+                        "message": (
+                            f"OVER PLAN LIMIT: {consumed}/{total} conversions "
+                            f"({(used_pct or 0)*100:.0f}%) — overage charges accruing. "
+                            f"ConvertAPI is being skipped; using local extractors."
+                        ),
+                    }
+                if remaining is not None and remaining < 500:
                     return {
                         "status": "warning",
-                        "message": f"Low credits: {credits} remaining",
+                        "message": f"Near limit: {consumed}/{total} ({remaining} conversions left)",
                     }
-
                 return {
                     "status": "healthy",
-                    "message": f"Credits: {credits}",
+                    "message": f"Usage: {consumed}/{total} conversions",
                 }
             finally:
                 await client.close()

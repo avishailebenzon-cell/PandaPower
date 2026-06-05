@@ -133,6 +133,44 @@ class ConvertApiClient:
             raise RuntimeError(f"ConvertAPI /user {resp.status_code}: {resp.text[:200]}")
         return resp.json()
 
+    async def get_usage(self) -> dict:
+        """Normalized usage snapshot for the conversion plan.
+
+        ConvertAPI's /user returns (for conversion-based plans):
+          ConversionsTotal     – plan limit for the period (e.g. 15000)
+          ConversionsConsumed  – used so far (can exceed total → overage)
+          SecondsLeft          – negative when over (for second-based plans)
+
+        Returns:
+          {
+            "total": int|None,        # plan limit
+            "consumed": int,          # used so far
+            "remaining": int|None,    # total - consumed (negative = overage)
+            "used_pct": float|None,   # consumed / total (1.0 == exactly at limit)
+            "over_limit": bool,       # consumed >= total
+          }
+        """
+        user = await self.get_user()
+        total = user.get("ConversionsTotal")
+        consumed = user.get("ConversionsConsumed")
+        if consumed is None:
+            # Some plans report only seconds; derive consumed from total - left.
+            secs_left = user.get("SecondsLeft")
+            if total is not None and secs_left is not None:
+                consumed = total - secs_left
+            else:
+                consumed = 0
+        remaining = (total - consumed) if total is not None else None
+        used_pct = (consumed / total) if (total and total > 0) else None
+        over_limit = bool(total is not None and consumed >= total)
+        return {
+            "total": total,
+            "consumed": consumed,
+            "remaining": remaining,
+            "used_pct": used_pct,
+            "over_limit": over_limit,
+        }
+
 
 # ---------------------------------------------------------------------------
 # Cached config (env first, then system_settings).
@@ -164,6 +202,11 @@ async def get_convertapi_config(sb=None) -> dict:
         "enabled": None,
         "mode": "always",
         "ocr_languages": "en,he",
+        # Hard stop: once consumed/total reaches this fraction we STOP using
+        # ConvertAPI (fall back to free local extractors) to avoid overage
+        # charges. 0.98 leaves a small safety margin to cover the usage-cache
+        # lag. Set to a value >1 to allow overage on purpose.
+        "max_usage_pct": 0.98,
     }
     try:
         if sb is None:
@@ -187,6 +230,11 @@ async def get_convertapi_config(sb=None) -> dict:
                 cfg["mode"] = val
             elif field == "ocr_languages":
                 cfg["ocr_languages"] = val
+            elif field == "max_usage_pct":
+                try:
+                    cfg["max_usage_pct"] = float(val)
+                except (TypeError, ValueError):
+                    pass
     except Exception as e:
         logger.debug(f"[convertapi] config read failed (non-fatal): {e}")
 
@@ -197,3 +245,66 @@ async def get_convertapi_config(sb=None) -> dict:
     _CONFIG_CACHE = cfg
     _CONFIG_CACHE_AT = now
     return cfg
+
+
+# ---------------------------------------------------------------------------
+# Usage budget guard (avoid plan overage).
+# ---------------------------------------------------------------------------
+
+_USAGE_CACHE: Optional[dict] = None
+_USAGE_CACHE_AT: float = 0.0
+_USAGE_TTL = 60.0  # seconds — short so we react quickly as the limit nears.
+
+
+def bust_usage_cache() -> None:
+    global _USAGE_CACHE_AT
+    _USAGE_CACHE_AT = 0.0
+
+
+async def get_convertapi_usage(secret: str, *, force: bool = False) -> Optional[dict]:
+    """Return a normalized usage snapshot, cached ~60s. None on failure.
+
+    Cached so we don't hit /user on every single CV — at most once a minute.
+    """
+    global _USAGE_CACHE, _USAGE_CACHE_AT
+    now = time.monotonic()
+    if not force and _USAGE_CACHE is not None and (now - _USAGE_CACHE_AT) < _USAGE_TTL:
+        return _USAGE_CACHE
+
+    client = ConvertApiClient(secret)
+    try:
+        usage = await client.get_usage()
+    except Exception as e:
+        logger.warning(f"[convertapi] usage check failed (assuming OK): {e}")
+        return None
+    finally:
+        await client.close()
+
+    _USAGE_CACHE = usage
+    _USAGE_CACHE_AT = now
+    return usage
+
+
+async def convertapi_within_budget(cfg: dict) -> tuple[bool, Optional[dict]]:
+    """Decide whether ConvertAPI may be used without exceeding the plan.
+
+    Returns (allowed, usage_snapshot). Fails OPEN (allowed=True) if we can't
+    read usage — we never want a transient usage-check error to halt the whole
+    pipeline. The hard protection is the explicit over-limit check below.
+    """
+    secret = cfg.get("secret")
+    if not secret:
+        return False, None
+
+    usage = await get_convertapi_usage(secret)
+    if usage is None:
+        return True, None  # fail open on read error
+
+    max_pct = cfg.get("max_usage_pct", 0.98)
+    used_pct = usage.get("used_pct")
+    if used_pct is None:
+        # No total reported → can't reason about a percentage; allow.
+        return True, usage
+
+    allowed = used_pct < max_pct
+    return allowed, usage

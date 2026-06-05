@@ -512,11 +512,27 @@ async def _try_convertapi(filename: str, content: bytes) -> Optional[str]:
         from pandapower.integrations.convertapi_client import (
             ConvertApiClient,
             convertapi_src_token,
+            convertapi_within_budget,
             get_convertapi_config,
         )
 
         cfg = await get_convertapi_config()
         if not cfg.get("enabled") or not cfg.get("secret"):
+            return None
+
+        # BUDGET GUARD: stop using ConvertAPI before we exceed the plan limit
+        # (overage is billed extra). When over budget we return None so the
+        # caller falls back to the free local extractors — the pipeline keeps
+        # moving, just without managed OCR for scanned/image CVs.
+        allowed, usage = await convertapi_within_budget(cfg)
+        if not allowed:
+            consumed = (usage or {}).get("consumed")
+            total = (usage or {}).get("total")
+            logger.warning(
+                f"[convertapi] BUDGET REACHED ({consumed}/{total}, "
+                f"max={cfg.get('max_usage_pct')}) — skipping ConvertAPI for "
+                f"{filename}, using local extractors to avoid overage charges."
+            )
             return None
 
         file_format = detect_file_format(content, filename=filename)

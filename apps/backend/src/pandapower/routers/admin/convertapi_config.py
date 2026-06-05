@@ -74,23 +74,32 @@ async def status() -> dict:
     cfg = await get_convertapi_config(sb)
     has_secret = bool(cfg.get("secret"))
 
-    credits = None
+    usage = None
     if has_secret:
         client = ConvertApiClient(cfg["secret"])
         try:
-            user = await client.get_user()
-            credits = user.get("SecondsLeft") or user.get("ConversionsLeft") or user.get("CreditsLeft")
+            usage = await client.get_usage()
         except Exception as e:
             logger.debug(f"convertapi status probe failed: {e}")
         finally:
             await client.close()
+
+    max_pct = cfg.get("max_usage_pct", 0.98)
+    over_budget = bool(usage and usage.get("used_pct") is not None and usage["used_pct"] >= max_pct)
 
     return {
         "enabled": bool(cfg.get("enabled")),
         "mode": cfg.get("mode"),
         "ocr_languages": cfg.get("ocr_languages"),
         "has_secret": has_secret,
-        "credits_remaining": credits,
+        # Full usage so the dashboard can show consumed/total and warn early.
+        "usage": usage,  # {total, consumed, remaining, used_pct, over_limit}
+        "max_usage_pct": max_pct,
+        # True once we've hit our safety threshold and ConvertAPI is being
+        # skipped in favor of local extractors (no overage).
+        "budget_guard_active": over_budget,
+        # Back-compat: remaining conversions (negative = overage).
+        "credits_remaining": (usage or {}).get("remaining"),
     }
 
 
