@@ -133,58 +133,23 @@ async def get_recruiter_status(
     Returns counts of matches in each recruiter workflow stage.
     """
     try:
-        # All .execute() calls below MUST be awaited — the async Supabase
-        # client returns a coroutine and forgetting `await` causes `.data`
-        # to be missing and the whole endpoint to 500.
+        # Use count="exact" — a plain select caps at PostgREST's 1000-row
+        # default, which silently undercounts once a queue exceeds 1000.
+        async def _count(state) -> int:
+            q = supabase.table("matches").select("id", count="exact")
+            q = q.in_("current_state", state) if isinstance(state, list) else q.eq("current_state", state)
+            r = await q.limit(1).execute()
+            return r.count or 0
 
-        # Get Carmit-related matches
-        carmit_pending_result = await supabase.table("matches").select("id").eq(
-            "current_state", "found"
-        ).execute()
-        pending_carmit = len(carmit_pending_result.data) if carmit_pending_result.data else 0
-
-        carmit_approved_result = await supabase.table("matches").select("id").eq(
-            "current_state", "carmit_approved"
-        ).execute()
-        carmit_approved = len(carmit_approved_result.data) if carmit_approved_result.data else 0
-
-        carmit_rejected_result = await supabase.table("matches").select("id").eq(
-            "current_state", "carmit_rejected"
-        ).execute()
-        carmit_rejected = len(carmit_rejected_result.data) if carmit_rejected_result.data else 0
-
-        # Get Tal-related matches
-        tal_pending_result = await supabase.table("matches").select("id").eq(
-            "current_state", "sent_to_tal"
-        ).execute()
-        pending_tal = len(tal_pending_result.data) if tal_pending_result.data else 0
-
-        tal_conversation_result = await supabase.table("matches").select("id").eq(
-            "current_state", "tal_conversation"
-        ).execute()
-        in_conversation_tal = len(tal_conversation_result.data) if tal_conversation_result.data else 0
-
-        # Get Elad-related matches
-        awaiting_elad_result = await supabase.table("matches").select("id").eq(
-            "current_state", "sent_to_elad"
-        ).execute()
-        awaiting_elad = len(awaiting_elad_result.data) if awaiting_elad_result.data else 0
-
-        elad_conversation_result = await supabase.table("matches").select("id").eq(
-            "current_state", "elad_conversation"
-        ).execute()
-        in_conversation_elad = len(elad_conversation_result.data) if elad_conversation_result.data else 0
-
-        # Final outcomes
-        hired_result = await supabase.table("matches").select("id").eq(
-            "current_state", "hired"
-        ).execute()
-        hired = len(hired_result.data) if hired_result.data else 0
-
-        failed_result = await supabase.table("matches").select("id").in_(
-            "current_state", ["tal_rejected", "elad_rejected", "placement_failed"]
-        ).execute()
-        failed = len(failed_result.data) if failed_result.data else 0
+        pending_carmit = await _count("found")
+        carmit_approved = await _count("carmit_approved")
+        carmit_rejected = await _count("carmit_rejected")
+        pending_tal = await _count("sent_to_tal")
+        in_conversation_tal = await _count("tal_conversation")
+        awaiting_elad = await _count("sent_to_elad")
+        in_conversation_elad = await _count("elad_conversation")
+        hired = await _count("hired")
+        failed = await _count(["tal_rejected", "elad_rejected", "placement_failed"])
 
         return StatusMetrics(
             pending_carmit=pending_carmit,
