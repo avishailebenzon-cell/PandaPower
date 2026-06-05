@@ -53,19 +53,16 @@ class CandidateCreationWorker:
         }
 
         try:
-            # Only pick the LATEST CV per candidate. If a candidate uploaded 5
-            # times, we want to run candidate creation only on the most recent
-            # analysis - not all five (which would just re-update with the
-            # same data 5 times in random order).
-            response = await self.supabase.table("cv_files").select(
-                "id, original_filename, llm_analysis, source_email_from, "
-                "source_email_received_at, candidate_email, is_latest"
-            ).eq("parse_status", "success").eq("is_latest", True).limit(limit).execute()
-
-            parsed_cvs = response.data or []
+            # Only pick the LATEST CV per candidate that we HAVEN'T processed
+            # yet. The candidate_extracted_at cursor (migration 010) is the
+            # marker — without it the worker re-fetched the same 20 rows every
+            # run and never advanced through the backlog. _fetch_unprocessed_cvs
+            # transparently falls back to a link-based exclusion if the column
+            # doesn't exist yet (i.e. migration not applied).
+            parsed_cvs = await self._fetch_unprocessed_cvs(limit)
             result["total_processed"] = len(parsed_cvs)
 
-            logger.info(f"Processing {len(parsed_cvs)} latest parsed CVs for candidate creation/update")
+            logger.info(f"Processing {len(parsed_cvs)} unprocessed parsed CVs for candidate creation/update")
 
             for cv in parsed_cvs:
                 try:
@@ -84,13 +81,16 @@ class CandidateCreationWorker:
                         "filename": cv["original_filename"],
                         "error": error_msg,
                     })
+                finally:
+                    # ALWAYS stamp the cursor — even on skip/error — so an
+                    # unparseable CV (no name, low confidence) can never block
+                    # the queue behind it. No-op if the column doesn't exist.
+                    await self._mark_attempted(cv["id"])
 
             logger.info(
-                f"Candidate creation complete",
-                total=result["total_processed"],
-                created=result["created"],
-                skipped=result["skipped_low_confidence"],
-                errors=len(result["errors"]),
+                f"Candidate creation complete: total={result['total_processed']}, "
+                f"created={result['created']}, updated={result['updated']}, "
+                f"skipped={result['skipped_low_confidence']}, errors={len(result['errors'])}"
             )
 
             return result
@@ -99,6 +99,93 @@ class CandidateCreationWorker:
             logger.error(f"Candidate creation batch failed: {e}", exc_info=True)
             result["errors"].append({"error": str(e)})
             return result
+
+    # Columns we need from cv_files for candidate creation.
+    _CV_SELECT = (
+        "id, original_filename, llm_analysis, source_email_from, "
+        "source_email_received_at, candidate_email, is_latest"
+    )
+
+    async def _fetch_unprocessed_cvs(self, limit: int) -> list[dict]:
+        """Return up to `limit` success+is_latest CVs not yet turned into candidates.
+
+        Primary path uses the candidate_extracted_at cursor (migration 010):
+        cheap, indexed, newest-first, and immune to unparseable CVs blocking
+        the queue. If that column doesn't exist yet (migration not applied),
+        falls back to excluding CVs already linked to a candidate.
+        """
+        # ── Primary: cursor column ────────────────────────────────────────
+        try:
+            r = await self.supabase.table("cv_files").select(self._CV_SELECT).eq(
+                "parse_status", "success"
+            ).eq("is_latest", True).is_(
+                "candidate_extracted_at", "null"
+            ).order("created_at", desc=True).limit(limit).execute()
+            return r.data or []
+        except Exception as e:
+            # Column missing → migration 010 not applied yet. Fall back.
+            msg = str(e).lower()
+            if "candidate_extracted_at" not in msg and "column" not in msg:
+                raise
+            logger.warning(
+                "candidate_extracted_at column not found — falling back to "
+                "link-based exclusion (apply migration 010 for the fast path)"
+            )
+
+        # ── Fallback: exclude CVs already linked to a candidate ───────────
+        linked = await self._load_linked_cv_ids()
+        collected: list[dict] = []
+        offset = 0
+        page = 200
+        while len(collected) < limit:
+            r = await self.supabase.table("cv_files").select(self._CV_SELECT).eq(
+                "parse_status", "success"
+            ).eq("is_latest", True).order(
+                "created_at", desc=True
+            ).range(offset, offset + page - 1).execute()
+            batch = r.data or []
+            if not batch:
+                break
+            for cv in batch:
+                if cv["id"] not in linked:
+                    collected.append(cv)
+                    if len(collected) >= limit:
+                        break
+            if len(batch) < page:
+                break
+            offset += page
+        return collected
+
+    async def _load_linked_cv_ids(self) -> set:
+        """Return the set of cv_file_ids already linked to a candidate."""
+        linked: set = set()
+        offset = 0
+        page = 1000
+        while True:
+            r = await self.supabase.table("candidates").select("cv_file_id").range(
+                offset, offset + page - 1
+            ).execute()
+            batch = r.data or []
+            linked.update(c["cv_file_id"] for c in batch if c.get("cv_file_id"))
+            if len(batch) < page:
+                break
+            offset += page
+        return linked
+
+    async def _mark_attempted(self, cv_id: str) -> None:
+        """Stamp candidate_extracted_at so this CV is never re-fetched.
+
+        No-op (silently) if the column doesn't exist yet — in that case the
+        link-based fallback in _fetch_unprocessed_cvs handles exclusion.
+        """
+        try:
+            await self.supabase.table("cv_files").update(
+                {"candidate_extracted_at": datetime.utcnow().isoformat()}
+            ).eq("id", cv_id).execute()
+        except Exception as e:
+            msg = str(e).lower()
+            if "candidate_extracted_at" not in msg and "column" not in msg:
+                logger.debug(f"Failed to stamp candidate_extracted_at on {cv_id}: {e}")
 
     async def _create_or_update_candidate_from_cv(self, cv: dict) -> str:
         """Create new OR update existing candidate from a parsed CV.
@@ -124,10 +211,9 @@ class CandidateCreationWorker:
         overall_confidence = self._calculate_confidence(confidence_scores)
         if overall_confidence < CONFIDENCE_THRESHOLD:
             logger.warning(
-                f"Skipping candidate creation - low confidence",
-                cv_id=cv_id,
-                confidence=overall_confidence,
-                threshold=CONFIDENCE_THRESHOLD,
+                f"Skipping candidate creation - low confidence "
+                f"(cv_id={cv_id}, confidence={overall_confidence:.2f}, "
+                f"threshold={CONFIDENCE_THRESHOLD})"
             )
             return "skipped_low_confidence"
 

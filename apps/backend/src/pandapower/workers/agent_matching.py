@@ -139,32 +139,38 @@ class AgentMatchingWorker:
                         candidate, job, agent_code, agent_config
                     )
 
-                    # Threshold for creating a match: 70 out of 100
-                    if match_info["score"] >= 70:
-                        # Create match in DB
-                        await self._create_match(
-                            candidate_id=candidate["id"],
-                            job_id=job_id,
-                            score=match_info["score"],
-                            reasoning=match_info["reasoning"],
-                            strengths=match_info["strengths"],
-                            gaps=match_info["gaps"],
-                            agent_code=agent_code,
-                            tokens_used=match_info["tokens_used"],
-                            duration_ms=match_info["duration_ms"],
-                        )
-                        result["matches_found"] += 1
-                        result["tokens_used"] += match_info["tokens_used"]
+                    # ALWAYS persist the evaluation — both viable matches (≥70)
+                    # and evaluated-but-rejected (<70). The user needs full
+                    # visibility into what each agent looked at and decided, to
+                    # learn how the system behaves. _create_match sets
+                    # current_state / is_passing based on the score, so a low
+                    # score lands as "evaluated_but_rejected" instead of being
+                    # silently dropped. (Mirrors find_matches_for_candidate.)
+                    await self._create_match(
+                        candidate_id=candidate["id"],
+                        job_id=job_id,
+                        score=match_info["score"],
+                        reasoning=match_info["reasoning"],
+                        strengths=match_info["strengths"],
+                        gaps=match_info["gaps"],
+                        agent_code=agent_code,
+                        tokens_used=match_info["tokens_used"],
+                        duration_ms=match_info["duration_ms"],
+                    )
+                    result["tokens_used"] += match_info["tokens_used"]
 
+                    if match_info["score"] >= 70:
+                        result["matches_found"] += 1
                         logger.info(
                             f"[{idx+1}/{len(candidates)}] Match found: {candidate['name']} -> "
                             f"{job.get('job_title', 'Unknown')} (score: {match_info['score']})"
                         )
                     else:
-                        result["tokens_used"] += match_info["tokens_used"]
+                        result["evaluated_but_rejected"] = result.get("evaluated_but_rejected", 0) + 1
                         logger.debug(
-                            f"[{idx+1}/{len(candidates)}] Score {match_info['score']} < threshold: "
-                            f"{candidate['name']} vs {job.get('job_title', 'Unknown')}"
+                            f"[{idx+1}/{len(candidates)}] Evaluated, below threshold "
+                            f"({match_info['score']}): {candidate['name']} vs "
+                            f"{job.get('job_title', 'Unknown')} — saved as evaluated_but_rejected"
                         )
 
                 except Exception as e:

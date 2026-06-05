@@ -44,6 +44,7 @@ interface Props {
 
 const STATE_LABELS: Record<string, { label: string; cls: string }> = {
   found: { label: "נמצאה התאמה", cls: "bg-yellow-900 text-yellow-200" },
+  evaluated_but_rejected: { label: "נבדק — לא התאים (<70)", cls: "bg-gray-700 text-gray-300" },
   carmit_approved: { label: "אושרה על ידי כרמית", cls: "bg-green-900 text-green-200" },
   carmit_rejected: { label: "נדחתה על ידי כרמית", cls: "bg-red-900 text-red-200" },
   sent_to_tal: { label: "ממתינה לטל", cls: "bg-blue-900 text-blue-200" },

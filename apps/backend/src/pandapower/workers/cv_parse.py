@@ -114,11 +114,9 @@ class CVParseWorker:
                     )
 
             logger.info(
-                f"CV parsing batch completed",
-                total=result["total_processed"],
-                success=result["success"],
-                failed=result["failed"],
-                tokens_used=result["tokens_used"],
+                f"CV parsing batch completed: total={result['total_processed']}, "
+                f"success={result['success']}, failed={result['failed']}, "
+                f"tokens_used={result['tokens_used']}"
             )
             return result
 
@@ -191,10 +189,8 @@ class CVParseWorker:
                 return result
 
             logger.info(
-                f"Text extracted",
-                cv_id=cv_id,
-                method=extraction_method,
-                length=len(raw_text),
+                f"Text extracted (cv_id={cv_id}, method={extraction_method}, "
+                f"length={len(raw_text)})"
             )
 
             # Step 3: Detect language
@@ -299,12 +295,9 @@ class CVParseWorker:
                 )
 
             logger.info(
-                f"CV parsed successfully",
-                cv_id=cv_id,
-                duration_ms=duration_ms,
-                tokens_used=tokens_used,
-                language=detected_language,
-                candidate_email=candidate_real_email,
+                f"CV parsed successfully (cv_id={cv_id}, duration_ms={duration_ms}, "
+                f"tokens_used={tokens_used}, language={detected_language}, "
+                f"candidate_email={candidate_real_email})"
             )
 
             result["success"] = True

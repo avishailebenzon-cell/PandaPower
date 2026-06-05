@@ -9,6 +9,7 @@ import { fetchAllCandidateMatches, type CandidateMatch } from "@/api/recruiter";
 
 const STATE_COLORS: Record<string, string> = {
   found: "bg-yellow-900",
+  evaluated_but_rejected: "bg-gray-700",
   carmit_approved: "bg-green-900",
   carmit_rejected: "bg-red-900",
   sent_to_tal: "bg-blue-900",
@@ -18,9 +19,10 @@ const STATE_COLORS: Record<string, string> = {
 };
 
 const STATE_LABELS: Record<string, string> = {
-  found: "🔍 בחקירה",
-  carmit_approved: "✅ אושר",
-  carmit_rejected: "❌ דחה",
+  found: "🔍 התאמה (לבדיקת כרמית)",
+  evaluated_but_rejected: "⚪ נבדק — לא התאים (<70)",
+  carmit_approved: "✅ אושר ע״י כרמית",
+  carmit_rejected: "❌ נדחה ע״י כרמית",
   sent_to_tal: "💬 טל",
   tal_conversation: "🗣️ בשיחה",
   tal_approved: "✓ אושר",
@@ -183,27 +185,33 @@ export function CandidateDecisionMatrix({ showTitle = true, agentCode }: Props) 
 
       {/* Summary */}
       {matches.length > 0 && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm bg-gray-800 rounded-lg p-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm bg-gray-800 rounded-lg p-4">
           <div>
-            <span className="text-gray-400">סה״כ התאמות:</span>
+            <span className="text-gray-400">סה״כ נבדקו:</span>
             <p className="text-xl font-bold text-white">{data?.total || 0}</p>
           </div>
           <div>
-            <span className="text-gray-400">אושרו:</span>
+            <span className="text-gray-400">התאמות (≥70):</span>
+            <p className="text-xl font-bold text-green-400">
+              {matches.filter((m) => m.matchScore >= 0.7).length}
+            </p>
+          </div>
+          <div>
+            <span className="text-gray-400">נבדקו ולא התאימו:</span>
+            <p className="text-xl font-bold text-gray-400">
+              {matches.filter((m) => m.currentState === "evaluated_but_rejected").length}
+            </p>
+          </div>
+          <div>
+            <span className="text-gray-400">אושרו ע״י כרמית:</span>
             <p className="text-xl font-bold text-green-400">
               {matches.filter((m) => m.currentState === "carmit_approved").length}
             </p>
           </div>
           <div>
-            <span className="text-gray-400">נדחו:</span>
+            <span className="text-gray-400">נדחו ע״י כרמית:</span>
             <p className="text-xl font-bold text-red-400">
               {matches.filter((m) => m.currentState === "carmit_rejected").length}
-            </p>
-          </div>
-          <div>
-            <span className="text-gray-400">בחקירה:</span>
-            <p className="text-xl font-bold text-yellow-400">
-              {matches.filter((m) => m.currentState === "found").length}
             </p>
           </div>
         </div>
