@@ -245,7 +245,7 @@ class AgentMatchingWorker:
 
             # Fetch open jobs not yet matched to this agent's candidates
             jobs_response = (
-                await self.supabase.table("jobs").select("*").eq("is_active", True).limit(100).execute()
+                await self.supabase.table("jobs").select("*").eq("status", "open").limit(100).execute()
             )
             jobs = jobs_response.data or []
             result["total_jobs_evaluated"] = len(jobs)
@@ -369,41 +369,46 @@ class AgentMatchingWorker:
         This ensures agents have access to ALL 30+ data points from CV parsing.
         """
 
+        # The rich CV fields (skills, experience, education, …) live inside
+        # candidate["extracted_from_cv"]["extracted_fields"], NOT at the top
+        # level of the candidate row. Merge them so every .get() below resolves
+        # to real data. (Top-level columns like name/location still win where
+        # they exist because we layer the row LAST.)
+        ef = (candidate.get("extracted_from_cv") or {}).get("extracted_fields", {}) or {}
+        src = {**ef, **candidate}
+
         # Extract COMPREHENSIVE candidate info from enriched CV data
-        cand_name = candidate.get("name", "Unknown")
-        cand_location = candidate.get("location")
-        cand_clearance = candidate.get("clearance_level")
-        cand_years = candidate.get("years_of_experience", "Unknown")
-        cand_summary = candidate.get("summary", "")
+        cand_name = src.get("name", "Unknown")
+        cand_location = src.get("location")
+        cand_clearance = src.get("clearance_level")
+        cand_years = src.get("years_of_experience", "Unknown")
+        cand_summary = src.get("summary", "")
 
-        # NEW: Extract technical and soft skills separately
-        technical_skills = candidate.get("technical_skills", []) or []
-        soft_skills = candidate.get("soft_skills", []) or []
+        # Technical and soft skills (fall back to top-level key_skills).
+        technical_skills = ef.get("technical_skills") or candidate.get("key_skills") or []
+        soft_skills = ef.get("soft_skills", []) or []
 
-        # NEW: Extract detailed experience array
-        experience_list = candidate.get("experience", []) or []
+        # Detailed experience array (top-level "experiences" or ef "experience").
+        experience_list = candidate.get("experiences") or ef.get("experience") or []
 
-        # NEW: Extract education details
-        education_list = candidate.get("education", []) or []
+        # Education details (ef "education" or top-level top_education as a 1-item list).
+        education_list = ef.get("education") or (
+            [candidate["top_education"]] if candidate.get("top_education") else []
+        )
 
-        # NEW: Extract certifications
-        certifications_list = candidate.get("certifications", []) or []
+        # Certifications, military service, languages, clearance evidence.
+        certifications_list = ef.get("certifications", []) or []
+        military_service = ef.get("military_service", {}) or {}
+        spoken_languages = ef.get("spoken_languages", []) or []
+        clearance_evidence = ef.get("clearance_keywords_matched", []) or []
 
-        # NEW: Extract military service
-        military_service = candidate.get("military_service", {})
-
-        # NEW: Extract spoken languages with proficiency
-        spoken_languages = candidate.get("spoken_languages", []) or []
-
-        # NEW: Extract clearance evidence
-        clearance_evidence = candidate.get("clearance_keywords_matched", []) or []
-
-        # Extract job info
+        # Extract job info — use the REAL jobs column names.
         job_title = job.get("job_title", "")
-        job_desc = job.get("description", "")
-        job_quals = job.get("qualifications", "")  # CRITICAL: qualifications more important than description
-        job_clearance = job.get("required_security_clearance")
-        job_domain = job.get("required_domain", "")
+        job_desc = job.get("job_description", "")
+        # Qualifications matter more than description for matching.
+        job_quals = job.get("job_qualifications", "")
+        job_clearance = job.get("job_security_clearance")
+        job_domain = job.get("classification_level") or agent_config.get("domain", "")
 
         # Format skills for readability
         technical_skills_text = ", ".join(technical_skills[:20]) if technical_skills else "Not listed"
@@ -697,14 +702,20 @@ Return ONLY valid JSON (no extra text):
         """
 
         try:
-            # Fetch candidates AND their most recent CV analysis
-            # Using LEFT JOIN to get candidates with/without recent CVs
+            # Fetch candidates with their full parsed CV analysis. The rich
+            # fields the matcher needs (skills, experience, education, …) live
+            # in extracted_from_cv; the top-level columns cover identity + the
+            # normalized lists. Only real columns are selected here — the old
+            # query referenced country/primary_domain/secondary_domains/
+            # languages/is_active, none of which exist on candidates, so it
+            # errored on EVERY run and no candidate was ever matched.
             response = await self.supabase.table("candidates").select(
-                "id, name, email, phone, location, country, "
-                "primary_domain, secondary_domains, years_of_experience, "
-                "clearance_level, languages, is_active, "
-                "cv_files(id, llm_analysis, source_email_received_at)"
-            ).eq("is_active", True).limit(limit).order("created_at", desc=True).execute()
+                "id, name, email, phone, location, years_of_experience, "
+                "clearance_level, key_skills, experiences, top_education, "
+                "detected_language, extracted_from_cv, created_at"
+            ).is_("deleted_at", "null").limit(limit).order(
+                "created_at", desc=True
+            ).execute()
 
             candidates_with_cv = response.data or []
 
@@ -712,69 +723,51 @@ Return ONLY valid JSON (no extra text):
                 logger.info("No active candidates found")
                 return []
 
-            # Enrich each candidate with their latest CV's extracted fields
+            # Enrich each candidate with their parsed CV's extracted fields.
+            # The full analysis is stored on the candidate row itself
+            # (extracted_from_cv), copied there by candidate_creation — no need
+            # to join cv_files. We flatten the rich fields to the top level AND
+            # keep extracted_from_cv so _build_matching_prompt's merge also works.
             enriched_candidates = []
             for cand in candidates_with_cv:
                 try:
-                    # Get the most recent CV file (if any)
-                    cv_files = cand.get("cv_files", []) or []
-                    latest_cv = None
-                    if cv_files:
-                        # cv_files is an array; get the one with most recent source_email_received_at
-                        latest_cv = max(
-                            [f for f in cv_files if f.get("llm_analysis")],
-                            key=lambda f: f.get("source_email_received_at", ""),
-                            default=None
-                        )
+                    ef = (cand.get("extracted_from_cv") or {}).get("extracted_fields", {}) or {}
 
-                    # Merge extracted fields into candidate for easier access by matching prompt
                     enriched = {
                         "id": cand.get("id"),
                         "name": cand.get("name", "Unknown"),
                         "email": cand.get("email"),
                         "phone": cand.get("phone"),
                         "location": cand.get("location"),
-                        "country": cand.get("country"),
-                        "primary_domain": cand.get("primary_domain"),
-                        "secondary_domains": cand.get("secondary_domains", []),
                         "years_of_experience": cand.get("years_of_experience"),
                         "clearance_level": cand.get("clearance_level"),
-                        "languages": cand.get("languages", []),
-                        # Raw CV metadata (for reference)
-                        "cv_metadata": {
-                            "cv_id": latest_cv.get("id") if latest_cv else None,
-                            "has_cv": latest_cv is not None,
-                        }
+                        # Keep the raw analysis so the prompt builder can merge it.
+                        "extracted_from_cv": cand.get("extracted_from_cv"),
+                        # Flatten extracted fields for the matching prompt.
+                        "extracted_fields": ef,
+                        "technical_skills": ef.get("technical_skills") or cand.get("key_skills") or [],
+                        "soft_skills": ef.get("soft_skills", []),
+                        "experience": cand.get("experiences") or ef.get("experience", []),
+                        "education": ef.get("education") or (
+                            [cand["top_education"]] if cand.get("top_education") else []
+                        ),
+                        "certifications": ef.get("certifications", []),
+                        "military_service": ef.get("military_service"),
+                        "spoken_languages": ef.get("spoken_languages", []),
+                        "summary": ef.get("summary"),
+                        "clearance_keywords_matched": ef.get("clearance_keywords_matched", []),
                     }
-
-                    # CRITICAL: Merge extracted_fields from CV analysis
-                    if latest_cv and latest_cv.get("llm_analysis"):
-                        llm_analysis = latest_cv.get("llm_analysis", {})
-                        extracted_fields = llm_analysis.get("extracted_fields", {})
-
-                        # Flatten extracted fields for matching prompt
-                        enriched["extracted_fields"] = extracted_fields
-                        enriched["technical_skills"] = extracted_fields.get("technical_skills", [])
-                        enriched["soft_skills"] = extracted_fields.get("soft_skills", [])
-                        enriched["experience"] = extracted_fields.get("experience", [])
-                        enriched["education"] = extracted_fields.get("education", [])
-                        enriched["certifications"] = extracted_fields.get("certifications", [])
-                        enriched["military_service"] = extracted_fields.get("military_service")
-                        enriched["spoken_languages"] = extracted_fields.get("spoken_languages", [])
-                        enriched["summary"] = extracted_fields.get("summary")
-                        enriched["clearance_keywords_matched"] = extracted_fields.get("clearance_keywords_matched", [])
-
                     enriched_candidates.append(enriched)
 
                 except Exception as e:
                     logger.warning(f"Error enriching candidate {cand.get('id')}: {e}")
-                    # Still add the basic candidate even if CV enrichment fails
+                    # Still add the basic candidate even if enrichment fails.
                     enriched_candidates.append({
                         "id": cand.get("id"),
                         "name": cand.get("name", "Unknown"),
                         "location": cand.get("location"),
                         "years_of_experience": cand.get("years_of_experience"),
-                        "clearance_level": cand.get("security_clearance_level"),
+                        "clearance_level": cand.get("clearance_level"),
                     })
 
             logger.info(
