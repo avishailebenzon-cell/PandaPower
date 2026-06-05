@@ -246,7 +246,7 @@ class EmailIngestWorker:
             last_processed = None
             backfill_start = None
             try:
-                settings_response = self.supabase.table("system_settings").select(
+                settings_response = await self.supabase.table("system_settings").select(
                     "setting_value"
                 ).eq("setting_key", "azure.last_processed_message_received_at").limit(1).execute()
                 if settings_response.data and settings_response.data[0].get("setting_value"):
@@ -259,7 +259,7 @@ class EmailIngestWorker:
 
             # Get backfill_start_date (when to stop going backward)
             try:
-                backfill_response = self.supabase.table("system_settings").select(
+                backfill_response = await self.supabase.table("system_settings").select(
                     "setting_value"
                 ).eq("setting_key", "azure.backfill_start_date").limit(1).execute()
                 if backfill_response.data and backfill_response.data[0].get("setting_value"):
@@ -360,7 +360,7 @@ class EmailIngestWorker:
 
             # Update last_processed to the oldest date we've seen
             if min_received:
-                self.supabase.table("system_settings").upsert(
+                await self.supabase.table("system_settings").upsert(
                     {
                         "setting_key": "azure.last_processed_message_received_at",
                         "setting_value": f'"{min_received.isoformat()}"',
@@ -419,7 +419,7 @@ class EmailIngestWorker:
             # Upsert email_intake_log entry
             email_exists = False
             try:
-                self.supabase.table("email_intake_log").insert(
+                await self.supabase.table("email_intake_log").insert(
                     {
                         "outlook_message_id": message_id,
                         "email_subject": subject,
@@ -434,7 +434,7 @@ class EmailIngestWorker:
                 if "duplicate key" in str(e).lower():
                     logger.debug(f"Email already exists, updating to processing status: {message_id}")
                     email_exists = True
-                    self.supabase.table("email_intake_log").update(
+                    await self.supabase.table("email_intake_log").update(
                         {
                             "status": "processing",
                             "processing_started_at": datetime.utcnow().isoformat(),
@@ -458,7 +458,7 @@ class EmailIngestWorker:
             # Update current scanning status for UI
             if cv_attachments:
                 current_file = cv_attachments[0].get("name", "Unknown")
-                self.supabase.table("system_settings").upsert(
+                await self.supabase.table("system_settings").upsert(
                     {
                         "setting_key": "email.current_file_scanning",
                         "setting_value": f'"{current_file}"',
@@ -479,7 +479,7 @@ class EmailIngestWorker:
                     logger.info(f"  - {a.get('name', 'unknown')} (type: {a.get('contentType', 'unknown')})")
 
             if not cv_attachments:
-                self.supabase.table("email_intake_log").update(
+                await self.supabase.table("email_intake_log").update(
                     {
                         "status": "skipped_no_cv",
                         "cv_files_extracted": 0,
@@ -507,7 +507,7 @@ class EmailIngestWorker:
                     if seen.data:
                         logger.info(f"Skipping older duplicate of {candidate_real_email} ({subject[:40]})")
                         result["skipped_duplicate"] = True
-                        self.supabase.table("email_intake_log").update(
+                        await self.supabase.table("email_intake_log").update(
                             {
                                 "status": "skipped_duplicate_person",
                                 "cv_files_extracted": 0,
@@ -553,7 +553,7 @@ class EmailIngestWorker:
             else:
                 new_status = "partial"
 
-            self.supabase.table("email_intake_log").update(
+            await self.supabase.table("email_intake_log").update(
                 {
                     "status": new_status,
                     "cv_files_extracted": result["cv_count"],
@@ -565,7 +565,7 @@ class EmailIngestWorker:
             logger.error(f"Failed to process message {msg_data.get('id')}: {e}", exc_info=True)
             result["error"] = str(e)
             try:
-                self.supabase.table("email_intake_log").update(
+                await self.supabase.table("email_intake_log").update(
                     {
                         "status": "failed",
                         "error_message": str(e)[:500],
@@ -701,14 +701,14 @@ class EmailIngestWorker:
             latest_cv = None
             if candidate_email:
                 try:
-                    existing_cvs = self.supabase.table("cv_files").select(
+                    existing_cvs = await self.supabase.table("cv_files").select(
                         "id, version_number"
                     ).eq("candidate_email", candidate_email).eq("is_latest", True).execute()
 
                     if existing_cvs.data:
                         latest_cv = existing_cvs.data[0]
                         # Mark old CV as superseded
-                        self.supabase.table("cv_files").update(
+                        await self.supabase.table("cv_files").update(
                             {"is_latest": False}
                         ).eq("id", latest_cv["id"]).execute()
                         logger.info(f"Marked previous CV as old for {candidate_email}")
@@ -719,7 +719,7 @@ class EmailIngestWorker:
             new_version_number = (latest_cv.get("version_number", 0) + 1) if latest_cv else 1
 
             logger.debug(f"Inserting cv_files record with version {new_version_number}")
-            new_cv = self.supabase.table("cv_files").insert(
+            new_cv = await self.supabase.table("cv_files").insert(
                 {
                     "file_hash": file_hash,
                     "original_filename": filename,
@@ -743,7 +743,7 @@ class EmailIngestWorker:
             if latest_cv and new_cv.data:
                 try:
                     new_cv_id = new_cv.data[0]["id"]
-                    self.supabase.table("cv_files").update(
+                    await self.supabase.table("cv_files").update(
                         {"superseded_by": new_cv_id}
                     ).eq("id", latest_cv["id"]).execute()
                     logger.info(f"Linked old CV to new version for {candidate_email}")

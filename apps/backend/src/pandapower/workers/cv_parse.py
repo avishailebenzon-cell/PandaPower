@@ -53,6 +53,22 @@ class CVParseWorker:
         }
 
         try:
+            # ANTHROPIC CIRCUIT BREAKER: if the Claude API is over its usage
+            # limit, don't burn cycles parsing (every call 400s) and — crucially
+            # — don't mark CVs 'failed' for a *temporary* quota issue. Skip the
+            # batch, leaving them 'pending' so they resume automatically once the
+            # limit is lifted. Self-heals: the block is re-armed for 60 min each
+            # time an over-limit error is seen, so raising the limit resumes
+            # parsing within the hour.
+            blocked_until = await self._anthropic_blocked_until()
+            if blocked_until:
+                logger.warning(
+                    f"[anthropic] over usage limit (until {blocked_until}) — "
+                    f"skipping CV parse batch to avoid mass-failing pending CVs."
+                )
+                result["skipped"] = "anthropic_over_limit"
+                return result
+
             # Query pending CVs with limit
             logger.info(f"Querying pending CVs with batch size {self.batch_size}")
             query = await (
@@ -73,7 +89,7 @@ class CVParseWorker:
             # Mark all as parsing to prevent duplicate processing
             cv_ids = [cv["id"] for cv in pending_cvs]
             try:
-                self.supabase.table("cv_files").update(
+                await self.supabase.table("cv_files").update(
                     {
                         "parse_status": "parsing",
                         "processing_started_at": datetime.utcnow().isoformat(),
@@ -113,6 +129,22 @@ class CVParseWorker:
                         }
                     )
 
+            # If any CV failed because Anthropic is over its usage limit, arm the
+            # circuit breaker so the next cycles skip instead of mass-failing,
+            # and revert THIS batch (pre-marked 'parsing') back to 'pending' so
+            # nothing gets stuck once the limit lifts.
+            if any("usage limit" in str(e.get("error", "")).lower()
+                   or "regain access" in str(e.get("error", "")).lower()
+                   for e in result["errors"]):
+                await self._arm_anthropic_block()
+                try:
+                    await self.supabase.table("cv_files").update(
+                        {"parse_status": "pending", "processing_started_at": None}
+                    ).in_("id", cv_ids).eq("parse_status", "parsing").execute()
+                    logger.info(f"[anthropic] reverted {len(cv_ids)} CVs to pending (over-limit)")
+                except Exception as rev_e:
+                    logger.debug(f"[anthropic] revert-to-pending failed: {rev_e}")
+
             logger.info(
                 f"CV parsing batch completed: total={result['total_processed']}, "
                 f"success={result['success']}, failed={result['failed']}, "
@@ -124,6 +156,50 @@ class CVParseWorker:
             logger.error(f"CV parsing batch failed: {e}")
             result["errors"].append({"batch": str(e)})
             return result
+
+    _ANTHROPIC_BLOCK_KEY = "anthropic.blocked_until"
+    _ANTHROPIC_BLOCK_MINUTES = 60
+
+    async def _anthropic_blocked_until(self) -> Optional[str]:
+        """Return the block expiry ISO string if Anthropic is currently blocked,
+        else None. Reads system_settings; fails open (None) on any error."""
+        try:
+            r = await self.supabase.table("system_settings").select(
+                "setting_value"
+            ).eq("setting_key", self._ANTHROPIC_BLOCK_KEY).limit(1).execute()
+            if not r.data:
+                return None
+            val = (r.data[0].get("setting_value") or "").strip().strip('"')
+            if not val:
+                return None
+            until = datetime.fromisoformat(val.replace("Z", "+00:00"))
+            now = datetime.now(until.tzinfo)
+            return val if now < until else None
+        except Exception as e:
+            logger.debug(f"[anthropic] block check failed (assuming not blocked): {e}")
+            return None
+
+    async def _arm_anthropic_block(self) -> None:
+        """Block Claude-dependent parsing for the next N minutes. Re-armed every
+        time an over-limit error is seen, so it self-clears once the limit lifts."""
+        try:
+            from datetime import timedelta
+            until = (datetime.now(tz=__import__("datetime").timezone.utc)
+                     + timedelta(minutes=self._ANTHROPIC_BLOCK_MINUTES)).isoformat()
+            existing = await self.supabase.table("system_settings").select("id").eq(
+                "setting_key", self._ANTHROPIC_BLOCK_KEY
+            ).limit(1).execute()
+            if existing.data:
+                await self.supabase.table("system_settings").update(
+                    {"setting_value": until}
+                ).eq("setting_key", self._ANTHROPIC_BLOCK_KEY).execute()
+            else:
+                await self.supabase.table("system_settings").insert(
+                    {"setting_key": self._ANTHROPIC_BLOCK_KEY, "setting_value": until}
+                ).execute()
+            logger.warning(f"[anthropic] circuit breaker armed until {until}")
+        except Exception as e:
+            logger.debug(f"[anthropic] failed to arm block (non-fatal): {e}")
 
     async def _parse_single_cv(self, cv_file: dict[str, Any]) -> dict[str, Any]:
         """
@@ -308,6 +384,15 @@ class CVParseWorker:
             error_msg = f"Unexpected error: {str(e)}"
             logger.error(f"Failed to parse CV {cv_id}: {error_msg}")
 
+            # Anthropic over-limit is TEMPORARY — do NOT mark the CV 'failed'
+            # (that would lose it after the limit lifts). Leave it 'pending' and
+            # let the circuit breaker skip the next batches.
+            low = error_msg.lower()
+            if "usage limit" in low or "regain access" in low:
+                await self._arm_anthropic_block()
+                result["error"] = error_msg
+                return result
+
             try:
                 await self._update_cv_record(
                     cv_id,
@@ -349,7 +434,7 @@ class CVParseWorker:
         """
         try:
             # Find sibling CVs by email
-            siblings = self.supabase.table("cv_files").select(
+            siblings = await self.supabase.table("cv_files").select(
                 "id, version_number"
             ).eq("candidate_email", candidate_email).neq("id", new_cv_id).execute()
 
@@ -365,7 +450,7 @@ class CVParseWorker:
 
             # Mark all siblings as not-latest and superseded by us
             if sibling_rows:
-                self.supabase.table("cv_files").update({
+                await self.supabase.table("cv_files").update({
                     "is_latest": False,
                     "superseded_by": new_cv_id,
                 }).eq("candidate_email", candidate_email).neq("id", new_cv_id).execute()
@@ -375,7 +460,7 @@ class CVParseWorker:
                 )
 
             # Mark THIS CV as the latest, with the right version number
-            self.supabase.table("cv_files").update({
+            await self.supabase.table("cv_files").update({
                 "is_latest": True,
                 "superseded_by": None,
                 "version_number": new_version,
@@ -441,7 +526,7 @@ class CVParseWorker:
             Dict mapping level numbers (int) to lists of keyword strings.
         """
         try:
-            response = self.supabase.table("security_levels").select(
+            response = await self.supabase.table("security_levels").select(
                 "level, keywords"
             ).execute()
             security_keywords = {}
@@ -486,7 +571,7 @@ class CVParseWorker:
                 # Supabase expects JSONB as JSON string or dict, usually dict works
                 pass
 
-            self.supabase.table("cv_files").update(updates).eq("id", cv_id).execute()
+            await self.supabase.table("cv_files").update(updates).eq("id", cv_id).execute()
             logger.debug(f"Updated CV record {cv_id}")
 
         except Exception as e:
