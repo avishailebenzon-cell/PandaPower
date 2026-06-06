@@ -22,11 +22,17 @@ from pandapower.integrations.alert_service import (
     ACK_KEYS_SETTING_KEY,
     ADMIN_EMAIL_SETTING_KEY,
     ALERTS_ENABLED_SETTING_KEY,
+    ALERT_CATEGORIES,
+    ALERT_CHANNELS,
     COOLDOWN_SECONDS,
     DEFAULT_ADMIN_EMAIL,
+    DEFAULT_GLOBAL_MIN_INTERVAL_MINUTES,
+    GLOBAL_MIN_INTERVAL_SETTING_KEY,
     MAX_ALERTS_PER_HOUR,
     SNOOZE_UNTIL_SETTING_KEY,
+    _bool_setting,
     _last_sent,
+    _read_setting,
     _recent_sends,
     send_test_alert,
 )
@@ -62,6 +68,32 @@ class UpdateAlertsConfig(BaseModel):
     @classmethod
     def _check_email(cls, v):
         return _validate_email(v)
+
+
+# Human-readable labels for the per-category toggles (shown in the UI).
+CATEGORY_LABELS = {
+    "pipeline": "תקלות פייפליין (שלבי עיבוד)",
+    "convertapi": "ConvertAPI (מכסת המרות)",
+    "email_ingest": "קליטת מיילים",
+    "integrations": "אינטגרציות (Anthropic / Azure / Pipedrive / Supabase)",
+}
+CHANNEL_LABELS = {"email": "מייל", "telegram": "בוט טלגרם"}
+
+
+class AlertPreferences(BaseModel):
+    enabled: bool                       # master switch
+    min_interval_minutes: int           # global throttle
+    channels: dict[str, bool]           # {email, telegram}
+    categories: dict[str, bool]         # {pipeline, convertapi, ...}
+    channel_labels: dict[str, str]
+    category_labels: dict[str, str]
+
+
+class UpdateAlertPreferences(BaseModel):
+    enabled: Optional[bool] = None
+    min_interval_minutes: Optional[int] = None
+    channels: Optional[dict[str, bool]] = None
+    categories: Optional[dict[str, bool]] = None
 
 
 class TestAlertResponse(BaseModel):
@@ -179,6 +211,53 @@ async def update_config(
 
     except Exception as e:
         logger.error(f"Failed to update alerts config: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/preferences", response_model=AlertPreferences)
+async def get_preferences(sb=Depends(get_supabase_client)) -> AlertPreferences:
+    """Granular alert toggles: master switch, throttle interval, per-channel
+    (email/telegram) and per-category mutes. All default ON."""
+    enabled = await _bool_setting(sb, ALERTS_ENABLED_SETTING_KEY, default=True)
+    raw_interval = await _read_setting(sb, GLOBAL_MIN_INTERVAL_SETTING_KEY)
+    try:
+        interval = int(float(raw_interval)) if raw_interval else DEFAULT_GLOBAL_MIN_INTERVAL_MINUTES
+    except (TypeError, ValueError):
+        interval = DEFAULT_GLOBAL_MIN_INTERVAL_MINUTES
+    channels = {c: await _bool_setting(sb, f"alerts.channel.{c}", True) for c in ALERT_CHANNELS}
+    categories = {c: await _bool_setting(sb, f"alerts.category.{c}", True) for c in ALERT_CATEGORIES}
+    return AlertPreferences(
+        enabled=enabled,
+        min_interval_minutes=interval,
+        channels=channels,
+        categories=categories,
+        channel_labels=CHANNEL_LABELS,
+        category_labels=CATEGORY_LABELS,
+    )
+
+
+@router.post("/preferences", response_model=AlertPreferences)
+async def update_preferences(
+    update: UpdateAlertPreferences,
+    sb=Depends(get_supabase_client),
+) -> AlertPreferences:
+    """Partial update of the granular alert toggles."""
+    try:
+        if update.enabled is not None:
+            await _upsert_setting(sb, ALERTS_ENABLED_SETTING_KEY,
+                                  "true" if update.enabled else "false")
+        if update.min_interval_minutes is not None:
+            iv = max(0, int(update.min_interval_minutes))
+            await _upsert_setting(sb, GLOBAL_MIN_INTERVAL_SETTING_KEY, str(iv))
+        for ch, on in (update.channels or {}).items():
+            if ch in ALERT_CHANNELS:
+                await _upsert_setting(sb, f"alerts.channel.{ch}", "true" if on else "false")
+        for cat, on in (update.categories or {}).items():
+            if cat in ALERT_CATEGORIES:
+                await _upsert_setting(sb, f"alerts.category.{cat}", "true" if on else "false")
+        return await get_preferences(sb)
+    except Exception as e:
+        logger.error(f"Failed to update alert preferences: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

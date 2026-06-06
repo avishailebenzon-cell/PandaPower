@@ -83,6 +83,22 @@ _state_lock = asyncio.Lock()
 # ── Public API ───────────────────────────────────────────────────────────────
 
 
+ALERT_CATEGORIES = ("pipeline", "convertapi", "email_ingest", "integrations")
+ALERT_CHANNELS = ("email", "telegram")
+
+
+def category_for_key(key: str) -> str:
+    """Map an alert key to a user-toggleable category (keys are dynamic)."""
+    k = (key or "").lower()
+    if k.startswith("pipeline"):
+        return "pipeline"
+    if k.startswith("convertapi"):
+        return "convertapi"
+    if "ingest" in k:
+        return "email_ingest"
+    return "integrations"
+
+
 async def alert_admin(
     key: str,
     subject: str,
@@ -136,6 +152,12 @@ async def alert_admin(
             logger.info(f"[alerts] global throttle active, dropping '{key}'")
             return False
 
+        # Per-category mute (user toggle in the Alerts settings screen).
+        category = category_for_key(key)
+        if not await _category_enabled(sb, category):
+            logger.info(f"[alerts] category '{category}' disabled, dropping '{key}'")
+            return False
+
         # Reserve a slot now that we know we're really sending
         async with _state_lock:
             _last_sent[key] = now
@@ -157,31 +179,28 @@ async def alert_admin(
             logger.info(f"[alerts] alerts disabled, would have sent '{key}'")
             return False
 
-        # Push to Telegram too (best-effort, independent of email config) so the
-        # admin gets process-problem alerts directly in the Carmit bot chat.
-        # Throttle/cooldown/snooze/ack above already gate this, so no spam.
+        # Push to Telegram (best-effort) — only if the telegram channel is on.
         telegram_sent = False
-        try:
-            from pandapower.integrations.telegram_client import notify_admin_telegram
-            _emoji = {"critical": "🔴", "error": "⚠️", "warning": "🟡"}.get(severity, "ℹ️")
-            telegram_sent = await notify_admin_telegram(
-                f"{_emoji} <b>בעיה בתהליך</b>\n{subject}\n\n{details}",
+        if await _channel_enabled(sb, "telegram"):
+            try:
+                from pandapower.integrations.telegram_client import notify_admin_telegram
+                _emoji = {"critical": "🔴", "error": "⚠️", "warning": "🟡"}.get(severity, "ℹ️")
+                telegram_sent = await notify_admin_telegram(
+                    f"{_emoji} <b>בעיה בתהליך</b>\n{subject}\n\n{details}",
+                    sb=sb,
+                )
+            except Exception as e:
+                logger.debug(f"[alerts] telegram push failed (non-fatal): {e}")
+
+        # Send via Resend — only if the email channel is on and an address exists.
+        sent = False
+        if admin_email and await _channel_enabled(sb, "email"):
+            sent = await _send_via_resend(
                 sb=sb,
+                to=admin_email,
+                subject=f"[PandaPower {severity.upper()}] {subject}",
+                body_html=body,
             )
-        except Exception as e:
-            logger.debug(f"[alerts] telegram push failed (non-fatal): {e}")
-
-        if not admin_email:
-            logger.warning(f"[alerts] no admin email configured for '{key}' (telegram_sent={telegram_sent})")
-            return telegram_sent
-
-        # Send via Resend
-        sent = await _send_via_resend(
-            sb=sb,
-            to=admin_email,
-            subject=f"[PandaPower {severity.upper()}] {subject}",
-            body_html=body,
-        )
 
         if sent or telegram_sent:
             # Record the global send time so the DB-backed throttle holds the
@@ -384,6 +403,24 @@ async def _alerts_enabled(sb) -> bool:
     except Exception as e:
         logger.debug(f"[alerts] could not read alerts_enabled from DB: {e}")
     return True
+
+
+async def _bool_setting(sb, key: str, default: bool = True) -> bool:
+    """Read a boolean system_settings flag. Default ON if missing/unparseable."""
+    val = await _read_setting(sb, key)
+    if val is None:
+        return default
+    return str(val).strip().lower() not in ("false", "0", "off", "no", "null")
+
+
+async def _channel_enabled(sb, channel: str) -> bool:
+    """Is this delivery channel (email / telegram) enabled? Default ON."""
+    return await _bool_setting(sb, f"alerts.channel.{channel}", default=True)
+
+
+async def _category_enabled(sb, category: str) -> bool:
+    """Is this alert category enabled? Default ON."""
+    return await _bool_setting(sb, f"alerts.category.{category}", default=True)
 
 
 async def _send_via_resend(
