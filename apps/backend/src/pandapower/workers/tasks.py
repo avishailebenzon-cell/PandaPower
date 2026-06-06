@@ -420,6 +420,77 @@ async def _match_candidate_jobs_async(candidate_id: str, agent_code: str) -> dic
         return {"status": "failed", "error": str(e)}
 
 
+# Routed jobs scored per scheduler run (each → hybrid: Claude on top-N only).
+MATCH_JOBS_PER_RUN = 3
+
+
+async def _run_matching_async() -> dict[str, Any]:
+    """Scheduler stage: automatically run hybrid agent-matching so new
+    candidates actually get matched against jobs (otherwise matches never grow).
+
+    Rotates through routed open jobs (cursor in system_settings), a few per run,
+    and runs find_matches_for_job — which pre-scores locally and spends Claude
+    only on the top-N. Respects the Anthropic circuit breaker.
+    """
+    try:
+        if not settings.ANTHROPIC_API_KEY:
+            return {"status": "skipped", "reason": "no anthropic key"}
+        supabase_client = await get_supabase_client()
+
+        # Don't burn Claude calls while over the usage limit.
+        blocked = await _get_setting(supabase_client, "anthropic.blocked_until")
+        if blocked:
+            try:
+                from datetime import timezone as _tz
+                until = datetime.fromisoformat(str(blocked).strip().strip('"').replace("Z", "+00:00"))
+                if until.tzinfo is None:
+                    until = until.replace(tzinfo=_tz.utc)
+                if datetime.now(until.tzinfo) < until:
+                    return {"status": "skipped", "reason": "anthropic over limit"}
+            except Exception:
+                pass
+
+        jobs_resp = await supabase_client.table("jobs").select(
+            "id, assigned_agent_code"
+        ).eq("status", "open").not_.is_("assigned_agent_code", "null").order("id").execute()
+        jobs = jobs_resp.data or []
+        if not jobs:
+            return {"status": "success", "jobs_processed": 0, "reason": "no routed jobs"}
+
+        # Rotate through all jobs across runs via a persisted cursor.
+        try:
+            cursor = int(str(await _get_setting(supabase_client, "matching.job_cursor") or 0).strip().strip('"'))
+        except Exception:
+            cursor = 0
+        if cursor >= len(jobs):
+            cursor = 0
+        batch = jobs[cursor:cursor + MATCH_JOBS_PER_RUN]
+        next_cursor = cursor + len(batch)
+        if next_cursor >= len(jobs):
+            next_cursor = 0
+        await _set_setting(supabase_client, "matching.job_cursor", str(next_cursor))
+
+        claude_client = AnthropicClient(settings.ANTHROPIC_API_KEY)
+        claude_client.usage_stage = "agent_match"
+        worker = AgentMatchingWorker(supabase_client, claude_client)
+        scored = 0
+        for job in batch:
+            try:
+                r = await worker.find_matches_for_job(job["id"], job["assigned_agent_code"])
+                scored += r.get("claude_scored", 0)
+            except Exception as e:
+                logger.error(f"Matching failed for job {job['id']}: {e}")
+        try:
+            await claude_client.close()
+        except Exception:
+            pass
+        logger.info(f"Matching stage: {len(batch)} jobs, {scored} Claude-scored (cursor {cursor}→{next_cursor})")
+        return {"status": "completed", "jobs_processed": len(batch), "claude_scored": scored}
+    except Exception as e:
+        logger.error(f"Matching stage failed: {e}", exc_info=True)
+        return {"status": "failed", "error": str(e)}
+
+
 @app.task(bind=True)
 def match_candidate_jobs_task(self, candidate_id: str, agent_code: str) -> dict[str, Any]:
     """Celery task to match jobs to a candidate using agent."""

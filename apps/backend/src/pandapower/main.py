@@ -211,6 +211,7 @@ async def _pipeline_scheduler_loop():
         _telegram_daily_summary_async,
         _reingest_missed_scheduled_async,
         _health_check_async,
+        _run_matching_async,
     )
 
     # Each stage: (async factory, interval seconds, initial stagger offset).
@@ -224,6 +225,10 @@ async def _pipeline_scheduler_loop():
         "candidates":            (_create_candidates_async,        240.0,    20.0),
         "skills":                (_normalize_skills_async,         600.0,    30.0),
         "score":                 (_score_candidates_async,         3600.0,   40.0),
+        # Agent matching (candidate × job, hybrid: Claude on top-N). Runs the
+        # actual matching so matches grow as candidates/jobs arrive. Every 5 min,
+        # a rotating batch of routed jobs; cost-bounded by MATCH_JOBS_PER_RUN.
+        "matching":              (_run_matching_async,             300.0,    45.0),
         "carmit_route_jobs":     (_carmit_route_jobs_async,        600.0,    50.0),
         "carmit_review_matches": (_carmit_review_matches_async,    900.0,    65.0),
         "carmit_handoff_to_tal": (_carmit_handoff_to_tal_async,    600.0,    80.0),

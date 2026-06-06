@@ -816,9 +816,11 @@ Return ONLY valid JSON (no extra text):
                     "output_payload": {
                         "total_evaluated": total_evaluated,
                         "matches_found": matches_found,
+                        # production agent_logs lacks a tokens_used column — keep
+                        # it in the payload instead of a top-level field.
+                        "tokens_used": tokens_used,
                     },
                     "status": "success",
-                    "tokens_used": tokens_used,
                 }
             ).execute()
 
