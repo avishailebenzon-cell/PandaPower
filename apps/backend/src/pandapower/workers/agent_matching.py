@@ -197,8 +197,9 @@ class AgentMatchingWorker:
                 ranked.append((ls, lr, c))
             ranked.sort(key=lambda x: x[0], reverse=True)
 
-            top = ranked[:MATCH_CLAUDE_TOP_N]
-            rest = ranked[MATCH_CLAUDE_TOP_N:]
+            top_n = await self._get_top_n()
+            top = ranked[:top_n]
+            rest = ranked[top_n:]
             logger.info(
                 f"Hybrid match: {len(ranked)} fresh candidates → Claude on top "
                 f"{len(top)}, local-only on {len(rest)} (job {job_id})"
@@ -332,8 +333,9 @@ class AgentMatchingWorker:
                 ranked.append((ls, lr, job))
             ranked.sort(key=lambda x: x[0], reverse=True)
 
-            top = ranked[:MATCH_CLAUDE_TOP_N]
-            rest = ranked[MATCH_CLAUDE_TOP_N:]
+            top_n = await self._get_top_n()
+            top = ranked[:top_n]
+            rest = ranked[top_n:]
             logger.info(
                 f"Hybrid match: {len(ranked)} fresh jobs → Claude on top {len(top)}, "
                 f"local-only on {len(rest)} (candidate {candidate_id})"
@@ -380,6 +382,22 @@ class AgentMatchingWorker:
             return result
 
     # ── Hybrid cost control: local pre-scoring ────────────────────────────
+
+    async def _get_top_n(self) -> int:
+        """How many candidates/jobs get the (paid) Claude score per run.
+        Configurable via system_settings 'matching.claude_top_n' (UI). Falls
+        back to MATCH_CLAUDE_TOP_N."""
+        try:
+            r = await self.supabase.table("system_settings").select(
+                "setting_value"
+            ).eq("setting_key", "matching.claude_top_n").limit(1).execute()
+            if r.data and r.data[0].get("setting_value") is not None:
+                v = str(r.data[0]["setting_value"]).strip().strip('"')
+                n = int(float(v))
+                return max(1, min(100, n))
+        except Exception as e:
+            logger.debug(f"top_n config read failed, using default: {e}")
+        return MATCH_CLAUDE_TOP_N
 
     def _candidate_tokens(self, candidate: dict) -> set:
         ef = (candidate.get("extracted_from_cv") or {}).get("extracted_fields", {}) or {}

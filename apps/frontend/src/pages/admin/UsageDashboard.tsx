@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
 // CRITICAL: Get API base URL from environment - MUST use VITE_API_URL (not VITE_API_BASE)
 const API_BASE = import.meta.env.VITE_API_URL || "";
@@ -104,6 +104,24 @@ export const UsageDashboard: React.FC = () => {
     refetchInterval: 30000,
   });
 
+  const queryClient = useQueryClient();
+  const { data: matchCfg } = useQuery<{ claude_top_n: number }>({
+    queryKey: ["matching-config"],
+    queryFn: () => fetch(`${API_BASE}/admin/usage/matching-config`).then((r) => r.json()),
+  });
+  const setTopN = useMutation({
+    mutationFn: async (n: number) => {
+      const r = await fetch(`${API_BASE}/admin/usage/matching-config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ claude_top_n: n }),
+      });
+      if (!r.ok) throw new Error("update failed");
+      return r.json();
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["matching-config"] }),
+  });
+
   const maxStageCost = Math.max(1, ...(data?.by_stage || []).map((s) => s.cost_usd));
 
   return (
@@ -178,6 +196,30 @@ export const UsageDashboard: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Matching depth (cost/coverage knob) */}
+      <div className="bg-white rounded-lg border border-slate-200 shadow-sm p-4 mb-6">
+        <div className="text-sm font-semibold text-slate-700 mb-1">🎚️ עומק התאמה (Claude לכל משרה/מועמד)</div>
+        <p className="text-xs text-slate-500 mb-3">
+          סינון מקומי חינמי מדרג את כולם; Claude (בתשלום) רץ רק על ה-Top-N. גבוה יותר = כיסוי רחב יותר, עלות גבוהה יותר.
+        </p>
+        <div className="flex items-center gap-2">
+          {[5, 8, 10, 15, 20].map((n) => (
+            <button
+              key={n}
+              onClick={() => setTopN.mutate(n)}
+              className={`px-4 py-2 rounded-lg text-sm border transition ${
+                matchCfg?.claude_top_n === n
+                  ? "bg-slate-800 text-white border-slate-800"
+                  : "bg-white text-slate-600 border-slate-300 hover:bg-slate-50"
+              }`}
+            >
+              Top {n}
+            </button>
+          ))}
+          <span className="text-xs text-slate-400 mr-2">נוכחי: Top {matchCfg?.claude_top_n ?? "—"}</span>
+        </div>
+      </div>
 
       {isLoading && <div className="text-slate-500">טוען נתוני צריכה...</div>}
       {isError && (

@@ -139,6 +139,42 @@ async def usage_summary(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/matching-config")
+async def get_matching_config(supabase_client=Depends(get_supabase_client)):
+    """Read the hybrid-matching depth (Claude top-N) — the cost/coverage knob."""
+    try:
+        r = await supabase_client.table("system_settings").select("setting_value").eq(
+            "setting_key", "matching.claude_top_n"
+        ).limit(1).execute()
+        n = 8
+        if r.data and r.data[0].get("setting_value") is not None:
+            n = int(float(str(r.data[0]["setting_value"]).strip().strip('"')))
+        return {"claude_top_n": n}
+    except Exception:
+        return {"claude_top_n": 8}
+
+
+@router.post("/matching-config")
+async def set_matching_config(body: dict, supabase_client=Depends(get_supabase_client)):
+    """Set the hybrid-matching depth. Higher = broader Claude coverage, more $."""
+    try:
+        n = max(1, min(100, int(body.get("claude_top_n", 8))))
+        existing = await supabase_client.table("system_settings").select("id").eq(
+            "setting_key", "matching.claude_top_n"
+        ).limit(1).execute()
+        if existing.data:
+            await supabase_client.table("system_settings").update(
+                {"setting_value": str(n)}
+            ).eq("setting_key", "matching.claude_top_n").execute()
+        else:
+            await supabase_client.table("system_settings").insert(
+                {"setting_key": "matching.claude_top_n", "setting_value": str(n)}
+            ).execute()
+        return {"claude_top_n": n}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/unit-costs")
 async def unit_costs(
     days: int = Query(0, ge=0, le=3650, description="Window in days; 0 = all-time"),
