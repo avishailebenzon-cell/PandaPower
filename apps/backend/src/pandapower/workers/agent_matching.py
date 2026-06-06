@@ -231,12 +231,11 @@ class AgentMatchingWorker:
                     logger.error(f"Error scoring candidate {candidate['id']}: {e}")
                     result["errors"].append({"candidate_id": candidate["id"], "error": str(e)})
 
-            # The rest: cheap local-only rows (no Claude spend).
-            for ls, lr, candidate in rest:
-                await self._create_local_match(candidate["id"], job_id, ls, lr, agent_code)
-
+            # The rest are NOT persisted — only real Claude evaluations are
+            # stored, to keep the matches list clean (no heuristic noise). They
+            # remain candidates for a future run if the top-N changes.
             result["claude_scored"] = len(top)
-            result["local_only"] = len(rest)
+            result["skipped_low_rank"] = len(rest)
 
             # Log overall agent activity
             await self._log_agent_activity(
@@ -363,11 +362,9 @@ class AgentMatchingWorker:
                     logger.error(f"Error scoring job {job['id']}: {e}")
                     result["errors"].append({"job_id": job["id"], "error": str(e)})
 
-            for ls, lr, job in rest:
-                await self._create_local_match(candidate_id, job["id"], ls, lr, agent_code)
-
+            # The rest are NOT persisted — only real Claude evaluations stored.
             result["claude_scored"] = len(top)
-            result["local_only"] = len(rest)
+            result["skipped_low_rank"] = len(rest)
 
             result["duration_ms"] = (datetime.utcnow() - start_time).total_seconds() * 1000
             logger.info(
