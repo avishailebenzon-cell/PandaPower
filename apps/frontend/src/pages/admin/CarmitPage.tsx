@@ -728,6 +728,9 @@ export const CarmitPage = () => {
                             );
                           });
                         })()}
+                        {/* Non-sortable actions column — explicit "spec" button,
+                            same affordance as the recruitment-agent screens. */}
+                        <th className="px-4 py-3 font-semibold text-gray-200">מפרט</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -850,6 +853,17 @@ export const CarmitPage = () => {
                                 year: 'numeric',
                               }) : '—'}
                             </td>
+                            {/* Spec button — opens the same MatchDetailModal
+                                (strengths / gaps / reasoning / clearance). */}
+                            <td className="px-4 py-3">
+                              <button
+                                onClick={() => setSelectedAgentMatchForDetail(toDepartmentMatch())}
+                                title="פרטי התאמה מלאים (חוזקות, פערים, הסבר)"
+                                className="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded transition"
+                              >
+                                מפרט
+                              </button>
+                            </td>
                           </tr>
                         );
                       })}
@@ -930,6 +944,7 @@ export const CarmitPage = () => {
                                 <th className="px-4 py-3 font-semibold">מצב</th>
                                 <th className="px-4 py-3 font-semibold">סיווג ביטחוני</th>
                                 <th className="px-4 py-3 font-semibold">נוצר</th>
+                                <th className="px-4 py-3 font-semibold">מפרט</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -952,6 +967,7 @@ export const CarmitPage = () => {
                                     <td className="px-4 py-3"><span className="px-2 py-0.5 rounded text-xs font-semibold bg-gray-700 text-gray-200">{m.current_state}</span></td>
                                     <td className="px-4 py-3 text-xs"><div className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border font-bold ${cfg.cls}`}><span>{cfg.icon}</span><span>{cfg.label}</span></div></td>
                                     <td className="px-4 py-3 text-xs text-gray-500">{m.created_at ? new Date(m.created_at).toLocaleDateString('he-IL') : '—'}</td>
+                                    <td className="px-4 py-3"><button onClick={() => setSelectedAgentMatchForDetail({ id: m.id, candidateName: m.candidate_name, candidateId: m.candidate_id, jobId: m.job_id, jobTitle: m.job_title, company: 'Unknown Company', phone: m.candidate_phone || undefined, email: m.candidate_email || undefined, status: m.current_state, matchScore: m.match_score, dateAdded: m.created_at, lastActivity: m.updated_at, matchReasoning: m.match_reasoning, strengths: m.strengths, gaps: m.gaps, candidateClearance: m.candidate_clearance || undefined, requiredClearance: m.required_clearance || undefined, clearanceMatch: m.clearance_match })} title="פרטי התאמה מלאים" className="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded transition">מפרט</button></td>
                                   </tr>
                                 );
                               })}
