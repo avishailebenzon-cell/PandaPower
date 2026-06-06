@@ -526,18 +526,16 @@ async def get_all_candidate_matches(
         if agent_code:
             query = query.eq("matched_by_agent_code", agent_code)
 
-        # Get total count
-        total_result = await supabase.table("matches").select(
-            "id", count="exact"
-        ).eq("is_valid", True)
-
+        # Get total count. NOTE: build the query first, await ONLY .execute().
+        # (Awaiting the builder itself raised 'AsyncSelectRequestBuilder can't be
+        # used in await' → the endpoint 500'd.)
+        count_q = supabase.table("matches").select("id", count="exact").eq("is_valid", True)
         if job_id:
-            total_result = total_result.eq("job_id", job_id)
-
+            count_q = count_q.eq("job_id", job_id)
         if agent_code:
-            total_result = total_result.eq("matched_by_agent_code", agent_code)
+            count_q = count_q.eq("matched_by_agent_code", agent_code)
 
-        total_result = await total_result.execute()
+        total_result = await count_q.execute()
         total = total_result.count if hasattr(total_result, "count") else 0
 
         # Get paginated results
