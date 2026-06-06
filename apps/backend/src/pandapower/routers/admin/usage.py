@@ -45,15 +45,23 @@ async def usage_summary(
     try:
         since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
-        resp = (
-            await supabase_client.table("llm_usage")
+        # PostgREST caps a single response at ~1000 rows regardless of .limit(),
+        # so paginate with .range() until we run dry or hit _FETCH_CAP. (A single
+        # .limit() call silently undercounts — it was why summary disagreed with
+        # /unit-costs.)
+        base_q = (
+            supabase_client.table("llm_usage")
             .select("stage,model,input_tokens,output_tokens,total_tokens,estimated_cost_usd,created_at")
             .gte("created_at", since)
             .order("created_at", desc=True)
-            .limit(_FETCH_CAP)
-            .execute()
         )
-        rows = resp.data or []
+        rows, off = [], 0
+        while True:
+            batch = (await base_q.range(off, off + 999).execute()).data or []
+            rows.extend(batch)
+            if len(batch) < 1000 or len(rows) >= _FETCH_CAP:
+                break
+            off += 1000
         truncated = len(rows) >= _FETCH_CAP
 
         def _blank():
