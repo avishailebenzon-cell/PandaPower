@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from typing import Any, Optional
 from datetime import datetime, timedelta
 import json
@@ -7,6 +8,52 @@ from pandapower.integrations.claude_api import AnthropicClient
 from pandapower.core.supabase import get_supabase_client
 
 logger = logging.getLogger(__name__)
+
+# ── Cost control: hybrid matching ─────────────────────────────────────────
+# Claude (Sonnet) scoring is the expensive part and it's combinatorial
+# (candidates × jobs). To avoid burning the budget we PRE-SCORE every pair
+# locally (free heuristic) and run Claude ONLY on the top-N most promising.
+# The rest are persisted with their local score (visible, $0). This caps Claude
+# calls to ~MATCH_CLAUDE_TOP_N per job/candidate instead of one per pair.
+MATCH_CLAUDE_TOP_N = 8
+
+_TOKEN_RE = re.compile(r"[A-Za-z֐-׿][A-Za-z0-9֐-׿\+\#\.]{1,}")
+_STOP_TOKENS = {
+    "and", "the", "for", "with", "experience", "years", "level", "work",
+    "knowledge", "able", "ניסיון", "שנות", "שנים", "של", "עם", "או", "את",
+    "לפחות", "הכרות", "יתרון", "ידע", "יכולת", "עבודה",
+}
+
+
+def _toks(*parts) -> set:
+    """Tokenize mixed Hebrew/English text into a lowercased keyword set."""
+    out = set()
+    for p in parts:
+        if not p:
+            continue
+        if isinstance(p, (list, tuple)):
+            p = " ".join(str(x) for x in p)
+        elif isinstance(p, dict):
+            p = " ".join(str(v) for v in p.values())
+        for m in _TOKEN_RE.findall(str(p).lower()):
+            if m not in _STOP_TOKENS and len(m) >= 2:
+                out.add(m)
+    return out
+
+
+def _clearance_level(val) -> int:
+    """Map a clearance string to 0-3 (0 = none/unknown)."""
+    if not val:
+        return 0
+    s = str(val).lower()
+    if any(x in s for x in ["ללא", "none", "no "]):
+        return 0
+    m = re.search(r"(\d)", s)
+    if m:
+        return min(3, int(m.group(1)))
+    if any(x in s for x in ["secret", "high", "מסווג", "גבוה", "שוס"]):
+        return 2
+    return 0
 
 # Agent domain configurations
 AGENT_CONFIGS = {
@@ -132,20 +179,37 @@ class AgentMatchingWorker:
                 result["duration_ms"] = (datetime.utcnow() - start_time).total_seconds() * 1000
                 return result
 
-            # Score each candidate-job pair with Claude
-            for idx, candidate in enumerate(candidates):
+            # HYBRID COST CONTROL: pre-score every candidate locally (free),
+            # then spend Claude ONLY on the top-N most promising. The rest get a
+            # cheap local-score row so they stay visible at $0. Skip pairs we've
+            # already scored (dedup).
+            existing_resp = await self.supabase.table("matches").select(
+                "candidate_id"
+            ).eq("job_id", job_id).execute()
+            already = {r["candidate_id"] for r in (existing_resp.data or [])}
+
+            ranked = []
+            for c in candidates:
+                if c["id"] in already:
+                    continue
+                c["_tok"] = self._candidate_tokens(c)
+                ls, lr = self._local_prescore(c, job, agent_config)
+                ranked.append((ls, lr, c))
+            ranked.sort(key=lambda x: x[0], reverse=True)
+
+            top = ranked[:MATCH_CLAUDE_TOP_N]
+            rest = ranked[MATCH_CLAUDE_TOP_N:]
+            logger.info(
+                f"Hybrid match: {len(ranked)} fresh candidates → Claude on top "
+                f"{len(top)}, local-only on {len(rest)} (job {job_id})"
+            )
+
+            # Claude only on the top-N.
+            for idx, (ls, lr, candidate) in enumerate(top):
                 try:
                     match_info = await self._score_candidate_job_pair(
                         candidate, job, agent_code, agent_config
                     )
-
-                    # ALWAYS persist the evaluation — both viable matches (≥70)
-                    # and evaluated-but-rejected (<70). The user needs full
-                    # visibility into what each agent looked at and decided, to
-                    # learn how the system behaves. _create_match sets
-                    # current_state / is_passing based on the score, so a low
-                    # score lands as "evaluated_but_rejected" instead of being
-                    # silently dropped. (Mirrors find_matches_for_candidate.)
                     await self._create_match(
                         candidate_id=candidate["id"],
                         job_id=job_id,
@@ -158,24 +222,20 @@ class AgentMatchingWorker:
                         duration_ms=match_info["duration_ms"],
                     )
                     result["tokens_used"] += match_info["tokens_used"]
-
                     if match_info["score"] >= 70:
                         result["matches_found"] += 1
-                        logger.info(
-                            f"[{idx+1}/{len(candidates)}] Match found: {candidate['name']} -> "
-                            f"{job.get('job_title', 'Unknown')} (score: {match_info['score']})"
-                        )
                     else:
                         result["evaluated_but_rejected"] = result.get("evaluated_but_rejected", 0) + 1
-                        logger.debug(
-                            f"[{idx+1}/{len(candidates)}] Evaluated, below threshold "
-                            f"({match_info['score']}): {candidate['name']} vs "
-                            f"{job.get('job_title', 'Unknown')} — saved as evaluated_but_rejected"
-                        )
-
                 except Exception as e:
                     logger.error(f"Error scoring candidate {candidate['id']}: {e}")
                     result["errors"].append({"candidate_id": candidate["id"], "error": str(e)})
+
+            # The rest: cheap local-only rows (no Claude spend).
+            for ls, lr, candidate in rest:
+                await self._create_local_match(candidate["id"], job_id, ls, lr, agent_code)
+
+            result["claude_scored"] = len(top)
+            result["local_only"] = len(rest)
 
             # Log overall agent activity
             await self._log_agent_activity(
@@ -255,27 +315,35 @@ class AgentMatchingWorker:
                 result["duration_ms"] = (datetime.utcnow() - start_time).total_seconds() * 1000
                 return result
 
-            # Score each job-candidate pair
-            for idx, job in enumerate(jobs):
-                # Skip if already matched
-                existing = await (
-                    self.supabase.table("matches")
-                    .select("id")
-                    .eq("candidate_id", candidate_id)
-                    .eq("job_id", job["id"])
-                    .execute()
-                )
-                if existing.data:
-                    logger.debug(f"Match already exists: {candidate_id} <-> {job['id']}")
-                    continue
+            # Dedup: jobs already scored against this candidate.
+            existing_resp = await self.supabase.table("matches").select(
+                "job_id"
+            ).eq("candidate_id", candidate_id).execute()
+            already = {r["job_id"] for r in (existing_resp.data or [])}
 
+            # HYBRID: local pre-score this candidate against every fresh job,
+            # Claude only on the top-N best-fit jobs, local-only rows for the rest.
+            candidate["_tok"] = self._candidate_tokens(candidate)
+            ranked = []
+            for job in jobs:
+                if job["id"] in already:
+                    continue
+                ls, lr = self._local_prescore(candidate, job, agent_config)
+                ranked.append((ls, lr, job))
+            ranked.sort(key=lambda x: x[0], reverse=True)
+
+            top = ranked[:MATCH_CLAUDE_TOP_N]
+            rest = ranked[MATCH_CLAUDE_TOP_N:]
+            logger.info(
+                f"Hybrid match: {len(ranked)} fresh jobs → Claude on top {len(top)}, "
+                f"local-only on {len(rest)} (candidate {candidate_id})"
+            )
+
+            for idx, (ls, lr, job) in enumerate(top):
                 try:
                     match_info = await self._score_candidate_job_pair(
                         candidate, job, agent_code, agent_config
                     )
-
-                    # Always create match record (both passing and failing evaluations)
-                    # is_passing flag distinguishes viable (≥70) from evaluated-but-rejected (<70)
                     await self._create_match(
                         candidate_id=candidate_id,
                         job_id=job["id"],
@@ -289,15 +357,15 @@ class AgentMatchingWorker:
                     )
                     result["matches_found"] += 1
                     result["tokens_used"] += match_info["tokens_used"]
-
-                    logger.info(
-                        f"[{idx+1}/{len(jobs)}] Match found: {candidate['name']} -> "
-                        f"{job.get('job_title', 'Unknown')} ({match_info['score']})"
-                    )
-
                 except Exception as e:
                     logger.error(f"Error scoring job {job['id']}: {e}")
                     result["errors"].append({"job_id": job["id"], "error": str(e)})
+
+            for ls, lr, job in rest:
+                await self._create_local_match(candidate_id, job["id"], ls, lr, agent_code)
+
+            result["claude_scored"] = len(top)
+            result["local_only"] = len(rest)
 
             result["duration_ms"] = (datetime.utcnow() - start_time).total_seconds() * 1000
             logger.info(
@@ -310,6 +378,70 @@ class AgentMatchingWorker:
             logger.error(f"Candidate matching failed: {e}", exc_info=True)
             result["errors"].append({"batch": str(e)})
             return result
+
+    # ── Hybrid cost control: local pre-scoring ────────────────────────────
+
+    def _candidate_tokens(self, candidate: dict) -> set:
+        ef = (candidate.get("extracted_from_cv") or {}).get("extracted_fields", {}) or {}
+        exp = candidate.get("experiences") or candidate.get("experience") or ef.get("experience") or []
+        positions = [e.get("position") for e in exp if isinstance(e, dict)]
+        return _toks(
+            candidate.get("key_skills"), candidate.get("technical_skills"),
+            ef.get("technical_skills"), ef.get("soft_skills"), ef.get("summary"),
+            positions, candidate.get("top_education"), ef.get("education"),
+        )
+
+    def _local_prescore(self, candidate: dict, job: dict, agent_config: dict) -> tuple[int, str]:
+        """Free heuristic score (0-100) used to rank candidates before spending
+        Claude. Mirrors scripts/backfill_matches_local.py."""
+        c_tok = candidate.get("_tok")
+        if c_tok is None:
+            c_tok = self._candidate_tokens(candidate)
+        j_tok = _toks(job.get("job_title"), job.get("job_qualifications"), job.get("job_description"))
+        dom_tok = set() if (agent_config.get("name", "").startswith("GC")) else _toks(
+            agent_config.get("keywords"), agent_config.get("domain"))
+
+        dom_hits = c_tok & dom_tok
+        job_hits = c_tok & j_tok
+        dom_score = min(45, len(dom_hits) * 14)
+        job_score = min(30, len(job_hits) * 5)
+
+        yrs = candidate.get("years_of_experience")
+        yrs = yrs if isinstance(yrs, (int, float)) else 0
+        exp_score = min(15, int(yrs * 2))
+
+        c_clr = _clearance_level(candidate.get("clearance_level"))
+        j_clr = _clearance_level(job.get("job_security_clearance"))
+        clr_score = 10 if (j_clr == 0 or c_clr >= j_clr) else (5 if c_clr > 0 else 0)
+
+        score = max(0, min(100, dom_score + job_score + exp_score + clr_score))
+        matched = sorted(dom_hits | job_hits)[:6]
+        reasoning = (
+            f"ניקוד מקומי {score}/100 (סינון ראשוני, ללא Claude — לא נכנס ל-Top {MATCH_CLAUDE_TOP_N}). "
+            f"חפיפת כישורים: {', '.join(matched) if matched else 'אין'}. "
+            f"ניסיון: {yrs} שנים. סיווג: מועמד רמה {c_clr} מול דרישת רמה {j_clr}."
+        )
+        return score, reasoning
+
+    async def _create_local_match(self, candidate_id: str, job_id: str, score: int,
+                                  reasoning: str, agent_code: str) -> None:
+        """Persist a local-score-only evaluation (no Claude). Cheap + visible."""
+        try:
+            state = "found" if score >= 70 else "evaluated_but_rejected"
+            await self.supabase.table("matches").insert({
+                "candidate_id": candidate_id,
+                "job_id": job_id,
+                "match_score": round(score / 100.0, 4),
+                "evaluated_score_raw": score,
+                "is_passing": score >= 70,
+                "is_valid": True,
+                "current_state": state,
+                "matched_by_agent_code": agent_code,
+                "match_reasoning": reasoning,
+                "state_updated_by_agent": agent_code,
+            }).execute()
+        except Exception as e:
+            logger.debug(f"local match insert skipped ({candidate_id}/{job_id}): {e}")
 
     async def _score_candidate_job_pair(
         self, candidate: dict, job: dict, agent_code: str, agent_config: dict
