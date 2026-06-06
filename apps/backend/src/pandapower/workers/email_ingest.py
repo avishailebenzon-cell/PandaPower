@@ -64,20 +64,22 @@ def extract_candidate_identity(subject: str, body: str) -> tuple[Optional[str], 
             cand_name = nm.group(1).strip()
     return cand_email, cand_phone, cand_name
 
-# Concurrent limits for API calls
-# During backfill (historical scan), be aggressive to accelerate scanning
-# During incremental (recent emails), balance speed with load
+# Concurrent limits for API calls.
+# Memory-bounded: each concurrent download/upload holds an attachment's bytes
+# (up to MAX_ATTACHMENT_SIZE_MB) in RAM. On a 512MB instance, 30×N MB caused
+# OOM restarts — keep concurrency modest. Throughput stays high because the
+# scheduler runs ingest every 60s.
 MAX_CONCURRENT_DOWNLOADS_INCREMENTAL = 5
-MAX_CONCURRENT_DOWNLOADS_BACKFILL = 30
+MAX_CONCURRENT_DOWNLOADS_BACKFILL = 8
 MAX_CONCURRENT_UPLOADS_INCREMENTAL = 5
-MAX_CONCURRENT_UPLOADS_BACKFILL = 30
+MAX_CONCURRENT_UPLOADS_BACKFILL = 8
 MAX_ATTACHMENT_SIZE_MB = 50
 
-# Batch processing limits
-# During backfill, process up to 2000 emails per run for rapid historical scanning
-# During incremental, process 200 for faster daily catch-up
+# Batch processing limits. Smaller backfill batch = lower peak memory (the run
+# holds message metadata + in-flight attachments). 400/run × 60s ≈ 24k/hr —
+# plenty for the ~15-20k 24-month backlog, without OOM.
 MAX_EMAILS_PER_RUN_INCREMENTAL = 200
-MAX_EMAILS_PER_RUN_BACKFILL = 2000
+MAX_EMAILS_PER_RUN_BACKFILL = 400
 
 
 class EmailIngestWorker:
