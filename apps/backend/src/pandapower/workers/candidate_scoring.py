@@ -11,7 +11,8 @@ from typing import Any, Optional, Callable, TypeVar
 from uuid import UUID
 from datetime import datetime, timezone
 
-logger = logging.getLogger(__name__)
+import structlog as _structlog
+logger = _structlog.get_logger(__name__)
 
 # Type variable for retry decorator
 T = TypeVar('T')

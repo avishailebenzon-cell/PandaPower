@@ -14,7 +14,8 @@ from pandapower.core.supabase import get_supabase_client
 from pandapower.core.config import settings
 from pandapower.integrations.anthropic_client import AnthropicClient
 
-logger = logging.getLogger(__name__)
+import structlog as _structlog
+logger = _structlog.get_logger(__name__)
 
 
 def extract_text_from_pdf(file_path: str) -> str:

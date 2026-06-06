@@ -8,7 +8,8 @@ import asyncio
 import logging
 from typing import Optional, Dict, Any
 
-logger = logging.getLogger(__name__)
+import structlog as _structlog
+logger = _structlog.get_logger(__name__)
 
 
 class PipedriveClient:

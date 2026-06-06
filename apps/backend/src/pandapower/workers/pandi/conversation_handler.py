@@ -8,7 +8,8 @@ from pandapower.agents.pandi.conversation_engine import ConversationEngine
 from pandapower.integrations.green_api import get_green_api_client
 from pandapower.core.supabase import get_supabase_client
 
-logger = logging.getLogger(__name__)
+import structlog as _structlog
+logger = _structlog.get_logger(__name__)
 
 
 async def handle_client_message(

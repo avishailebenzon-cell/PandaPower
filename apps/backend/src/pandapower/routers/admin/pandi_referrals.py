@@ -10,7 +10,8 @@ from pydantic import BaseModel
 
 from pandapower.core.supabase import get_supabase_client
 
-logger = logging.getLogger(__name__)
+import structlog as _structlog
+logger = _structlog.get_logger(__name__)
 router = APIRouter(prefix="/admin/pandi", tags=["admin", "pandi"])
 
 

@@ -16,7 +16,8 @@ from fastapi.responses import JSONResponse
 from pandapower.core.supabase import get_supabase_client
 from pandapower.workers.cv_parsing import parse_manual_cv_upload
 
-logger = logging.getLogger(__name__)
+import structlog as _structlog
+logger = _structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/admin/cv", tags=["cv-upload"])
 

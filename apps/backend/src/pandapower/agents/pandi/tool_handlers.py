@@ -6,7 +6,8 @@ from uuid import UUID
 
 from pandapower.core.supabase import get_supabase_client
 
-logger = logging.getLogger(__name__)
+import structlog as _structlog
+logger = _structlog.get_logger(__name__)
 
 
 async def handle_update_job_context(

@@ -5,7 +5,8 @@ from typing import Any
 
 import httpx
 
-logger = logging.getLogger(__name__)
+import structlog as _structlog
+logger = _structlog.get_logger(__name__)
 
 ANTHROPIC_API_BASE = "https://api.anthropic.com/v1"
 MAX_RETRIES = 3

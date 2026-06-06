@@ -9,7 +9,8 @@ import logging
 from typing import Any, Optional
 from uuid import UUID
 
-logger = logging.getLogger(__name__)
+import structlog as _structlog
+logger = _structlog.get_logger(__name__)
 
 
 class SkillNormalizationWorker:
