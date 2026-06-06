@@ -54,6 +54,14 @@ SNOOZE_UNTIL_SETTING_KEY = "alerts.snooze_until"
 # Acknowledged keys (per-alert mute) - JSON map { key: iso_expiry } that survives restarts.
 ACK_KEYS_SETTING_KEY = "alerts.acknowledged_keys"
 
+# DB-backed GLOBAL throttle: at most ONE alert (of any key) per this interval.
+# Survives process restarts (the in-memory cooldown below does NOT — frequent
+# Render redeploys reset it, which is what caused the alert flood). Configurable
+# via system_settings 'alerts.min_interval_minutes'.
+GLOBAL_LAST_ALERT_SETTING_KEY = "alerts.last_global_alert_at"
+GLOBAL_MIN_INTERVAL_SETTING_KEY = "alerts.min_interval_minutes"
+DEFAULT_GLOBAL_MIN_INTERVAL_MINUTES = 180  # 3 hours
+
 # Fallback admin email when DB has nothing configured. Set in code so a fresh
 # install still notifies the right person.
 DEFAULT_ADMIN_EMAIL = "avishai.lebenzon@gmail.com"
@@ -122,6 +130,11 @@ async def alert_admin(
         if await _is_key_acknowledged(sb, key):
             logger.info(f"[alerts] key '{key}' is acknowledged by user, dropping")
             return False
+        # DB-backed global throttle (survives restarts): at most one alert of
+        # any kind per the configured interval.
+        if await _global_throttled(sb):
+            logger.info(f"[alerts] global throttle active, dropping '{key}'")
+            return False
 
         # Reserve a slot now that we know we're really sending
         async with _state_lock:
@@ -170,6 +183,10 @@ async def alert_admin(
             body_html=body,
         )
 
+        if sent or telegram_sent:
+            # Record the global send time so the DB-backed throttle holds the
+            # next alert for the configured interval (survives restarts).
+            await _record_global_alert(sb)
         if sent:
             logger.info(f"[alerts] sent '{key}' to {admin_email}")
         return sent or telegram_sent
@@ -306,6 +323,50 @@ async def _read_setting(sb, key: str) -> Optional[str]:
     except Exception as e:
         logger.debug(f"[alerts] read_setting('{key}') failed: {e}")
         return None
+
+
+async def _global_min_interval_seconds(sb) -> int:
+    """Minimum seconds between ANY two alerts (DB-configurable)."""
+    raw = await _read_setting(sb, GLOBAL_MIN_INTERVAL_SETTING_KEY)
+    try:
+        return int(float(raw)) * 60 if raw else DEFAULT_GLOBAL_MIN_INTERVAL_MINUTES * 60
+    except (TypeError, ValueError):
+        return DEFAULT_GLOBAL_MIN_INTERVAL_MINUTES * 60
+
+
+async def _global_throttled(sb) -> bool:
+    """True if an alert was sent within the global min-interval. DB-backed, so
+    it survives process restarts (unlike the in-memory per-key cooldown)."""
+    iso = await _read_setting(sb, GLOBAL_LAST_ALERT_SETTING_KEY)
+    if not iso:
+        return False
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        elapsed = (datetime.now(timezone.utc) - dt).total_seconds()
+        return elapsed < await _global_min_interval_seconds(sb)
+    except ValueError:
+        return False
+
+
+async def _record_global_alert(sb) -> None:
+    """Persist 'now' as the last global alert time (upsert)."""
+    try:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        existing = await sb.table("system_settings").select("id").eq(
+            "setting_key", GLOBAL_LAST_ALERT_SETTING_KEY
+        ).limit(1).execute()
+        if existing.data:
+            await sb.table("system_settings").update(
+                {"setting_value": now_iso}
+            ).eq("setting_key", GLOBAL_LAST_ALERT_SETTING_KEY).execute()
+        else:
+            await sb.table("system_settings").insert(
+                {"setting_key": GLOBAL_LAST_ALERT_SETTING_KEY, "setting_value": now_iso}
+            ).execute()
+    except Exception as e:
+        logger.debug(f"[alerts] failed to record global alert time: {e}")
 
 
 async def _alerts_enabled(sb) -> bool:
