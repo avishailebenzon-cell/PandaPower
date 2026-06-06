@@ -42,6 +42,25 @@ const fetchUsage = async (days: number): Promise<UsageSummary> => {
   return response.json();
 };
 
+interface UnitCosts {
+  cost_per_cv_usd: number;
+  cost_per_match_usd: number;
+  counts: { cv_parses: number; convertapi_conversions: number; match_evaluations: number };
+  components: { cv_parse_usd: number; convertapi_usd: number; agent_match_usd: number; other_usd: number };
+  total_cost_usd: number;
+  note?: string;
+}
+
+const fetchUnitCosts = async (days: number): Promise<UnitCosts> => {
+  const response = await fetch(`${API_BASE}/admin/usage/unit-costs?days=${days}`);
+  if (!response.ok) throw new Error("Failed to fetch unit costs");
+  return response.json();
+};
+
+function fmtUsd4(n: number): string {
+  return `$${(n || 0).toFixed(4)}`;
+}
+
 function fmtNum(n: number): string {
   return new Intl.NumberFormat("he-IL").format(Math.round(n || 0));
 }
@@ -79,6 +98,12 @@ export const UsageDashboard: React.FC = () => {
     refetchInterval: 30000,
   });
 
+  const { data: unit } = useQuery({
+    queryKey: ["usage-unit-costs", days],
+    queryFn: () => fetchUnitCosts(days),
+    refetchInterval: 30000,
+  });
+
   const maxStageCost = Math.max(1, ...(data?.by_stage || []).map((s) => s.cost_usd));
 
   return (
@@ -110,6 +135,49 @@ export const UsageDashboard: React.FC = () => {
           </button>
         ))}
       </div>
+
+      {/* ── Headline: average cost per unit (dynamic, all components) ── */}
+      {unit && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+          <div className="bg-gradient-to-br from-emerald-600 to-emerald-700 text-white rounded-xl shadow-md p-5">
+            <div className="text-sm opacity-90 mb-1">💵 עלות ממוצעת לקורות חיים אחד</div>
+            <div className="text-4xl font-bold">{fmtUsd4(unit.cost_per_cv_usd)}</div>
+            <div className="text-xs opacity-80 mt-2">
+              כולל ניתוח Claude + חילוץ ConvertAPI · {fmtNum(unit.counts.cv_parses)} CVs
+            </div>
+          </div>
+          <div className="bg-gradient-to-br from-amber-600 to-amber-700 text-white rounded-xl shadow-md p-5">
+            <div className="text-sm opacity-90 mb-1">🎯 עלות ממוצעת להתאמה אחת</div>
+            <div className="text-4xl font-bold">{fmtUsd4(unit.cost_per_match_usd)}</div>
+            <div className="text-xs opacity-80 mt-2">
+              ניתוח Claude להתאמה · {fmtNum(unit.counts.match_evaluations)} הערכות
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cost breakdown by component (CV parse / ConvertAPI / matching / other) */}
+      {unit && (
+        <div className="bg-white rounded-lg border border-slate-200 shadow-sm p-4 mb-6">
+          <div className="text-sm font-semibold text-slate-700 mb-3">פילוח עלות לפי רכיב ({String(unit.days)})</div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+            {[
+              { label: "ניתוח CV (Claude)", v: unit.components.cv_parse_usd },
+              { label: "ConvertAPI (חילוץ)", v: unit.components.convertapi_usd },
+              { label: "התאמות (Claude)", v: unit.components.agent_match_usd },
+              { label: "אחר", v: unit.components.other_usd },
+            ].map((c) => (
+              <div key={c.label} className="bg-slate-50 rounded-lg p-3">
+                <div className="text-lg font-bold text-slate-800">{fmtUsd(c.v)}</div>
+                <div className="text-xs text-slate-500 mt-1">{c.label}</div>
+              </div>
+            ))}
+          </div>
+          <div className="text-xs text-slate-400 mt-3 text-center">
+            סה״כ: <span className="font-semibold">{fmtUsd(unit.total_cost_usd)}</span>
+          </div>
+        </div>
+      )}
 
       {isLoading && <div className="text-slate-500">טוען נתוני צריכה...</div>}
       {isError && (

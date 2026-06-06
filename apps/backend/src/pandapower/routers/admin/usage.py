@@ -134,6 +134,89 @@ async def usage_summary(
                 "by_stage": [],
                 "by_model": [],
                 "by_day": [],
-                "note": "טבלת llm_usage לא קיימת עדיין — הרץ migration 009 או POST /admin/setup/migrations",
+                "note": "טבלת llm_usage לא קיימת עדיין — הרץ migration 011 או POST /admin/setup/migrations",
             }
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/unit-costs")
+async def unit_costs(
+    days: int = Query(0, ge=0, le=3650, description="Window in days; 0 = all-time"),
+    supabase_client=Depends(get_supabase_client),
+):
+    """Average cost per CV scan and per match, plus the cost breakdown.
+
+    - cost per CV  = (cv_parse $ + convertapi_extract $) / # CV parses
+    - cost per match = agent_match $ / # match evaluations
+
+    Returns 0s gracefully if the llm_usage table doesn't exist yet.
+    """
+    try:
+        q = supabase_client.table("llm_usage").select(
+            "stage, estimated_cost_usd, units"
+        )
+        if days and days > 0:
+            since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+            q = q.gte("created_at", since)
+
+        # Paginate to be safe on large tables.
+        rows, off = [], 0
+        while True:
+            b = (await q.range(off, off + 999).execute()).data or []
+            rows.extend(b)
+            if len(b) < 1000 or len(rows) >= _FETCH_CAP:
+                break
+            off += 1000
+
+        agg: dict[str, dict] = defaultdict(lambda: {"cost": 0.0, "units": 0})
+        for r in rows:
+            st = r.get("stage") or "unknown"
+            agg[st]["cost"] += float(r.get("estimated_cost_usd") or 0.0)
+            agg[st]["units"] += int(r.get("units") or 1)
+
+        cv_parse_cost = agg["cv_parse"]["cost"]
+        cv_parse_n = agg["cv_parse"]["units"]
+        convertapi_cost = agg["convertapi_extract"]["cost"]
+        convertapi_n = agg["convertapi_extract"]["units"]
+        match_cost = agg["agent_match"]["cost"]
+        match_n = agg["agent_match"]["units"]
+
+        # A CV "scan" = one CV parse; its full cost includes the ConvertAPI
+        # extraction that fed it. Spread total convertapi cost across parses.
+        cv_total_cost = cv_parse_cost + convertapi_cost
+        cost_per_cv = (cv_total_cost / cv_parse_n) if cv_parse_n else 0.0
+        cost_per_match = (match_cost / match_n) if match_n else 0.0
+
+        total_cost = sum(v["cost"] for v in agg.values())
+
+        return {
+            "days": days or "all",
+            "cost_per_cv_usd": round(cost_per_cv, 5),
+            "cost_per_match_usd": round(cost_per_match, 5),
+            "counts": {
+                "cv_parses": cv_parse_n,
+                "convertapi_conversions": convertapi_n,
+                "match_evaluations": match_n,
+            },
+            "components": {
+                "cv_parse_usd": round(cv_parse_cost, 4),
+                "convertapi_usd": round(convertapi_cost, 4),
+                "agent_match_usd": round(match_cost, 4),
+                "other_usd": round(total_cost - cv_parse_cost - convertapi_cost - match_cost, 4),
+            },
+            "total_cost_usd": round(total_cost, 4),
+        }
+    except Exception as e:
+        msg = str(e).lower()
+        if "llm_usage" in msg and ("does not exist" in msg or "not find" in msg or "relation" in msg):
+            return {
+                "days": days or "all",
+                "cost_per_cv_usd": 0.0,
+                "cost_per_match_usd": 0.0,
+                "counts": {"cv_parses": 0, "convertapi_conversions": 0, "match_evaluations": 0},
+                "components": {"cv_parse_usd": 0.0, "convertapi_usd": 0.0, "agent_match_usd": 0.0, "other_usd": 0.0},
+                "total_cost_usd": 0.0,
+                "note": "טבלת llm_usage לא קיימת עדיין — הרץ migration 011.",
+            }
+        logger.error(f"unit-costs failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

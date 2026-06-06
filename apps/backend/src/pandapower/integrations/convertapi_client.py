@@ -210,6 +210,9 @@ async def get_convertapi_config(sb=None) -> dict:
         # Early-warning threshold: email the admin once usage crosses this
         # fraction, BEFORE the hard stop, so there's time to upgrade the plan.
         "warn_usage_pct": 0.90,
+        # $ per conversion, for the cost dashboard. Set to your real plan price
+        # (plan price / monthly conversions) via convertapi.cost_per_conversion.
+        "cost_per_conversion": 0.005,
     }
     try:
         if sb is None:
@@ -241,6 +244,11 @@ async def get_convertapi_config(sb=None) -> dict:
             elif field == "warn_usage_pct":
                 try:
                     cfg["warn_usage_pct"] = float(val)
+                except (TypeError, ValueError):
+                    pass
+            elif field == "cost_per_conversion":
+                try:
+                    cfg["cost_per_conversion"] = float(val)
                 except (TypeError, ValueError):
                     pass
     except Exception as e:

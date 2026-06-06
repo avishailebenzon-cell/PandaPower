@@ -549,6 +549,14 @@ async def _try_convertapi(filename: str, content: bytes) -> Optional[str]:
 
         if text and len(text.strip()) >= _MIN_USEFUL_TEXT:
             logger.info(f"ConvertAPI extracted {len(text)} chars from {filename} (src={src})")
+            # Record the conversion cost for the dashboard (best-effort).
+            try:
+                from pandapower.integrations.usage_tracker import record_convertapi_usage
+                await record_convertapi_usage(
+                    cost_per_conversion=cfg.get("cost_per_conversion"),
+                )
+            except Exception:
+                pass
             return text
         logger.info(f"ConvertAPI returned too little text for {filename} ({len(text or '')} chars)")
         return None

@@ -81,8 +81,55 @@ async def record_usage(
                 "output_tokens": output_tokens,
                 "total_tokens": total,
                 "estimated_cost_usd": round(cost, 6),
+                "units": 1,
             }
         ).execute()
     except Exception as e:
         # Visibility must never break the pipeline. Degrade silently.
         logger.debug(f"record_usage skipped for stage={stage} model={model}: {e}")
+
+
+# Default $ per ConvertAPI conversion if not configured. The Growth plan is
+# 15,000 conversions/mo; set the REAL plan price via system_settings
+# 'convertapi.cost_per_conversion' for accurate numbers.
+DEFAULT_CONVERTAPI_COST_PER_CONVERSION = 0.005
+
+
+async def record_convertapi_usage(
+    cost_per_conversion: Optional[float] = None,
+    units: int = 1,
+    supabase_client: Optional[Any] = None,
+) -> None:
+    """Record one (or more) ConvertAPI conversions as a cost row. Best-effort.
+
+    ConvertAPI isn't token-based, so we store the $ directly in
+    estimated_cost_usd and the number of conversions in `units`.
+    """
+    try:
+        client = supabase_client
+        if client is None:
+            from pandapower.core.supabase import get_supabase_client
+            client = await get_supabase_client()
+
+        per = cost_per_conversion
+        if per is None:
+            try:
+                from pandapower.integrations.convertapi_client import get_convertapi_config
+                cfg = await get_convertapi_config(client)
+                per = float(cfg.get("cost_per_conversion") or DEFAULT_CONVERTAPI_COST_PER_CONVERSION)
+            except Exception:
+                per = DEFAULT_CONVERTAPI_COST_PER_CONVERSION
+
+        await client.table("llm_usage").insert(
+            {
+                "stage": "convertapi_extract",
+                "model": "convertapi",
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "estimated_cost_usd": round(per * units, 6),
+                "units": units,
+            }
+        ).execute()
+    except Exception as e:
+        logger.debug(f"record_convertapi_usage skipped: {e}")
