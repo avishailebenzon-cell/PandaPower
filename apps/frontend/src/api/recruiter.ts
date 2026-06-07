@@ -205,6 +205,41 @@ export async function fetchMatchConversation(
 }
 
 /**
+ * Fetch the full match breakdown (reasoning, strengths, gaps, clearance) for a
+ * single match — the same "why this match" view the agent/Carmit screens show.
+ * Returned in the DepartmentMatch shape so MatchDetailModal can render it.
+ */
+export async function fetchMatchDetail(matchId: string): Promise<import("./recruitment-departments").DepartmentMatch> {
+  const response = await fetch(`${API_BASE}/admin/recruiter/${matchId}/detail`);
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch match detail: ${response.statusText}`);
+  }
+
+  const d = await response.json();
+
+  return {
+    id: d.id,
+    candidateName: d.candidate_name,
+    candidateId: d.candidate_id ?? undefined,
+    jobId: d.job_id,
+    jobTitle: d.job_title,
+    company: d.company || "",
+    phone: d.phone ?? undefined,
+    email: d.email ?? undefined,
+    status: "",
+    matchScore: d.match_score,
+    dateAdded: "",
+    matchReasoning: d.match_reasoning ?? undefined,
+    strengths: d.strengths || [],
+    gaps: d.gaps || [],
+    candidateClearance: d.candidate_clearance ?? undefined,
+    requiredClearance: d.required_clearance ?? undefined,
+    clearanceMatch: d.clearance_match || "unknown",
+  };
+}
+
+/**
  * List conversations for a recruiter
  */
 export async function fetchRecruiterConversations(

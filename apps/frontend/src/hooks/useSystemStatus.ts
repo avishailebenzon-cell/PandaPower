@@ -33,6 +33,12 @@ async function fetchSystemStatus(): Promise<SystemStatus[]> {
     if (responses[0].status === 'fulfilled') {
       const res = await responses[0].value.json();
       if (res) {
+        // Format the candidate/job an agent is currently working on.
+        const workDetail = (cur: any): string | undefined => {
+          if (!cur) return undefined;
+          return `👤 ${cur.candidate_name} ← 💼 ${cur.job_title}`;
+        };
+
         const totalMatches =
           (res.pending_tal || 0) +
           (res.in_conversation_tal || 0) +
@@ -46,21 +52,35 @@ async function fetchSystemStatus(): Promise<SystemStatus[]> {
         });
 
         statuses.push({
+          id: 'carmit',
+          name: 'כרמית - מיון ראשוני',
+          status: res.carmit_current ? 'processing' : 'idle',
+          detail:
+            workDetail(res.carmit_current) ||
+            `${res.pending_carmit || 0} בתור ביקורת`,
+        });
+
+        statuses.push({
           id: 'tal',
           name: 'טל - סוכן ראשוני',
           status:
-            (res.in_conversation_tal || 0) > 0 ? 'processing' : 'idle',
-          detail: `${res.pending_tal || 0} בתור`,
+            (res.in_conversation_tal || 0) > 0 || res.tal_current
+              ? 'processing'
+              : 'idle',
+          detail:
+            workDetail(res.tal_current) || `${res.pending_tal || 0} בתור`,
         });
 
         statuses.push({
           id: 'elad',
           name: 'אלעד - הצבות',
           status:
-            (res.in_conversation_elad || 0) > 0
+            (res.in_conversation_elad || 0) > 0 || res.elad_current
               ? 'processing'
               : 'idle',
-          detail: `${res.awaiting_elad || 0} ממתינים`,
+          detail:
+            workDetail(res.elad_current) ||
+            `${res.awaiting_elad || 0} ממתינים`,
         });
       }
     }
@@ -121,6 +141,12 @@ export function useSystemStatus() {
       id: 'recruiter',
       name: 'מנהלת גיוס',
       status: 'active',
+      detail: 'טוען...',
+    },
+    {
+      id: 'carmit',
+      name: 'כרמית - מיון ראשוני',
+      status: 'idle',
       detail: 'טוען...',
     },
     {

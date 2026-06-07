@@ -26,8 +26,11 @@ import {
   fetchRecruiterStatus,
   performMatchAction,
   fetchMatchConversation,
+  fetchMatchDetail,
   type Match,
 } from "@/api/recruiter";
+import { MatchDetailModal } from "@/components/MatchDetailModal";
+import type { DepartmentMatch } from "@/api/recruitment-departments";
 
 type Recruiter = "carmit" | "tal" | "elad";
 type SubTab = "queue" | "history";
@@ -88,6 +91,7 @@ export function RecruiterMatchesPanel({
   const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
   const [showConversationModal, setShowConversationModal] = useState(false);
   const [showActionMenu, setShowActionMenu] = useState<string | null>(null);
+  const [detailMatchId, setDetailMatchId] = useState<string | null>(null);
 
   const queryClient = useQueryClient();
   const tabParam = `${recruiter}-${subTab}`; // tal-queue, elad-history, etc.
@@ -112,6 +116,12 @@ export function RecruiterMatchesPanel({
     queryKey: ["match-conversation", selectedMatchId],
     queryFn: () => selectedMatchId ? fetchMatchConversation(selectedMatchId) : null,
     enabled: selectedMatchId !== null,
+  });
+
+  const detailQuery = useQuery({
+    queryKey: ["match-detail", detailMatchId],
+    queryFn: () => (detailMatchId ? fetchMatchDetail(detailMatchId) : null),
+    enabled: detailMatchId !== null,
   });
 
   const actionMutation = useMutation({
@@ -244,6 +254,7 @@ export function RecruiterMatchesPanel({
                           setSelectedMatchId(m.id);
                           setShowConversationModal(true);
                         }}
+                        onDetail={() => setDetailMatchId(m.id)}
                         isLoading={actionMutation.isPending}
                       />
                     </td>
@@ -263,6 +274,23 @@ export function RecruiterMatchesPanel({
                 setSelectedMatchId(null);
               }}
             />
+          )}
+
+          {/* Match-detail modal — the "why this match" view as produced by the
+              recruiting agent (reasoning, strengths, gaps, clearance). */}
+          {detailMatchId && (
+            detailQuery.isLoading ? (
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                <div className="bg-gray-800 rounded-lg p-8 text-center">
+                  <p className="text-gray-300">טוען פרטי התאמה…</p>
+                </div>
+              </div>
+            ) : (
+              <MatchDetailModal
+                match={(detailQuery.data as DepartmentMatch) ?? null}
+                onClose={() => setDetailMatchId(null)}
+              />
+            )
           )}
         </>
       )}
@@ -333,6 +361,7 @@ function MatchActionsMenu({
   onActivate,
   onReject,
   onConversation,
+  onDetail,
   isLoading,
 }: {
   match: Match;
@@ -342,6 +371,7 @@ function MatchActionsMenu({
   onActivate: () => void;
   onReject: () => void;
   onConversation: () => void;
+  onDetail: () => void;
   isLoading: boolean;
 }) {
   const isInQueue = recruiter === "carmit"
@@ -380,6 +410,16 @@ function MatchActionsMenu({
               </button>
             </>
           )}
+          <button
+            onClick={() => {
+              onDetail();
+              onToggle();
+            }}
+            disabled={isLoading}
+            className="block w-full text-right px-4 py-2 hover:bg-indigo-900 text-indigo-200 text-sm disabled:opacity-50 border-b border-gray-600 whitespace-nowrap"
+          >
+            📄 פרטי ההתאמה
+          </button>
           <button
             onClick={() => {
               onConversation();

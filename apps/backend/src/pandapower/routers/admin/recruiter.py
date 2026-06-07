@@ -24,6 +24,13 @@ class ActionType(str, Enum):
 # Response Models
 # ============================================================================
 
+class CurrentWork(BaseModel):
+    """The candidate/job an agent is currently working on, if any."""
+    candidate_name: str
+    job_title: str
+    match_id: str
+
+
 class StatusMetrics(BaseModel):
     """Recruiter status metrics."""
     pending_carmit: int
@@ -35,6 +42,11 @@ class StatusMetrics(BaseModel):
     in_conversation_elad: int
     hired: int
     failed: int
+    # The candidate/job each agent is actively working on right now (most
+    # recently updated match in that agent's active states), or null if idle.
+    carmit_current: Optional[CurrentWork] = None
+    tal_current: Optional[CurrentWork] = None
+    elad_current: Optional[CurrentWork] = None
 
 
 class MatchInfo(BaseModel):
@@ -51,6 +63,27 @@ class MatchInfo(BaseModel):
     candidate_id: str
     job_id: str
     days_in_stage: int
+
+
+class MatchDetailInfo(BaseModel):
+    """Full match breakdown (reasoning, strengths, gaps, clearance) — same
+    shape the agent screens use, so the frontend MatchDetailModal can render
+    a Tal-queue match exactly like a Carmit-queue match."""
+    id: str
+    candidate_name: str
+    candidate_id: Optional[str] = None
+    job_id: str
+    job_title: str
+    company: str = ""
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    match_score: float
+    match_reasoning: Optional[str] = None
+    strengths: List[str] = []
+    gaps: List[str] = []
+    candidate_clearance: Optional[str] = None
+    required_clearance: Optional[str] = None
+    clearance_match: str = "unknown"
 
 
 class CandidateMatchInfo(BaseModel):
@@ -141,6 +174,29 @@ async def get_recruiter_status(
             r = await q.limit(1).execute()
             return r.count or 0
 
+        async def _current(states) -> Optional[CurrentWork]:
+            """Most recently updated active match in the given states."""
+            try:
+                q = supabase.table("matches").select(
+                    "id, updated_at, candidates(name), jobs(job_title)"
+                ).in_("current_state", states).eq("is_valid", True).order(
+                    "updated_at", desc=True
+                ).limit(1)
+                r = await q.execute()
+                if not r.data:
+                    return None
+                row = r.data[0]
+                candidate = row.get("candidates") or {}
+                job = row.get("jobs") or {}
+                return CurrentWork(
+                    candidate_name=candidate.get("name", "ללא שם") if isinstance(candidate, dict) else "ללא שם",
+                    job_title=job.get("job_title", "ללא משרה") if isinstance(job, dict) else "ללא משרה",
+                    match_id=row["id"],
+                )
+            except Exception as e:
+                logger.warning(f"Failed to fetch current work for {states}: {e}")
+                return None
+
         pending_carmit = await _count("found")
         carmit_approved = await _count("carmit_approved")
         carmit_rejected = await _count("carmit_rejected")
@@ -151,6 +207,10 @@ async def get_recruiter_status(
         hired = await _count("hired")
         failed = await _count(["tal_rejected", "elad_rejected", "placement_failed"])
 
+        carmit_current = await _current(["found"])
+        tal_current = await _current(["tal_conversation", "sent_to_tal"])
+        elad_current = await _current(["elad_conversation", "sent_to_elad"])
+
         return StatusMetrics(
             pending_carmit=pending_carmit,
             carmit_approved=carmit_approved,
@@ -160,7 +220,10 @@ async def get_recruiter_status(
             awaiting_elad=awaiting_elad,
             in_conversation_elad=in_conversation_elad,
             hired=hired,
-            failed=failed
+            failed=failed,
+            carmit_current=carmit_current,
+            tal_current=tal_current,
+            elad_current=elad_current,
         )
 
     except Exception as e:
@@ -414,6 +477,87 @@ async def get_match_conversation(
     except Exception as e:
         logger.error(f"Error getting conversation: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to get conversation")
+
+
+@router.get("/{match_id}/detail", response_model=MatchDetailInfo)
+async def get_match_detail(
+    match_id: str,
+    supabase = Depends(get_supabase_client)
+) -> MatchDetailInfo:
+    """Get the full match breakdown as produced by the recruiting agent that
+    made the match — reasoning, strengths, gaps, and clearance comparison.
+
+    Mirrors the data the agent/Carmit screens show in MatchDetailModal so any
+    recruiter queue (Tal, Elad) can display the same "why this match" view.
+    """
+    try:
+        # Same joins as the department-matches endpoint (verified column names):
+        #   candidates.clearance_level, jobs.job_security_clearance
+        result = await supabase.table("matches").select(
+            "id, candidate_id, job_id, current_state, match_score, match_reasoning, "
+            "candidates(id,name,email,phone,clearance_level), "
+            "jobs(id,job_title,job_security_clearance)"
+        ).eq("id", match_id).execute()
+
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Match not found")
+
+        row = result.data[0]
+        candidate = row.get("candidates") or {}
+        job = row.get("jobs") or {}
+
+        candidate_clearance = candidate.get("clearance_level") if isinstance(candidate, dict) else None
+        required_clearance = job.get("job_security_clearance") if isinstance(job, dict) else None
+
+        # Strengths/gaps live on the agent_matching worker's "find_match" log.
+        strengths: List[str] = []
+        gaps: List[str] = []
+        try:
+            logs_result = await supabase.table("agent_logs").select(
+                "output_payload"
+            ).eq("related_match_id", match_id).eq("action", "find_match").execute()
+            for log in logs_result.data or []:
+                payload = log.get("output_payload") or {}
+                if isinstance(payload, dict):
+                    s = payload.get("strengths") or []
+                    g = payload.get("gaps") or []
+                    if isinstance(s, list) and s and not strengths:
+                        strengths = [str(x) for x in s]
+                    if isinstance(g, list) and g and not gaps:
+                        gaps = [str(x) for x in g]
+        except Exception as log_err:
+            logger.warning(f"Could not load strengths/gaps for match {match_id}: {log_err}")
+
+        # Clearance comparison — reuse the agent-screen logic.
+        try:
+            from pandapower.routers.admin.recruitment_departments import _compute_clearance_match
+            clearance_match = _compute_clearance_match(candidate_clearance, required_clearance)
+        except Exception:
+            clearance_match = "unknown"
+
+        return MatchDetailInfo(
+            id=str(row["id"]),
+            candidate_name=candidate.get("name", "Unknown") if isinstance(candidate, dict) else "Unknown",
+            candidate_id=str(candidate.get("id")) if isinstance(candidate, dict) and candidate.get("id") else None,
+            job_id=str(row.get("job_id", "")),
+            job_title=job.get("job_title", "Unknown") if isinstance(job, dict) else "Unknown",
+            company="",
+            phone=candidate.get("phone") if isinstance(candidate, dict) else None,
+            email=candidate.get("email") if isinstance(candidate, dict) else None,
+            match_score=float(row.get("match_score", 0) or 0),
+            match_reasoning=row.get("match_reasoning"),
+            strengths=strengths,
+            gaps=gaps,
+            candidate_clearance=candidate_clearance,
+            required_clearance=required_clearance,
+            clearance_match=clearance_match,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting match detail: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to get match detail")
 
 
 @router.get("/conversations/list", response_model=dict)

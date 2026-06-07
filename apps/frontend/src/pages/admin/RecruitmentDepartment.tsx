@@ -690,6 +690,7 @@ export const RecruitmentDepartment: React.FC = () => {
 
         {/* Real-time Matches Section */}
         {activeTab !== 'evaluated' && (
+        <>
         <div className="mb-8">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-3">
@@ -874,6 +875,8 @@ export const RecruitmentDepartment: React.FC = () => {
             )}
           </div>
         ))}
+        </>
+        )}
       </div>
 
       {/* Approve Modal */}
@@ -1066,7 +1069,6 @@ export const RecruitmentDepartment: React.FC = () => {
             <CandidateDecisionMatrix showTitle={true} agentCode={departmentCode} />
           </div>
         )}
-      </div>
     </div>
   );
 };

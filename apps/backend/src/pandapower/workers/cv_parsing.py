@@ -4,6 +4,8 @@ Extracts text from PDF/DOCX and parses with Claude API
 """
 
 import logging
+import os
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -13,6 +15,7 @@ from celery import shared_task
 from pandapower.core.supabase import get_supabase_client
 from pandapower.core.config import settings
 from pandapower.integrations.anthropic_client import AnthropicClient
+from pandapower.integrations.supabase_storage import SupabaseStorageManager
 
 import structlog as _structlog
 logger = _structlog.get_logger(__name__)
@@ -69,6 +72,33 @@ def extract_text_from_file(file_path: str) -> str:
         raise ValueError(f"Unsupported file type: {file_ext}")
 
 
+async def _ensure_local_file(db, cv_file: dict) -> str:
+    """Return a readable local path for a cv_files row.
+
+    Manual uploads save a fast-path copy under /tmp, but that disk is ephemeral
+    (e.g. on Render the dyno restarts). If the local copy is gone, fall back to
+    the durable Supabase Storage copy and download it to a temp file. The temp
+    file preserves the original extension so extract_text_from_file works.
+    """
+    file_path = cv_file.get("file_path")
+    if file_path and os.path.exists(file_path):
+        return file_path
+
+    storage_path = cv_file.get("storage_path")
+    if not storage_path:
+        raise FileNotFoundError(
+            f"CV file missing locally and has no storage_path: {cv_file.get('id')}"
+        )
+
+    storage = SupabaseStorageManager(db)
+    content = await storage.download_file(storage_path)
+    suffix = Path(cv_file.get("original_filename") or storage_path).suffix.lower() or ".pdf"
+    fd, tmp_path = tempfile.mkstemp(prefix="cv_dl_", suffix=suffix)
+    with os.fdopen(fd, "wb") as f:
+        f.write(content)
+    return tmp_path
+
+
 @shared_task(bind=True, max_retries=3, queue="cv-parsing")
 def parse_manual_cv_upload(self, cv_file_id: str, category_id: str):
     """
@@ -99,7 +129,6 @@ def parse_manual_cv_upload(self, cv_file_id: str, category_id: str):
             .execute()
         )
         cv_file = cv_file_response.data
-        file_path = cv_file["file_path"]
 
         logger.info(f"Parsing CV file: {cv_file['original_filename']}", cv_file_id=cv_file_id)
 
@@ -109,7 +138,9 @@ def parse_manual_cv_upload(self, cv_file_id: str, category_id: str):
             "parse_started_at": datetime.utcnow().isoformat(),
         }).eq("id", cv_file_id).execute()
 
-        # Extract text from file
+        # Resolve a readable local path (local /tmp fast-path, else download
+        # the durable Storage copy) and extract text from it.
+        file_path = await _ensure_local_file(db, cv_file)
         raw_text = extract_text_from_file(file_path)
         logger.info(f"Extracted {len(raw_text)} characters from CV", cv_file_id=cv_file_id)
 

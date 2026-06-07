@@ -3,11 +3,12 @@
  * For system administration and configuration
  */
 
-import { Outlet } from "react-router-dom";
+import { Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 
 export function AdminLayout() {
   const { user } = useAuth();
+  const navigate = useNavigate();
 
   return (
     <div className="flex h-screen flex-col bg-slate-950" dir="rtl">
@@ -15,6 +16,12 @@ export function AdminLayout() {
       <header className="h-14 border-b bg-slate-900 border-slate-700 px-6 flex items-center justify-between">
         <div className="text-sm text-slate-300">{user?.email || "לא מחובר"}</div>
         <div className="text-xl font-bold text-white">🔧 PandaPower - ניהול מערכת</div>
+        <button
+          onClick={() => navigate("/recruiting")}
+          className="text-xs px-3 py-1 rounded bg-indigo-700 hover:bg-indigo-600 text-white transition"
+        >
+          👥 חטיבת גיוס
+        </button>
       </header>
 
       <div className="flex flex-1 overflow-hidden">

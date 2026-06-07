@@ -3,6 +3,7 @@ Manual CV upload endpoint for admins
 Allows uploading single or multiple CVs with category selection
 """
 
+import hashlib
 import logging
 import os
 import uuid
@@ -14,7 +15,15 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile, Depends
 from fastapi.responses import JSONResponse
 
 from pandapower.core.supabase import get_supabase_client
+from pandapower.integrations.supabase_storage import SupabaseStorageManager
 from pandapower.workers.cv_parsing import parse_manual_cv_upload
+
+# Map file extensions to MIME types for durable storage uploads
+_CONTENT_TYPES = {
+    ".pdf": "application/pdf",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
 
 import structlog as _structlog
 logger = _structlog.get_logger(__name__)
@@ -55,7 +64,7 @@ async def upload_cv_manual(
         }
     """
 
-    db = get_supabase_client()
+    db = await get_supabase_client()
 
     try:
         # Validate category exists
@@ -72,10 +81,14 @@ async def upload_cv_manual(
             raise HTTPException(status_code=404, detail="Category not found")
 
         uploaded_files = []
+        skipped_duplicates = []
         batch_id = str(uuid.uuid4())
         errors = []
 
-        # Create temporary directory for batch
+        storage = SupabaseStorageManager(db)
+
+        # Create temporary directory for batch (fast-path for parsing if the
+        # dyno is still alive; the durable copy lives in Supabase Storage).
         temp_dir = Path(f"/tmp/cv_uploads/{batch_id}")
         temp_dir.mkdir(parents=True, exist_ok=True)
 
@@ -100,18 +113,52 @@ async def upload_cv_manual(
                     )
                     continue
 
-                # Save to temp location
+                # Content hash → dedup against everything already ingested
+                # (email path or prior manual upload). If it already exists the
+                # CV is already safely in the system; report and skip.
+                file_hash = hashlib.sha256(file_content).hexdigest()
+                existing = (
+                    await db.table("cv_files")
+                    .select("id")
+                    .eq("file_hash", file_hash)
+                    .limit(1)
+                    .execute()
+                )
+                if existing.data:
+                    skipped_duplicates.append({
+                        "filename": file.filename,
+                        "file_id": existing.data[0]["id"],
+                    })
+                    continue
+
+                # Save to temp location (fast-path for parsing)
                 file_path = temp_dir / file.filename
                 with open(file_path, "wb") as f:
                     f.write(file_content)
+
+                # Upload a DURABLE copy to Supabase Storage so the file survives
+                # dyno restarts even if parsing is deferred (e.g. Anthropic
+                # quota). Non-ASCII filenames get a hash-based name.
+                content_type = _CONTENT_TYPES.get(file_ext, "application/octet-stream")
+                try:
+                    file.filename.encode("ascii")
+                    safe_filename = file.filename
+                except UnicodeEncodeError:
+                    safe_filename = f"cv_{file_hash[:8]}{file_ext}"
+                storage_path = f"cvs/manual/{batch_id}/{file_hash}/{safe_filename}"
+                await storage.upload_file(storage_path, file_content, content_type)
 
                 # Create entry in database
                 cv_file_insert = {
                     "original_filename": file.filename,
                     "file_path": str(file_path),
+                    "storage_path": storage_path,
+                    "file_hash": file_hash,
+                    "mime_type": content_type,
                     "file_extension": file_ext,
                     "file_size_bytes": len(file_content),
                     "upload_method": "manual",
+                    "source": "manual",
                     "category_id": category_id,
                     "batch_id": batch_id,
                     "parse_status": "pending",
@@ -154,8 +201,9 @@ async def upload_cv_manual(
                 errors.append(f"{file.filename}: {str(e)}")
                 continue
 
-        # Check if any files were uploaded
-        if len(uploaded_files) == 0:
+        # Only an error if nothing landed AND nothing was already present.
+        # All-duplicates is success: those CVs are already in the system.
+        if len(uploaded_files) == 0 and len(skipped_duplicates) == 0:
             raise HTTPException(
                 status_code=400,
                 detail=f"No valid files uploaded. Errors: {'; '.join(errors)}"
@@ -165,6 +213,8 @@ async def upload_cv_manual(
             "batch_id": batch_id,
             "uploaded_count": len(uploaded_files),
             "files": uploaded_files,
+            "already_in_system_count": len(skipped_duplicates),
+            "already_in_system": skipped_duplicates,
             "category_id": category_id,
             "category_name": category["name"],
             "total_attempted": len(files),
@@ -205,7 +255,7 @@ async def get_candidate_categories():
         ]
     }
     """
-    db = get_supabase_client()
+    db = await get_supabase_client()
 
     try:
         response = (
@@ -245,7 +295,7 @@ async def get_upload_status(batch_id: str):
         ]
     }
     """
-    db = get_supabase_client()
+    db = await get_supabase_client()
 
     try:
         response = (
@@ -291,7 +341,7 @@ async def get_recent_uploads(limit: int = 10):
         ]
     }
     """
-    db = get_supabase_client()
+    db = await get_supabase_client()
 
     try:
         # Get distinct batch IDs from recent uploads

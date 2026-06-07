@@ -11,9 +11,9 @@ import { RECRUITMENT_AGENTS, RECRUITERS } from "@/data/agents";
 export function WorkLayout() {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const [showAgentsMenu, setShowAgentsMenu] = useState(false);
-  const [showRecruitersMenu, setShowRecruitersMenu] = useState(false);
-  const [showCarmitMenu, setShowCarmitMenu] = useState(false);
+  const [showAgentsMenu, setShowAgentsMenu] = useState(true);
+  const [showRecruitersMenu, setShowRecruitersMenu] = useState(true);
+  const [showCarmitMenu, setShowCarmitMenu] = useState(true);
   const [showPandiMenu, setShowPandiMenu] = useState(false);
 
   return (
@@ -49,6 +49,12 @@ export function WorkLayout() {
                 className="w-full text-right px-4 py-3 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white font-semibold transition text-sm"
               >
                 📊 לוח בקרה ראשי
+              </button>
+              <button
+                onClick={() => navigate("/admin/analytics")}
+                className="w-full text-right px-4 py-2 mt-1 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white font-semibold transition text-sm"
+              >
+                📈 דוחות ואנליטיקה
               </button>
             </div>
 
@@ -159,18 +165,6 @@ export function WorkLayout() {
               )}
             </div>
 
-            {/* Quick Links */}
-            <div className="border-t border-gray-700 pt-4">
-              <div className="px-3 py-2 font-semibold text-gray-400 text-sm">קישורים מהירים</div>
-              <nav className="space-y-1 mt-2">
-                <a href="/recruiting/pending-matches" className="block px-3 py-2 rounded text-gray-300 hover:bg-gray-700 text-sm">
-                  ⏳ התאמות מחכות
-                </a>
-                <a href="/recruiting/my-conversations" className="block px-3 py-2 rounded text-gray-300 hover:bg-gray-700 text-sm">
-                  💬 השיחות שלי
-                </a>
-              </nav>
-            </div>
           </div>
         </aside>
 
