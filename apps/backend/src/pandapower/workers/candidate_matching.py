@@ -23,11 +23,16 @@ logger = logging.getLogger(__name__)
 
 
 class SecurityLevel(Enum):
-    """Security clearance levels."""
+    """Security clearance levels.
+
+    IMPORTANT: in the Israeli scheme רמה 1 is the HIGHEST clearance and רמה 3
+    the lowest. The enum *value* encodes rank (higher value = higher clearance),
+    so the numbered levels are inverted: LEVEL_1 = 3, LEVEL_2 = 2, LEVEL_3 = 1.
+    """
     NONE = 0
-    LEVEL_1 = 1
+    LEVEL_3 = 1
     LEVEL_2 = 2
-    LEVEL_3 = 3
+    LEVEL_1 = 3
 
     @staticmethod
     def from_string(level_str: str) -> "SecurityLevel":

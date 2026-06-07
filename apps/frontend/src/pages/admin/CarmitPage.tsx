@@ -192,7 +192,7 @@ export const CarmitPage = () => {
   const [jobToOverride, setJobToOverride] = useState<any | null>(null);
   const [selectedNewAgent, setSelectedNewAgent] = useState('');
   const [overrideError, setOverrideError] = useState('');
-  const [agentMatchesGroupBy, setAgentMatchesGroupBy] = useState<'none' | 'state' | 'agent' | 'clearance'>('none');
+  const [agentMatchesGroupBy, setAgentMatchesGroupBy] = useState<'none' | 'state' | 'agent' | 'clearance' | 'candidate'>('none');
   const [allJobsGroupBy, setAllJobsGroupBy] = useState<'none' | 'priority' | 'assigned_agent' | 'status'>('none');
 
   // Fetch KPI metrics
@@ -680,10 +680,11 @@ export const CarmitPage = () => {
               <label className="text-sm text-gray-300 font-semibold">קיבוץ לפי:</label>
               <select
                 value={agentMatchesGroupBy}
-                onChange={(e) => setAgentMatchesGroupBy(e.target.value as 'none' | 'state' | 'agent' | 'clearance')}
+                onChange={(e) => setAgentMatchesGroupBy(e.target.value as 'none' | 'state' | 'agent' | 'clearance' | 'candidate')}
                 className="bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-1.5 focus:border-blue-500 outline-none"
               >
                 <option value="none">ללא קיבוץ</option>
+                <option value="candidate">שם מועמד</option>
                 <option value="state">מצב</option>
                 <option value="agent">סוכן</option>
                 <option value="clearance">סיווג בטחוני</option>
@@ -962,6 +963,8 @@ export const CarmitPage = () => {
                         groupKey = m.agent_code || 'Unknown';
                       } else if (agentMatchesGroupBy === 'clearance') {
                         groupKey = m.clearance_match || 'unknown';
+                      } else if (agentMatchesGroupBy === 'candidate') {
+                        groupKey = m.candidate_name || 'ללא שם';
                       }
                       if (!groups[groupKey]) groups[groupKey] = [];
                       groups[groupKey].push(m);
@@ -973,6 +976,7 @@ export const CarmitPage = () => {
                           {agentMatchesGroupBy === 'state' && `מצב: ${stateLabelHe(groupName)}`}
                           {agentMatchesGroupBy === 'agent' && `סוכן: ${agentNameHe(groupName)}`}
                           {agentMatchesGroupBy === 'clearance' && `סיווג בטחוני: ${groupName}`}
+                          {agentMatchesGroupBy === 'candidate' && `מועמד: ${groupName}`}
                           <span className="text-sm text-gray-400 ml-2">({groupMatches.length})</span>
                         </h3>
                         <div className="overflow-x-auto">

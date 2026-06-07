@@ -1021,6 +1021,45 @@ async def get_agent_matches(
                 # only the modal does, and the modal degrades gracefully.
                 logger.warning(f"agent_matches: strengths/gaps lookup failed: {log_err}")
 
+        # ── Batch-load Carmit's decision reasoning from match_state_history ─
+        # For rows Carmit already ruled on (carmit_rejected / carmit_approved)
+        # we surface WHY in the row: the decision_reasoning + the list of gates
+        # that failed with their specific reasons. Same batch pattern as above
+        # to avoid a per-row round-trip.
+        carmit_decision_by_match: dict[str, dict[str, Any]] = {}
+        if match_ids:
+            try:
+                hist_resp = await (
+                    supabase.table("match_state_history")
+                    .select("match_id, to_state, created_at, details")
+                    .in_("match_id", match_ids)
+                    .in_("to_state", ["carmit_rejected", "carmit_approved"])
+                    .order("created_at", desc=True)
+                    .execute()
+                )
+                for h in hist_resp.data or []:
+                    mid = str(h.get("match_id") or "")
+                    if not mid or mid in carmit_decision_by_match:
+                        continue  # keep most recent (rows are date-desc)
+                    details = h.get("details") or {}
+                    raw_gates = details.get("gate_results") or {}
+                    failed_gates = []
+                    if isinstance(raw_gates, dict):
+                        for gname, ginfo in raw_gates.items():
+                            if isinstance(ginfo, dict) and not ginfo.get("passed", False):
+                                failed_gates.append({
+                                    "gate": gname,
+                                    "reason": ginfo.get("reason") or "",
+                                })
+                    carmit_decision_by_match[mid] = {
+                        "decision": "rejected" if "rejected" in (h.get("to_state") or "") else "approved",
+                        "reasoning": details.get("decision_reasoning") or "",
+                        "failed_gates": failed_gates,
+                        "decided_at": h.get("created_at"),
+                    }
+            except Exception as hist_err:
+                logger.warning(f"agent_matches: carmit decision lookup failed: {hist_err}")
+
         # ── Clearance comparison helper (computed match/partial/mismatch) ──
         # Reuse the same logic the per-agent screens use so the badge is
         # consistent across all dashboards.
@@ -1062,6 +1101,9 @@ async def get_agent_matches(
                 "reasoning_preview": (reasoning[:140] + "…") if len(reasoning) > 140 else reasoning,
                 "strengths": strengths_by_match.get(match_id, []),
                 "gaps": gaps_by_match.get(match_id, []),
+                # Carmit's quality-gate ruling (None if she hasn't ruled yet).
+                # Lets the UI explain WHY a match was rejected/approved per row.
+                "carmit_decision": carmit_decision_by_match.get(match_id),
                 "created_at": row.get("created_at"),
                 "updated_at": row.get("updated_at"),
             })

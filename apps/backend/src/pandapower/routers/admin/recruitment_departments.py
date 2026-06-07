@@ -13,31 +13,36 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin/departments", tags=["admin", "departments"])
 
 
-# Hebrew security-clearance hierarchy (low -> high).
+# Hebrew security-clearance hierarchy.
 # Verified against real values in the production jobs.job_security_clearance
 # column: {'ללא', 'ללא סווג', 'רמה 1', 'רמה 3', 'רמה 1 + שוס'}.
-# Higher rank = higher clearance.
+#
+# IMPORTANT: in the Israeli scheme רמה 1 is the HIGHEST clearance and רמה 3 the
+# lowest. We store an internal rank where a HIGHER number = HIGHER clearance
+# (so all comparisons can use cand_rank >= req_rank), which means the numbered
+# level is INVERTED: רמה 1 → 3, רמה 2 → 2, רמה 3 → 1. "+ שוס" is an extra
+# vetting layer that sits strictly above every plain numbered level.
 _CLEARANCE_RANK = {
     # "No clearance" variants — anything goes
     "ללא": 0,
     "ללא סווג": 0,
     "ללא סיווג": 0,
     "none": 0,
-    # Level 1 (basic confidential)
-    "רמה 1": 1,
+    # Numbered levels (inverted: רמה 1 is highest)
+    "רמה 3": 1,
+    "רמה 2": 2,
+    "רמה 1": 3,
+    # "+ שוס" tier — strictly above all plain levels, same inverted order within
+    "רמה 3 + שוס": 4,
+    "רמה 2 + שוס": 5,
+    "רמה 1 + שוס": 6,
+    # English / colloquial equivalents (best-effort, rarely seen in real data)
     "סודי": 1,
     "secret": 1,
-    # Level 2
-    "רמה 2": 2,
     "סודי ביותר": 2,
     "top secret": 2,
     "ts": 2,
     "טופ סיקרט": 2,
-    # Level 3 (top secret + polygraph or higher)
-    "רמה 3": 3,
-    "רמה 1 + שוס": 3,
-    "רמה 2 + שוס": 3,
-    "רמה 3 + שוס": 3,
 }
 
 
@@ -58,11 +63,18 @@ def _clearance_rank(value: Optional[str]) -> Optional[int]:
     # "ללא X" / "no X" → no requirement (rank 0)
     if norm.startswith("ללא") or norm.startswith("none"):
         return 0
-    # "רמה N" or "level N" → use the number if we can parse it
+    # "רמה N" / "level N" / a bare "N" → invert the number (רמה 1 is the
+    # highest) and add a bonus for the "+ שוס" tier so it ranks above plain
+    # levels. NOTE: candidate clearances are often stored as a bare digit
+    # ("2", "3") while jobs use "רמה 1" — both must rank identically.
     import re as _re
     m = _re.search(r"\b(\d)\b", norm)
-    if m and ("רמה" in norm or "level" in norm):
-        return int(m.group(1))
+    if m and ("רמה" in norm or "level" in norm or norm == m.group(1)):
+        n = int(m.group(1))
+        base = max(0, 4 - n) if 1 <= n <= 3 else 0
+        if base > 0 and "שוס" in norm:
+            base += 3
+        return base
     return None
 
 
