@@ -712,12 +712,14 @@ COMPREHENSIVE EVALUATION CRITERIA:
 6. Language requirements met? (if applicable)
 7. Is there a security clearance gap or mismatch (if required)?
 
+IMPORTANT: Write the "reasoning", "strengths", and "gaps" text in HEBREW (עברית). The score must remain an integer. Do NOT write these explanations in English — they are displayed to Hebrew-speaking recruiters.
+
 Return ONLY valid JSON (no extra text):
 {{
   "score": <integer 0-100 where 70+ is a viable match>,
-  "reasoning": "<2-3 sentence explanation covering: relevant experience, key skills match, and any clearance/language concerns>",
-  "strengths": ["<concrete match point 1 from CV data>", "<concrete match point 2 from CV data>"],
-  "gaps": ["<skill gap if any>", "<clearance gap if any>", "<concern if any>"]
+  "reasoning": "<הסבר של 2-3 משפטים בעברית הכולל: ניסיון רלוונטי, התאמת כישורים מרכזיים, וכל חשש לגבי סיווג ביטחוני/שפה>",
+  "strengths": ["<נקודת התאמה קונקרטית 1 מתוך נתוני קורות החיים, בעברית>", "<נקודת התאמה קונקרטית 2 מתוך נתוני קורות החיים, בעברית>"],
+  "gaps": ["<פער כישורים אם קיים, בעברית>", "<פער סיווג ביטחוני אם קיים, בעברית>", "<חשש אם קיים, בעברית>"]
 }}"""
 
         return prompt

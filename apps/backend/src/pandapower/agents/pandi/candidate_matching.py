@@ -316,21 +316,21 @@ class CandidateMatchingEngine:
 
         # Skills match
         if must_have_matched == must_have_total and must_have_total > 0:
-            reasons.append(f"✓ Has all {must_have_total} must-have skills")
+            reasons.append(f"✓ כל {must_have_total} כישורי החובה קיימים")
         elif must_have_matched > 0:
-            reasons.append(f"✓ Has {must_have_matched}/{must_have_total} must-have skills")
+            reasons.append(f"✓ {must_have_matched}/{must_have_total} כישורי חובה קיימים")
         else:
-            reasons.append(f"✗ Missing must-have skills ({must_have_total} required)")
+            reasons.append(f"✗ חסרים כישורי חובה ({must_have_total} נדרשים)")
 
         if nice_to_have_matched > 0:
-            reasons.append(f"✓ Has {nice_to_have_matched} nice-to-have skills")
+            reasons.append(f"✓ {nice_to_have_matched} כישורים מועדפים קיימים")
 
         # Experience
         if candidate_years >= required_years:
-            reasons.append(f"✓ {candidate_years:.0f}y experience (≥ {required_years:.0f}y required)")
+            reasons.append(f"✓ {candidate_years:.0f} שנות ניסיון (≥ {required_years:.0f} נדרשות)")
         else:
             reasons.append(
-                f"~ {candidate_years:.0f}y experience (needed {required_years:.0f}y, slight gap)"
+                f"~ {candidate_years:.0f} שנות ניסיון (נדרשו {required_years:.0f}, פער קל)"
             )
 
         # Clearance
@@ -339,18 +339,18 @@ class CandidateMatchingEngine:
             if candidate_clearance and candidate_clearance.lower() in clearance_hierarchy:
                 if clearance_hierarchy.index(candidate_clearance.lower()) >= \
                    clearance_hierarchy.index(required_clearance.lower()):
-                    reasons.append(f"✓ Has required clearance ({candidate_clearance})")
+                    reasons.append(f"✓ בעל סיווג ביטחוני נדרש ({candidate_clearance})")
                 else:
-                    reasons.append(f"⚠ Clearance below requirement ({candidate_clearance})")
+                    reasons.append(f"⚠ סיווג ביטחוני מתחת לנדרש ({candidate_clearance})")
             else:
-                reasons.append("⚠ Clearance status unclear")
+                reasons.append("⚠ סטטוס סיווג ביטחוני לא ברור")
 
         # Location
         if location_preference and location_preference.lower() != "any":
             if self._location_matches(candidate_city, location_preference):
-                reasons.append(f"✓ Location matches ({candidate_city})")
+                reasons.append(f"✓ מיקום תואם ({candidate_city})")
             else:
-                reasons.append(f"⚠ Location different ({candidate_city})")
+                reasons.append(f"⚠ מיקום שונה ({candidate_city})")
 
         return " ".join(reasons)
 

@@ -226,11 +226,11 @@ class CarmitOrchestrator:
             # Determine final decision
             if gates_passed:
                 new_state = "carmit_approved"
-                decision_reasoning = "All quality gates passed"
+                decision_reasoning = "כל מבחני האיכות עברו בהצלחה"
             else:
                 new_state = "carmit_rejected"
                 failed_gates = [k for k, v in gate_results.items() if not v["passed"]]
-                decision_reasoning = f"Failed gates: {', '.join(failed_gates)}"
+                decision_reasoning = f"נכשל במבחנים: {', '.join(failed_gates)}"
 
             # Store gate results in match_state_history
             await self._store_match_review(
