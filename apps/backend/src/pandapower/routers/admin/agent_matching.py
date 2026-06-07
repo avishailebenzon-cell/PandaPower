@@ -148,7 +148,7 @@ def _get_demo_system_status() -> "SystemStatus":
             ),
             AgentStatus(
                 agent_code="gc",
-                agent_name="GC",
+                agent_name="כללי",
                 domain="Generalist Coordinator",
                 status="processing",
                 current_task="Analyzing candidates across multiple positions",
@@ -480,7 +480,7 @@ async def get_agent(agent_code: str) -> AgentInfo:
     config = AGENT_CONFIGS[agent_code]
     return AgentInfo(
         code=agent_code,
-        name=config["name"],
+        name=config.get("name_he", config["name"]),
         domain=config["domain"],
         keywords=config["keywords"],
         skill_categories=config["skill_categories"],
@@ -974,7 +974,7 @@ async def get_system_status(
             agent_statuses.append(
                 AgentStatus(
                     agent_code=agent_code,
-                    agent_name=agent_config["name"],
+                    agent_name=agent_config.get("name_he", agent_config["name"]),
                     domain=agent_config["domain"],
                     status=agent_state.get("status", "idle"),
                     current_task=agent_state.get("current_task_description"),

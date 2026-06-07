@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { agentNameHe } from "@/data/agents";
 import {
   LineChart,
   Line,
@@ -405,7 +406,7 @@ export const AnalyticsDashboard: React.FC = () => {
                         className={idx % 2 === 0 ? "bg-gray-800" : "bg-gray-900"}
                       >
                         <td className="px-3 py-2 text-white font-semibold">
-                          {agent.agent_code}
+                          {agentNameHe(agent.agent_code)}
                         </td>
                         <td className="px-3 py-2 text-gray-300">
                           {agent.matches_found}

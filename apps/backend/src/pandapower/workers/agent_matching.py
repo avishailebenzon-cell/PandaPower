@@ -42,7 +42,12 @@ def _toks(*parts) -> set:
 
 
 def _clearance_level(val) -> int:
-    """Map a clearance string to 0-3 (0 = none/unknown)."""
+    """Rank a clearance string so a HIGHER number = HIGHER clearance.
+
+    IMPORTANT: in the Israeli scheme רמה 1 is the HIGHEST clearance and רמה 3
+    the lowest, so the numbered level is inverted (רמה 1 → 3, רמה 3 → 1).
+    "+ שוס" adds a vetting tier above the plain level. 0 = none/unknown.
+    """
     if not val:
         return 0
     s = str(val).lower()
@@ -50,7 +55,11 @@ def _clearance_level(val) -> int:
         return 0
     m = re.search(r"(\d)", s)
     if m:
-        return min(3, int(m.group(1)))
+        n = int(m.group(1))
+        base = max(0, 4 - n) if 1 <= n <= 3 else 0
+        if base > 0 and "שוס" in s:
+            base += 3
+        return base
     if any(x in s for x in ["secret", "high", "מסווג", "גבוה", "שוס"]):
         return 2
     return 0
@@ -59,42 +68,49 @@ def _clearance_level(val) -> int:
 AGENT_CONFIGS = {
     "alik": {
         "name": "Alik",
+        "name_he": "אליק",
         "domain": "Electronics & Hardware",
         "keywords": "Verilog, VHDL, FPGA, PCB, RF, Analog, Digital Design, Embedded Systems",
         "skill_categories": ["electronics", "hardware", "fpga", "embedded"],
     },
     "naama": {
         "name": "Naama",
+        "name_he": "נעמה",
         "domain": "Software & Cloud",
         "keywords": "Python, Java, C++, Cloud, Microservices, AWS, Azure, Docker, Kubernetes",
         "skill_categories": ["software", "backend", "cloud", "devops"],
     },
     "dganit": {
         "name": "Dganit",
+        "name_he": "דגנית",
         "domain": "QA & Testing",
         "keywords": "Testing, Selenium, LoadRunner, Automation, Test Frameworks, Performance",
         "skill_categories": ["qa", "testing", "automation", "quality"],
     },
     "ofir": {
         "name": "Ofir",
+        "name_he": "אופיר",
         "domain": "Systems & DevOps",
         "keywords": "Linux, Networking, DevOps, Container, Kubernetes, Infrastructure",
         "skill_categories": ["devops", "systems", "linux", "infrastructure"],
     },
     "itai": {
         "name": "Itai",
+        "name_he": "איתי",
         "domain": "IT & Infrastructure",
         "keywords": "Infrastructure, Windows, Helpdesk, Networks, Active Directory, IT Support",
         "skill_categories": ["infrastructure", "it", "windows", "support"],
     },
     "lior": {
         "name": "Lior",
+        "name_he": "ליאור",
         "domain": "Mechanical Engineering",
         "keywords": "CAD, SOLIDWORKS, FEA, Manufacturing, Mechanical Design, 3D Modeling",
         "skill_categories": ["mechanical", "cad", "manufacturing", "design"],
     },
     "gc": {
         "name": "GC (Catch-all)",
+        "name_he": "כללי",
         "domain": "General Domain Coverage",
         "keywords": "Any domain not covered by specialized agents",
         "skill_categories": ["general"],
@@ -105,6 +121,7 @@ AGENT_CONFIGS = {
     # dedicated worker (workers/mani_matching.py) sweeps Level-1 pairs.
     "mani": {
         "name": "Mani",
+        "name_he": "מני",
         "domain": "Security-Clearance Specialist (Level 1)",
         "keywords": "Security clearance, רמה 1, Level 1, classified, defense",
         "skill_categories": ["security", "clearance", "defense", "classified"],
@@ -434,7 +451,7 @@ class AgentMatchingWorker:
         reasoning = (
             f"ניקוד מקומי {score}/100 (סינון ראשוני, ללא Claude — לא נכנס ל-Top {MATCH_CLAUDE_TOP_N}). "
             f"חפיפת כישורים: {', '.join(matched) if matched else 'אין'}. "
-            f"ניסיון: {yrs} שנים. סיווג: מועמד רמה {c_clr} מול דרישת רמה {j_clr}."
+            f"ניסיון: {yrs} שנים. סיווג: מועמד '{candidate.get('clearance_level') or 'ללא'}' מול דרישת '{job.get('job_security_clearance') or 'ללא'}'."
         )
         return score, reasoning
 
@@ -687,6 +704,7 @@ LANGUAGES:
 SECURITY CLEARANCE:
 Current Level: {cand_clearance or 'None'}
 {clearance_text}
+(IMPORTANT — Israeli clearance hierarchy: רמה 1 is the HIGHEST clearance, רמה 2 is medium, רמה 3 is the LOWEST. "+ שוס" is an extra tier above the plain level. A candidate satisfies a requirement only if their clearance is EQUAL OR HIGHER, i.e. an EQUAL OR LOWER רמה number. Do NOT treat a larger רמה number as a higher clearance.)
 
 JOB REQUIREMENTS:
 Title: {job_title}

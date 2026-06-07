@@ -11,9 +11,22 @@ from pandapower.integrations.pipedrive import PipedriveClient
 logger = logging.getLogger(__name__)
 
 # Clearance level hierarchy
+# NOTE: kept for backward-compat / settings override only. The clearance gate
+# now ranks via recruitment_departments._clearance_rank, which understands the
+# Hebrew hierarchy (רמה 1 is the HIGHEST clearance, רמה 3 the lowest).
 CLEARANCE_LEVELS = {
     None: 0,
     "none": 0,
+    "ללא": 0,
+    "ללא סווג": 0,
+    "ללא סיווג": 0,
+    # רמה 1 is the highest → highest rank (inverted numbering)
+    "רמה 3": 1,
+    "רמה 2": 2,
+    "רמה 1": 3,
+    "רמה 3 + שוס": 4,
+    "רמה 2 + שוס": 5,
+    "רמה 1 + שוס": 6,
     "secret": 1,
     "top secret": 2,
     "ts/sci": 3,
@@ -62,7 +75,8 @@ class CarmitOrchestrator:
             "ofir": {"name": "אופיר", "domain": "Systems", "skills": ["Linux", "Networking", "DevOps", "Container"]},
             "itai": {"name": "איתי", "domain": "IT", "skills": ["Infrastructure", "Windows", "Helpdesk", "Networks"]},
             "lior": {"name": "ליאור", "domain": "Mechanical", "skills": ["CAD", "SOLIDWORKS", "FEA", "Manufacturing"]},
-            "gc": {"name": "GC", "domain": "General", "skills": ["All other domains"]},
+            "gc": {"name": "כללי", "domain": "General", "skills": ["All other domains"]},
+            "mani": {"name": "מני", "domain": "Security Clearance", "skills": ["רמה 1", "Level 1 Clearance"]},
         }
 
     async def route_job_to_agent(self, job_id: str) -> dict[str, Any]:
@@ -467,12 +481,18 @@ Return ONLY valid JSON (no markdown, no extra text):
             {passed: bool, reason: str}
         """
         try:
-            candidate_clearance = str(candidate.get("clearance_level", "none")).lower()
-            job_required_clearance = str(job.get("job_security_clearance", "none")).lower()
+            candidate_clearance = candidate.get("clearance_level") or "none"
+            job_required_clearance = job.get("job_security_clearance") or "none"
 
-            # Get clearance levels
-            candidate_level = self.clearance_levels.get(candidate_clearance, 0)
-            required_level = self.clearance_levels.get(job_required_clearance, 0)
+            # Rank via the canonical Hebrew-aware ranker (רמה 1 = highest).
+            # Falls back to the local dict for any value it can't parse.
+            from pandapower.routers.admin.recruitment_departments import _clearance_rank
+            candidate_level = _clearance_rank(candidate_clearance)
+            required_level = _clearance_rank(job_required_clearance)
+            if candidate_level is None:
+                candidate_level = self.clearance_levels.get(str(candidate_clearance).lower(), 0)
+            if required_level is None:
+                required_level = self.clearance_levels.get(str(job_required_clearance).lower(), 0)
 
             if candidate_level < required_level:
                 return {

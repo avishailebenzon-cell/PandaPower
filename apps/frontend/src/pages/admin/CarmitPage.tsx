@@ -10,6 +10,7 @@ import { RecruiterMatchesPanel } from '@/components/RecruiterMatchesPanel';
 import { CandidateDecisionMatrix } from '@/components/CandidateDecisionMatrix';
 import { MatchDetailModal } from '@/components/MatchDetailModal';
 import type { DepartmentMatch, ClearanceMatch } from '@/api/recruitment-departments';
+import { agentNameHe } from '@/data/agents';
 
 // Shape of each row from GET /admin/carmit/agent-matches.
 // The backend returns enough candidate + match detail to populate both
@@ -43,9 +44,49 @@ interface AgentMatchRow {
   reasoning_preview: string;
   strengths: string[];
   gaps: string[];
+  // Carmit's quality-gate ruling — null until she reviews. Explains WHY a
+  // match was rejected/approved (decision_reasoning + the gates that failed).
+  carmit_decision: {
+    decision: 'approved' | 'rejected';
+    reasoning: string;
+    failed_gates: { gate: string; reason: string }[];
+    decided_at: string | null;
+  } | null;
   created_at: string;
   updated_at: string;
 }
+
+// Human-readable Hebrew labels for Carmit's quality gates. Keys match the
+// gate names the carmit worker writes into match_state_history.details.
+const GATE_LABELS_HE: Record<string, string> = {
+  past_rejection: 'נדחה בעבר לתפקיד זה',
+  already_declined: 'המועמד דחה בעבר',
+  conflict_of_interest: 'ניגוד עניינים',
+  clearance_match: 'התאמת סיווג ביטחוני',
+  quality_threshold: 'סף ציון איכות',
+  relevant_skills: 'כישורים רלוונטיים',
+};
+
+// Hebrew labels for match pipeline states. Mirrors the inline STATE_BADGES
+// used in the non-grouped agent-matches table so the grouped view (and any
+// other raw-state display) shows Hebrew instead of the DB enum value.
+const STATE_LABELS_HE: Record<string, string> = {
+  found: 'נמצא',
+  carmit_approved: 'אושר ע״י כרמית',
+  carmit_rejected: 'נדחה ע״י כרמית',
+  sent_to_tal: 'ממתינה לטל',
+  tal_conversation: 'בשיחה עם טל',
+  tal_approved: 'אושר ע״י טל',
+  tal_rejected: 'נדחה ע״י טל',
+  sent_to_elad: 'ממתינה לאלעד',
+  elad_conversation: 'בשיחה עם אלעד',
+  elad_approved: 'אושר ע״י אלעד',
+  hired: '🎉 הושמה',
+  placement_failed: 'כשלון השמה',
+};
+
+const stateLabelHe = (state: string): string =>
+  STATE_LABELS_HE[state] || state;
 
 interface GateResult {
   passed: boolean;
@@ -63,6 +104,10 @@ interface CarmitDecision {
   decided_at: string;
   candidate_id?: string;
   job_id?: string;
+  // Current pipeline status of the match (backend /decisions returns these).
+  current_state?: string;
+  state_display?: string;
+  state_label?: string;
 }
 
 interface Match {
@@ -105,13 +150,14 @@ interface KPIMetrics {
 
 // Agent configuration
 const AGENTS = [
-  { code: 'alik', name: 'עליק' },
   { code: 'naama', name: 'נעמה' },
+  { code: 'alik', name: 'אליק' },
   { code: 'dganit', name: 'דגנית' },
   { code: 'ofir', name: 'אופיר' },
   { code: 'itai', name: 'איתי' },
   { code: 'lior', name: 'ליאור' },
-  { code: 'gc', name: 'גיא קורדינטור' },
+  { code: 'gc', name: 'כללי' },
+  { code: 'mani', name: 'מני' },
 ];
 
 export const CarmitPage = () => {
@@ -120,7 +166,7 @@ export const CarmitPage = () => {
 
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<
-    'candidate-matrix' | 'queue' | 'history' | 'decisions' | 'agent-matches' | 'all-jobs' | 'sent-to-tal' | 'sent-to-elad'
+    'candidate-matrix' | 'queue' | 'decisions' | 'agent-matches' | 'all-jobs' | 'sent-to-tal' | 'sent-to-elad'
   >('decisions');
   // Pagination state for the new "agent-matches" tab (≥70% from all 8 agents).
   const [agentMatchesPage, setAgentMatchesPage] = useState(0);
@@ -222,6 +268,7 @@ export const CarmitPage = () => {
           assigned_agent_code?: string;
           assigned_agent_name?: string;
           contact_person_name?: string;
+          organization_name?: string;
           job_opening_date?: string;
           is_routed: boolean;
           created_at: string;
@@ -350,17 +397,6 @@ export const CarmitPage = () => {
           🔍 תור ביקורת כרמית
         </button>
         <button
-          onClick={() => setActiveTab('history')}
-          className={`px-6 py-3 font-semibold transition whitespace-nowrap ${
-            activeTab === 'history'
-              ? 'text-blue-400 border-b-2 border-blue-400'
-              : 'text-gray-400 hover:text-gray-200'
-          }`}
-          title="החלטות כרמית (אושרו/נדחו)"
-        >
-          📋 החלטות כרמית
-        </button>
-        <button
           onClick={() => setActiveTab('decisions')}
           className={`px-6 py-3 font-semibold transition whitespace-nowrap ${
             activeTab === 'decisions'
@@ -431,20 +467,6 @@ export const CarmitPage = () => {
             </p>
           </div>
           <RecruiterMatchesPanel recruiter="carmit" showSubTabs={false} initialSubTab="queue" />
-        </div>
-      )}
-
-      {/* === החלטות כרמית === */}
-      {/* Matches that Carmit has already reviewed (approved/rejected) */}
-      {activeTab === 'history' && (
-        <div className="space-y-4">
-          <div>
-            <h2 className="text-2xl font-bold text-white">📋 החלטות כרמית</h2>
-            <p className="text-sm text-gray-400">
-              התאמות שכרמית כבר בדקה וקיבלה החלטה (אושרו או נדחו לאחר ביקורת 5 השערים).
-            </p>
-          </div>
-          <RecruiterMatchesPanel recruiter="carmit" showSubTabs={false} initialSubTab="history" />
         </div>
       )}
 
@@ -535,9 +557,9 @@ export const CarmitPage = () => {
                     <div className="grid grid-cols-2 gap-2">
                       {Object.entries(decision.gate_results).map(([gate, result]) => (
                         <div key={gate} className="flex items-start gap-2 text-xs bg-gray-900 p-2 rounded">
-                          <span className={result.passed ? '✅' : '❌'} />
+                          <span>{result.passed ? '✅' : '❌'}</span>
                           <div>
-                            <p className="text-gray-300 font-medium capitalize">{gate.replace(/_/g, ' ')}</p>
+                            <p className="text-gray-300 font-medium">{GATE_LABELS_HE[gate] || gate.replace(/_/g, ' ')}</p>
                             {result.reason && (
                               <p className="text-gray-500 text-xs">{result.reason}</p>
                             )}
@@ -579,8 +601,8 @@ export const CarmitPage = () => {
                               <div className="flex items-start gap-2">
                                 <span className="text-lg mt-0.5">{result.passed ? '✅' : '❌'}</span>
                                 <div className="flex-1">
-                                  <p className="font-semibold text-sm capitalize">
-                                    {gate.replace(/_/g, ' ')}
+                                  <p className="font-semibold text-sm">
+                                    {GATE_LABELS_HE[gate] || gate.replace(/_/g, ' ')}
                                   </p>
                                   {result.reason && (
                                     <p className="text-xs text-gray-300 mt-1">{result.reason}</p>
@@ -797,7 +819,7 @@ export const CarmitPage = () => {
                             <td className="px-4 py-3 text-gray-300">{m.job_title}</td>
                             <td className="px-4 py-3 text-gray-300">
                               <span className="px-2 py-0.5 rounded bg-indigo-900/40 border border-indigo-700 text-indigo-200 text-xs font-semibold">
-                                {m.agent_code}
+                                {agentNameHe(m.agent_code)}
                               </span>
                             </td>
                             <td className="px-4 py-3">
@@ -826,6 +848,26 @@ export const CarmitPage = () => {
                                   </span>
                                 );
                               })()}
+                              {/* Carmit's rejection reasoning — shown inline so the
+                                  user understands WHY the match was rejected without
+                                  opening a modal. Only rendered for rejected rows. */}
+                              {m.carmit_decision?.decision === 'rejected' && (
+                                <div className="mt-2 max-w-xs rounded border border-red-700/50 bg-red-900/20 p-2 text-[11px] text-red-200">
+                                  <div className="font-semibold mb-1">❌ סיבת הדחייה של כרמית:</div>
+                                  {m.carmit_decision.failed_gates.length > 0 ? (
+                                    <ul className="space-y-1 list-disc pr-4">
+                                      {m.carmit_decision.failed_gates.map((fg, i) => (
+                                        <li key={i}>
+                                          <span className="font-semibold">{GATE_LABELS_HE[fg.gate] || fg.gate}</span>
+                                          {fg.reason ? <span className="text-red-300/90"> — {fg.reason}</span> : null}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  ) : (
+                                    <p>{m.carmit_decision.reasoning || 'לא צוינה הנמקה'}</p>
+                                  )}
+                                </div>
+                              )}
                             </td>
                             {/* Clearance column — two clearly labelled rows + outcome badge
                                 so the user can tell at a glance what the candidate
@@ -928,8 +970,8 @@ export const CarmitPage = () => {
                     return Object.entries(groups).map(([groupName, groupMatches]) => (
                       <div key={groupName} className="bg-gray-800 rounded-lg border border-gray-700 p-4">
                         <h3 className="text-lg font-semibold text-white mb-4">
-                          {agentMatchesGroupBy === 'state' && `מצב: ${groupName}`}
-                          {agentMatchesGroupBy === 'agent' && `סוכן: ${groupName}`}
+                          {agentMatchesGroupBy === 'state' && `מצב: ${stateLabelHe(groupName)}`}
+                          {agentMatchesGroupBy === 'agent' && `סוכן: ${agentNameHe(groupName)}`}
                           {agentMatchesGroupBy === 'clearance' && `סיווג בטחוני: ${groupName}`}
                           <span className="text-sm text-gray-400 ml-2">({groupMatches.length})</span>
                         </h3>
@@ -963,8 +1005,27 @@ export const CarmitPage = () => {
                                     <td className="px-4 py-3"><button onClick={() => setSelectedAgentMatchForDetail({ id: m.id, candidateName: m.candidate_name, candidateId: m.candidate_id, jobId: m.job_id, jobTitle: m.job_title, company: 'Unknown Company', phone: m.candidate_phone || undefined, email: m.candidate_email || undefined, status: m.current_state, matchScore: m.match_score, dateAdded: m.created_at, lastActivity: m.updated_at, matchReasoning: m.match_reasoning, strengths: m.strengths, gaps: m.gaps, candidateClearance: m.candidate_clearance || undefined, requiredClearance: m.required_clearance || undefined, clearanceMatch: m.clearance_match })} className={`inline-block px-2 py-1 rounded text-xs font-bold cursor-pointer ${scoreCls}`}>{pct}%</button></td>
                                     <td className="px-4 py-3"><button onClick={() => setSelectedAgentCandidate(m)} className="text-white font-semibold hover:text-blue-300 text-right">{m.candidate_name}</button></td>
                                     <td className="px-4 py-3 text-gray-300">{m.job_title}</td>
-                                    <td className="px-4 py-3"><span className="px-2 py-0.5 rounded bg-indigo-900/40 border border-indigo-700 text-indigo-200 text-xs font-semibold">{m.agent_code}</span></td>
-                                    <td className="px-4 py-3"><span className="px-2 py-0.5 rounded text-xs font-semibold bg-gray-700 text-gray-200">{m.current_state}</span></td>
+                                    <td className="px-4 py-3"><span className="px-2 py-0.5 rounded bg-indigo-900/40 border border-indigo-700 text-indigo-200 text-xs font-semibold">{agentNameHe(m.agent_code)}</span></td>
+                                    <td className="px-4 py-3">
+                                      <span className="px-2 py-0.5 rounded text-xs font-semibold bg-gray-700 text-gray-200">{stateLabelHe(m.current_state)}</span>
+                                      {m.carmit_decision?.decision === 'rejected' && (
+                                        <div className="mt-2 max-w-xs rounded border border-red-700/50 bg-red-900/20 p-2 text-[11px] text-red-200">
+                                          <div className="font-semibold mb-1">❌ סיבת הדחייה של כרמית:</div>
+                                          {m.carmit_decision.failed_gates.length > 0 ? (
+                                            <ul className="space-y-1 list-disc pr-4">
+                                              {m.carmit_decision.failed_gates.map((fg, i) => (
+                                                <li key={i}>
+                                                  <span className="font-semibold">{GATE_LABELS_HE[fg.gate] || fg.gate}</span>
+                                                  {fg.reason ? <span className="text-red-300/90"> — {fg.reason}</span> : null}
+                                                </li>
+                                              ))}
+                                            </ul>
+                                          ) : (
+                                            <p>{m.carmit_decision.reasoning || 'לא צוינה הנמקה'}</p>
+                                          )}
+                                        </div>
+                                      )}
+                                    </td>
                                     <td className="px-4 py-3 text-xs"><div className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border font-bold ${cfg.cls}`}><span>{cfg.icon}</span><span>{cfg.label}</span></div></td>
                                     <td className="px-4 py-3 text-xs text-gray-500">{m.created_at ? new Date(m.created_at).toLocaleDateString('he-IL') : '—'}</td>
                                     <td className="px-4 py-3"><button onClick={() => setSelectedAgentMatchForDetail({ id: m.id, candidateName: m.candidate_name, candidateId: m.candidate_id, jobId: m.job_id, jobTitle: m.job_title, company: 'Unknown Company', phone: m.candidate_phone || undefined, email: m.candidate_email || undefined, status: m.current_state, matchScore: m.match_score, dateAdded: m.created_at, lastActivity: m.updated_at, matchReasoning: m.match_reasoning, strengths: m.strengths, gaps: m.gaps, candidateClearance: m.candidate_clearance || undefined, requiredClearance: m.required_clearance || undefined, clearanceMatch: m.clearance_match })} title="פרטי התאמה מלאים" className="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded transition">מפרט</button></td>
@@ -1377,7 +1438,7 @@ export const CarmitPage = () => {
                   <div className="text-gray-200">
                     <span className="font-semibold">{selectedAgentCandidate.job_title}</span>
                     <span className="text-gray-500 mx-2">·</span>
-                    <span className="text-gray-400">סוכן: {selectedAgentCandidate.agent_code}</span>
+                    <span className="text-gray-400">סוכן: {agentNameHe(selectedAgentCandidate.agent_code)}</span>
                   </div>
                   <button
                     onClick={() => {

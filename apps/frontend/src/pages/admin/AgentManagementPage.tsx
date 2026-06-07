@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { env } from "@/lib/env";
+import { agentNameHe } from "@/data/agents";
 
 interface AgentStatus {
   agent_code: string;
@@ -24,13 +25,14 @@ interface Match {
 }
 
 const AGENTS = [
-  { code: "alik", name: "אליק (Electronics)", domain: "Electronics" },
-  { code: "naama", name: "נעמה (Software)", domain: "Software" },
-  { code: "dganit", name: "דגנית (QA)", domain: "QA & Testing" },
-  { code: "ofir", name: "אופיר (Systems)", domain: "Systems & DevOps" },
-  { code: "itai", name: "איתי (IT)", domain: "IT & Infrastructure" },
-  { code: "lior", name: "ליאור (Mechanical)", domain: "Mechanical" },
-  { code: "gc", name: "GC (General)", domain: "General/Catch-all" },
+  { code: "naama", name: "נעמה", domain: "Software" },
+  { code: "alik", name: "אליק", domain: "Electronics" },
+  { code: "dganit", name: "דגנית", domain: "QA & Testing" },
+  { code: "ofir", name: "אופיר", domain: "Systems & DevOps" },
+  { code: "itai", name: "איתי", domain: "IT & Infrastructure" },
+  { code: "lior", name: "ליאור", domain: "Mechanical" },
+  { code: "gc", name: "כללי", domain: "General/Catch-all" },
+  { code: "mani", name: "מני", domain: "Security Clearance (Level 1)" },
 ];
 
 export function AgentManagementPage() {
@@ -216,8 +218,8 @@ export function AgentManagementPage() {
                       {match.candidate_name}
                     </td>
                     <td className="py-3 px-3 text-gray-700">{match.job_title}</td>
-                    <td className="py-3 px-3 text-center font-mono text-xs font-semibold">
-                      {match.matched_by_agent_code}
+                    <td className="py-3 px-3 text-center text-xs font-semibold">
+                      {agentNameHe(match.matched_by_agent_code)}
                     </td>
                     <td className="py-3 px-3 text-center">
                       <div className="flex items-center gap-2 justify-center">

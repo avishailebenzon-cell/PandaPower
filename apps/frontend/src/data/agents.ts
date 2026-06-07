@@ -177,6 +177,23 @@ export function getAllAgents(): Agent[] {
   return Object.values(RECRUITMENT_AGENTS);
 }
 
+/**
+ * Resolve an agent/recruiter code to its Hebrew display name.
+ * Covers the 8 recruitment agents (נעמה / אליק / …) plus the two
+ * recruiters (טל / אלעד) and the orchestrator (כרמית). Falls back to the
+ * raw code when unknown so callers never render an empty string.
+ */
+export function agentNameHe(code: string | null | undefined): string {
+  if (!code) return "—";
+  const extra: Record<string, string> = { carmit: "כרמית", pandi: "פנדי" };
+  return (
+    RECRUITMENT_AGENTS[code]?.name ||
+    RECRUITERS[code]?.name ||
+    extra[code] ||
+    code
+  );
+}
+
 export function getAllRecruiters(): Recruiter[] {
   return Object.values(RECRUITERS);
 }
