@@ -332,6 +332,39 @@ async def get_recruiter_matches(
         raise HTTPException(status_code=500, detail="Failed to get recruiter matches")
 
 
+async def _record_candidate_decline(supabase, candidate_id, job_id) -> None:
+    """Append job_id to a candidate's declining_status list (idempotent).
+
+    Powers Carmit Gate 2 (already_declined): once a candidate declines a job
+    (a recruiter REJECT), that (candidate, job) pair should never be surfaced
+    again. declining_status is a JSONB list of job IDs stored as strings.
+
+    Best-effort: a failure here must not break the recruiter action. If the
+    declining_status column is missing (pre-migration), we log and move on.
+    """
+    if not candidate_id or not job_id:
+        return
+    try:
+        result = await supabase.table("candidates").select(
+            "declining_status"
+        ).eq("id", candidate_id).single().execute()
+        declining = (result.data or {}).get("declining_status") or []
+        if not isinstance(declining, list):
+            declining = []
+        existing = {str(j) for j in declining}
+        if str(job_id) in existing:
+            return  # already recorded
+        declining.append(str(job_id))
+        await supabase.table("candidates").update({
+            "declining_status": declining,
+        }).eq("id", candidate_id).execute()
+    except Exception as e:
+        logger.warning(
+            f"Failed to record decline for candidate={candidate_id} "
+            f"job={job_id}: {e}"
+        )
+
+
 @router.post("/{match_id}/action", response_model=MatchActionResponse)
 async def perform_match_action(
     match_id: str,
@@ -392,6 +425,14 @@ async def perform_match_action(
 
             if not update_result.data:
                 raise HTTPException(status_code=500, detail="Failed to update match")
+
+        # On rejection, record the decline on the candidate so Carmit's Gate 2
+        # (already_declined) won't re-present this job to them later. The column
+        # is a JSONB list of job IDs (stored as strings); append idempotently.
+        if body.action == ActionType.REJECT and new_state != old_state:
+            await _record_candidate_decline(
+                supabase, match.get("candidate_id"), match.get("job_id")
+            )
 
         # Create conversation record if moving to conversation state
         if body.action == ActionType.ACTIVATE and old_state != new_state:
