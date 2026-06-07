@@ -1,10 +1,21 @@
-"""Analytics endpoints for PandaPower dashboard."""
+"""Analytics endpoints for PandaPower dashboard.
+
+All metrics are computed from real data in the `matches` table (and related
+tables). The pipeline state machine is:
+
+    found → carmit_approved → sent_to_tal → tal_conversation → tal_approved
+          → sent_to_elad → elad_conversation → offer_sent → hired
+    (rejections: carmit_rejected, tal_rejected, elad_rejected, placement_failed)
+"""
 import logging
-from datetime import datetime, timedelta
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
+
+from pandapower.core.supabase import get_supabase_client
 
 logger = logging.getLogger(__name__)
 
@@ -98,12 +109,64 @@ class AgentPerformanceResponse(BaseModel):
 
 
 # ============================================================================
+# State machine groupings
+# ============================================================================
+
+# Every state that means the match got past Carmit's gate (i.e. was approved
+# by Carmit at some point, regardless of where it ended up).
+PASSED_CARMIT = {
+    "carmit_approved", "sent_to_tal", "tal_conversation", "tal_approved",
+    "sent_to_elad", "elad_conversation", "offer_sent", "hired",
+    "tal_rejected", "elad_rejected", "placement_failed",
+}
+# States that reached (or passed) Tal / the first recruiter.
+REACHED_RECRUITER = {
+    "sent_to_tal", "tal_conversation", "tal_approved",
+    "sent_to_elad", "elad_conversation", "offer_sent", "hired",
+    "tal_rejected", "elad_rejected", "placement_failed",
+}
+# States where the recruiter (Tal) approved and pushed the candidate onward.
+RECRUITER_APPROVED = {
+    "tal_approved", "sent_to_elad", "elad_conversation", "offer_sent",
+    "hired", "elad_rejected", "placement_failed",
+}
+# States that reached / passed Elad.
+REACHED_ELAD = {
+    "sent_to_elad", "elad_conversation", "offer_sent",
+    "hired", "elad_rejected", "placement_failed",
+}
+# Elad effectively approved (sent an offer to the client).
+ELAD_APPROVED = {"offer_sent", "hired", "placement_failed"}
+
+FAILED_STATES = {"carmit_rejected", "tal_rejected", "elad_rejected", "placement_failed"}
+TERMINAL_STATES = {"hired"} | FAILED_STATES
+# Excluded from the pipeline: sub-70 agent evaluations kept only for visibility.
+NON_PIPELINE_STATES = {"evaluated_but_rejected"}
+
+ACTIVE_CONVERSATION_STATES = {"tal_conversation", "elad_conversation"}
+
+REASON_COLUMN_BY_STATE = {
+    "carmit_rejected": "carmit_blocked_reason",
+    "tal_rejected": "tal_decision_reason",
+    "elad_rejected": "tal_decision_reason",
+    "placement_failed": "tal_decision_reason",
+}
+
+REJECTION_STAGE_LABEL = {
+    "carmit_rejected": "carmit_review",
+    "tal_rejected": "tal_rejected",
+    "elad_rejected": "elad_rejected",
+    "placement_failed": "placement_failed",
+}
+
+
+# ============================================================================
 # Helper Functions
 # ============================================================================
 
 def get_date_range(period: str) -> tuple[datetime, datetime]:
-    """Convert period string to date range."""
-    end_date = datetime.utcnow().date()
+    """Convert period string to UTC datetime range (inclusive)."""
+    end_date = datetime.now(timezone.utc).date()
 
     if period == "week":
         start_date = end_date - timedelta(days=7)
@@ -114,10 +177,66 @@ def get_date_range(period: str) -> tuple[datetime, datetime]:
     elif period == "year":
         start_date = end_date - timedelta(days=365)
     else:
-        # Default to month
         start_date = end_date - timedelta(days=30)
 
-    return datetime.combine(start_date, datetime.min.time()), datetime.combine(end_date, datetime.max.time())
+    start = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
+    end = datetime.combine(end_date, datetime.max.time(), tzinfo=timezone.utc)
+    return start, end
+
+
+def _parse_ts(value: Optional[str]) -> Optional[datetime]:
+    """Parse an ISO timestamp from Supabase into a tz-aware datetime."""
+    if not value:
+        return None
+    try:
+        text = value.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (ValueError, TypeError):
+        return None
+
+
+async def _fetch_matches(
+    supabase: Any,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+) -> list[dict]:
+    """Fetch all valid matches (paginated) with the columns analytics needs.
+
+    When start/end are provided, filters by created_at within the range.
+    """
+    columns = (
+        "id, current_state, match_score, matched_by_agent_code, created_at, "
+        "state_updated_at, evaluated_score_raw, carmit_blocked_reason, "
+        "tal_decision_reason"
+    )
+    rows: list[dict] = []
+    page_size = 1000
+    offset = 0
+    while True:
+        query = supabase.table("matches").select(columns).eq("is_valid", True)
+        if start_date is not None:
+            query = query.gte("created_at", start_date.isoformat())
+        if end_date is not None:
+            query = query.lte("created_at", end_date.isoformat())
+        result = await query.order("created_at", desc=True).range(
+            offset, offset + page_size - 1
+        ).execute()
+        batch = result.data or []
+        rows.extend(batch)
+        if len(batch) < page_size:
+            break
+        offset += page_size
+    return rows
+
+
+def _days_between(start: Optional[datetime], end: Optional[datetime]) -> Optional[float]:
+    if start is None or end is None:
+        return None
+    delta = end - start
+    return max(delta.total_seconds() / 86400.0, 0.0)
 
 
 # ============================================================================
@@ -126,34 +245,36 @@ def get_date_range(period: str) -> tuple[datetime, datetime]:
 
 @router.get("/admin/analytics/kpi-summary", response_model=KPISummaryResponse)
 async def get_kpi_summary(
-    period: str = Query("month", description="Time period: week, month, quarter, year")
+    period: str = Query("month", description="Time period: week, month, quarter, year"),
+    supabase: Any = Depends(get_supabase_client),
 ) -> KPISummaryResponse:
-    """
-    Get KPI summary metrics for the selected period.
-
-    Returns:
-    - total_hired: Total candidates hired
-    - placement_rate: Percentage of matches that resulted in hire
-    - pending_matches: Matches awaiting recruiter or elad decision
-    - avg_time_to_hire_days: Average days from match creation to hire
-    - active_conversations: Ongoing recruiter conversations
-    - failed_matches: Matches that failed
-    - failure_rate: Percentage of matches that failed
-    """
+    """Get KPI summary metrics for the selected period (computed from matches)."""
     start_date, end_date = get_date_range(period)
-
     logger.info(f"Fetching KPI summary for period {period} ({start_date} to {end_date})")
 
-    # This will be populated from database queries in implementation
-    # For now, return mock data
+    matches = await _fetch_matches(supabase, start_date, end_date)
+    pipeline = [m for m in matches if m.get("current_state") not in NON_PIPELINE_STATES]
+    total = len(pipeline)
+
+    hired = [m for m in pipeline if m.get("current_state") == "hired"]
+    failed = [m for m in pipeline if m.get("current_state") in FAILED_STATES]
+    pending = [m for m in pipeline if m.get("current_state") not in TERMINAL_STATES]
+    active = [m for m in pipeline if m.get("current_state") in ACTIVE_CONVERSATION_STATES]
+
+    hire_days = [
+        d for m in hired
+        if (d := _days_between(_parse_ts(m.get("created_at")), _parse_ts(m.get("state_updated_at")))) is not None
+    ]
+    avg_time_to_hire = round(sum(hire_days) / len(hire_days), 1) if hire_days else 0.0
+
     return KPISummaryResponse(
-        total_hired=42,
-        placement_rate=0.68,
-        pending_matches=15,
-        avg_time_to_hire_days=12.5,
-        active_conversations=8,
-        failed_matches=19,
-        failure_rate=0.32,
+        total_hired=len(hired),
+        placement_rate=round(len(hired) / total, 3) if total else 0.0,
+        pending_matches=len(pending),
+        avg_time_to_hire_days=avg_time_to_hire,
+        active_conversations=len(active),
+        failed_matches=len(failed),
+        failure_rate=round(len(failed) / total, 3) if total else 0.0,
     )
 
 
@@ -161,51 +282,61 @@ async def get_kpi_summary(
 async def get_recruiter_performance(
     recruiter: Optional[str] = Query(None, description="Filter by recruiter: 'tal' or 'elad'"),
     period: str = Query("month", description="Time period: week, month, quarter, year"),
+    supabase: Any = Depends(get_supabase_client),
 ) -> RecruiterPerformanceResponse:
-    """
-    Get recruiter performance metrics.
-
-    Returns per-recruiter metrics:
-    - conversations_count: Number of conversations conducted
-    - approvals_count: Number of approvals given
-    - approval_rate: Percentage of reviews that resulted in approval
-    - hires_count: Number of successful hires
-    - hire_rate: Percentage of approvals that resulted in hire
-    - avg_days_in_stage: Average time match stays in recruiter's queue
-    - queue_count: Current items awaiting decision
-    - workload_pct: Percentage of total workload assigned to this recruiter
-    """
+    """Get recruiter (Tal / Elad) performance metrics from real match data."""
     start_date, end_date = get_date_range(period)
-
     logger.info(f"Fetching recruiter performance for {recruiter or 'all'} in period {period}")
 
-    # Mock data - will be populated from database queries
+    matches = await _fetch_matches(supabase, start_date, end_date)
+    now = datetime.now(timezone.utc)
+
+    def avg_queue_age(states: set[str]) -> float:
+        ages = [
+            d for m in matches if m.get("current_state") in states
+            if (d := _days_between(_parse_ts(m.get("state_updated_at")), now)) is not None
+        ]
+        return round(sum(ages) / len(ages), 1) if ages else 0.0
+
+    # Tal metrics
+    tal_conversations = sum(1 for m in matches if m.get("current_state") in REACHED_RECRUITER)
+    tal_approvals = sum(1 for m in matches if m.get("current_state") in RECRUITER_APPROVED)
+    tal_hires = sum(1 for m in matches if m.get("current_state") == "hired")
+    tal_queue = sum(1 for m in matches if m.get("current_state") in {"sent_to_tal", "tal_conversation"})
+
+    # Elad metrics
+    elad_conversations = sum(1 for m in matches if m.get("current_state") in REACHED_ELAD)
+    elad_approvals = sum(1 for m in matches if m.get("current_state") in ELAD_APPROVED)
+    elad_hires = sum(1 for m in matches if m.get("current_state") == "hired")
+    elad_queue = sum(1 for m in matches if m.get("current_state") in {"sent_to_elad", "elad_conversation"})
+
+    total_queue = tal_queue + elad_queue
+
     data = [
         RecruiterPerformanceMetric(
             recruiter_name="tal",
-            conversations_count=24,
-            approvals_count=18,
-            approval_rate=0.75,
-            hires_count=12,
-            hire_rate=0.67,
-            avg_days_in_stage=3.2,
-            queue_count=5,
-            workload_pct=45,
+            conversations_count=tal_conversations,
+            approvals_count=tal_approvals,
+            approval_rate=round(tal_approvals / tal_conversations, 3) if tal_conversations else 0.0,
+            hires_count=tal_hires,
+            hire_rate=round(tal_hires / tal_approvals, 3) if tal_approvals else 0.0,
+            avg_days_in_stage=avg_queue_age({"sent_to_tal", "tal_conversation"}),
+            queue_count=tal_queue,
+            workload_pct=round(tal_queue / total_queue * 100, 1) if total_queue else 0.0,
         ),
         RecruiterPerformanceMetric(
             recruiter_name="elad",
-            conversations_count=20,
-            approvals_count=17,
-            approval_rate=0.85,
-            hires_count=14,
-            hire_rate=0.82,
-            avg_days_in_stage=2.8,
-            queue_count=3,
-            workload_pct=38,
+            conversations_count=elad_conversations,
+            approvals_count=elad_approvals,
+            approval_rate=round(elad_approvals / elad_conversations, 3) if elad_conversations else 0.0,
+            hires_count=elad_hires,
+            hire_rate=round(elad_hires / elad_approvals, 3) if elad_approvals else 0.0,
+            avg_days_in_stage=avg_queue_age({"sent_to_elad", "elad_conversation"}),
+            queue_count=elad_queue,
+            workload_pct=round(elad_queue / total_queue * 100, 1) if total_queue else 0.0,
         ),
     ]
 
-    # Filter by recruiter if specified
     if recruiter:
         data = [m for m in data if m.recruiter_name == recruiter.lower()]
 
@@ -214,61 +345,78 @@ async def get_recruiter_performance(
 
 @router.get("/admin/analytics/match-funnel", response_model=MatchFunnelResponse)
 async def get_match_funnel(
-    period: str = Query("month", description="Time period: week, month, quarter, year")
+    period: str = Query("month", description="Time period: week, month, quarter, year"),
+    supabase: Any = Depends(get_supabase_client),
 ) -> MatchFunnelResponse:
-    """
-    Get match funnel metrics showing drop-off at each stage.
-
-    Flow:
-    found → carmit_approved → sent_to_recruiter → recruiter_approved → hired
-                           ↘ carmit_rejected                        ↘ failed
-
-    Returns conversion rate: hired / found
-    """
+    """Get match funnel metrics showing drop-off at each stage (real data)."""
     start_date, end_date = get_date_range(period)
-
     logger.info(f"Fetching match funnel for period {period}")
 
-    # Mock data
+    matches = await _fetch_matches(supabase, start_date, end_date)
+    pipeline = [m for m in matches if m.get("current_state") not in NON_PIPELINE_STATES]
+
+    found = len(pipeline)
+    carmit_approved = sum(1 for m in pipeline if m.get("current_state") in PASSED_CARMIT)
+    sent_to_recruiter = sum(1 for m in pipeline if m.get("current_state") in REACHED_RECRUITER)
+    recruiter_approved = sum(1 for m in pipeline if m.get("current_state") in RECRUITER_APPROVED)
+    hired = sum(1 for m in pipeline if m.get("current_state") == "hired")
+    failed = sum(1 for m in pipeline if m.get("current_state") in FAILED_STATES)
+
     return MatchFunnelResponse(
-        found=100,
-        carmit_approved=68,
-        sent_to_recruiter=68,
-        recruiter_approved=45,
-        hired=32,
-        failed=36,
-        conversion_rate=0.32,
+        found=found,
+        carmit_approved=carmit_approved,
+        sent_to_recruiter=sent_to_recruiter,
+        recruiter_approved=recruiter_approved,
+        hired=hired,
+        failed=failed,
+        conversion_rate=round(hired / found, 3) if found else 0.0,
     )
 
 
 @router.get("/admin/analytics/time-to-placement", response_model=TimeToPlacementResponse)
 async def get_time_to_placement(
     days: int = Query(90, description="Number of days to include in analysis"),
+    supabase: Any = Depends(get_supabase_client),
 ) -> TimeToPlacementResponse:
-    """
-    Get time-to-placement trends over time.
-
-    Returns daily metrics:
-    - date: ISO format date
-    - avg_days: Average days from match creation to hire on that date
-    - hires_count: Number of hires completed that day
-    - failed_count: Number of failed matches that day
-    """
-    end_date = datetime.utcnow().date()
-    start_date = (end_date - timedelta(days=days)).date()
-
+    """Get time-to-placement trends over time from real hire/failure events."""
+    end_date = datetime.now(timezone.utc).date()
+    start_date = end_date - timedelta(days=days)
     logger.info(f"Fetching time-to-placement for {days} days")
 
-    # Generate mock data for each day
+    start_dt = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
+    # Use a wide created_at window (matches may have been created before the
+    # window but resolved within it); fetch all valid matches then filter on
+    # the resolution date (state_updated_at).
+    matches = await _fetch_matches(supabase)
+
+    # Bucket by resolution day.
+    hire_days_by_date: dict[str, list[float]] = defaultdict(list)
+    failed_by_date: dict[str, int] = defaultdict(int)
+
+    for m in matches:
+        state = m.get("current_state")
+        resolved = _parse_ts(m.get("state_updated_at"))
+        if resolved is None or resolved < start_dt:
+            continue
+        day = resolved.date().isoformat()
+        if state == "hired":
+            d = _days_between(_parse_ts(m.get("created_at")), resolved)
+            if d is not None:
+                hire_days_by_date[day].append(d)
+        elif state in FAILED_STATES:
+            failed_by_date[day] += 1
+
     data = []
     current_date = start_date
     while current_date <= end_date:
+        day = current_date.isoformat()
+        hires = hire_days_by_date.get(day, [])
         data.append(
             TimeToPlacementPoint(
-                date=current_date.isoformat(),
-                avg_days=12.5 + (current_date.day % 5),  # Mock variation
-                hires_count=3 + (current_date.day % 4),
-                failed_count=2 + (current_date.day % 3),
+                date=day,
+                avg_days=round(sum(hires) / len(hires), 1) if hires else 0.0,
+                hires_count=len(hires),
+                failed_count=failed_by_date.get(day, 0),
             )
         )
         current_date += timedelta(days=1)
@@ -278,112 +426,88 @@ async def get_time_to_placement(
 
 @router.get("/admin/analytics/rejection-reasons", response_model=RejectionReasonsResponse)
 async def get_rejection_reasons(
-    period: str = Query("month", description="Time period: week, month, quarter, year")
+    period: str = Query("month", description="Time period: week, month, quarter, year"),
+    supabase: Any = Depends(get_supabase_client),
 ) -> RejectionReasonsResponse:
-    """
-    Get breakdown of rejection reasons by stage.
-
-    Returns reasons like:
-    - carmit_quality_gate: Match score too low
-    - carmit_clearance_gate: Insufficient clearance
-    - tal_rejected: Recruiter rejected during conversation
-    - elad_rejected: Final placement failed
-    """
+    """Get breakdown of rejection reasons by stage (real data)."""
     start_date, end_date = get_date_range(period)
-
     logger.info(f"Fetching rejection reasons for period {period}")
 
-    # Mock data
+    matches = await _fetch_matches(supabase, start_date, end_date)
+
+    # Aggregate (stage, reason) -> count.
+    buckets: dict[tuple[str, str], int] = defaultdict(int)
+    total_rejections = 0
+    for m in matches:
+        state = m.get("current_state")
+        if state not in FAILED_STATES:
+            continue
+        total_rejections += 1
+        stage = REJECTION_STAGE_LABEL.get(state, state)
+        reason_col = REASON_COLUMN_BY_STATE.get(state)
+        reason = (m.get(reason_col) if reason_col else None) or "לא צוינה סיבה"
+        reason = reason.strip()[:120]
+        buckets[(stage, reason)] += 1
+
     data = [
         RejectionReasonMetric(
-            rejection_stage="carmit_quality_gate",
-            reason="Match score too low",
-            count=12,
-            percentage=25.5,
-        ),
-        RejectionReasonMetric(
-            rejection_stage="carmit_clearance_gate",
-            reason="Insufficient security clearance",
-            count=8,
-            percentage=17.0,
-        ),
-        RejectionReasonMetric(
-            rejection_stage="tal_rejected",
-            reason="Candidate not interested",
-            count=15,
-            percentage=31.9,
-        ),
-        RejectionReasonMetric(
-            rejection_stage="elad_rejected",
-            reason="Salary negotiation failed",
-            count=9,
-            percentage=19.1,
-        ),
-        RejectionReasonMetric(
-            rejection_stage="elad_rejected",
-            reason="Candidate accepted other offer",
-            count=3,
-            percentage=6.4,
-        ),
+            rejection_stage=stage,
+            reason=reason,
+            count=count,
+            percentage=round(count / total_rejections * 100, 1) if total_rejections else 0.0,
+        )
+        for (stage, reason), count in sorted(buckets.items(), key=lambda kv: kv[1], reverse=True)
     ]
 
     return RejectionReasonsResponse(data=data)
 
 
 @router.get("/admin/analytics/agent-performance", response_model=AgentPerformanceResponse)
-async def get_agent_performance() -> AgentPerformanceResponse:
-    """
-    Get agent performance metrics.
-
-    Returns per-agent metrics:
-    - agent_code: Agent identifier (naama, ofir, alik, etc.)
-    - matches_found: Total matches found by agent
-    - matches_approved: Matches that passed Carmit review
-    - approval_rate: Percentage of agent's matches approved by Carmit
-    - placements: Number of successful placements
-    - placement_rate: Percentage of approved matches that resulted in hire
-    - avg_score: Average match score given by agent
-    """
+async def get_agent_performance(
+    supabase: Any = Depends(get_supabase_client),
+) -> AgentPerformanceResponse:
+    """Get per-agent performance metrics aggregated from real match data."""
     logger.info("Fetching agent performance metrics")
 
-    # Mock data
+    matches = await _fetch_matches(supabase)
+
+    found: dict[str, int] = defaultdict(int)
+    approved: dict[str, int] = defaultdict(int)
+    placements: dict[str, int] = defaultdict(int)
+    score_sum: dict[str, float] = defaultdict(float)
+    score_count: dict[str, int] = defaultdict(int)
+
+    for m in matches:
+        agent = m.get("matched_by_agent_code")
+        if not agent:
+            continue
+        state = m.get("current_state")
+        if state in NON_PIPELINE_STATES:
+            continue
+        found[agent] += 1
+        if state in PASSED_CARMIT:
+            approved[agent] += 1
+        if state == "hired":
+            placements[agent] += 1
+        score = m.get("match_score")
+        if score is not None:
+            try:
+                score_sum[agent] += float(score)
+                score_count[agent] += 1
+            except (ValueError, TypeError):
+                pass
+
     data = [
         AgentPerformanceMetric(
-            agent_code="naama",
-            matches_found=45,
-            matches_approved=30,
-            approval_rate=0.67,
-            placements=20,
-            placement_rate=0.67,
-            avg_score=0.78,
-        ),
-        AgentPerformanceMetric(
-            agent_code="ofir",
-            matches_found=38,
-            matches_approved=26,
-            approval_rate=0.68,
-            placements=18,
-            placement_rate=0.69,
-            avg_score=0.76,
-        ),
-        AgentPerformanceMetric(
-            agent_code="alik",
-            matches_found=32,
-            matches_approved=22,
-            approval_rate=0.69,
-            placements=15,
-            placement_rate=0.68,
-            avg_score=0.74,
-        ),
-        AgentPerformanceMetric(
-            agent_code="dganit",
-            matches_found=28,
-            matches_approved=18,
-            approval_rate=0.64,
-            placements=11,
-            placement_rate=0.61,
-            avg_score=0.72,
-        ),
+            agent_code=agent,
+            matches_found=found[agent],
+            matches_approved=approved[agent],
+            approval_rate=round(approved[agent] / found[agent], 3) if found[agent] else 0.0,
+            placements=placements[agent],
+            placement_rate=round(placements[agent] / approved[agent], 3) if approved[agent] else 0.0,
+            avg_score=round(score_sum[agent] / score_count[agent], 3) if score_count[agent] else 0.0,
+        )
+        for agent in sorted(found, key=lambda a: found[a], reverse=True)
     ]
 
     return AgentPerformanceResponse(data=data)
