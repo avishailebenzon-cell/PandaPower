@@ -63,8 +63,12 @@ class CarmitOrchestrator:
         self.pipedrive = pipedrive_client
         self.settings = settings or {}
 
-        # Configuration - RAISED to 0.80 (80%) for higher quality matches to Tal
-        self.match_score_threshold = self.settings.get("CARMIT_MATCH_SCORE_THRESHOLD", 0.80)
+        # Configuration - aligned to 0.70 to match the agent's own passing bar
+        # (agent_matching sets is_passing / state="found" at score >= 70). A
+        # higher Carmit bar silently killed every 70-79 match the agent had
+        # already green-lit; keeping one consistent threshold avoids that
+        # dead zone. Override via CARMIT_MATCH_SCORE_THRESHOLD if needed.
+        self.match_score_threshold = self.settings.get("CARMIT_MATCH_SCORE_THRESHOLD", 0.70)
         self.clearance_levels = self.settings.get("CARMIT_CLEARANCE_LEVELS", CLEARANCE_LEVELS)
 
         # Agent specialties (from Phase 4)
@@ -231,7 +235,7 @@ class CarmitOrchestrator:
 
             # GATE 6: Relevant skills matching
             logger.debug(f"GATE 6: Checking relevant skills for job")
-            skills_gate = await self._check_relevant_skills_gate(candidate, job)
+            skills_gate = await self._check_relevant_skills_gate(candidate, job, match)
             gate_results["relevant_skills"] = skills_gate
             if not skills_gate["passed"]:
                 gates_passed = False
@@ -255,8 +259,12 @@ class CarmitOrchestrator:
                 reasoning=decision_reasoning,
             )
 
-            # Update match state
-            await self._update_match_state(match_id, new_state)
+            # Update match state (persist the rejection reason on the row too)
+            await self._update_match_state(
+                match_id,
+                new_state,
+                blocked_reason=decision_reasoning if new_state == "carmit_rejected" else None,
+            )
 
             # If rejected, write note to Pipedrive
             if new_state == "carmit_rejected":
@@ -530,46 +538,143 @@ Return ONLY valid JSON (no markdown, no extra text):
             logger.error(f"Quality score gate check failed: {str(e)}")
             return {"passed": True, "reason": None}
 
-    async def _check_relevant_skills_gate(self, candidate: dict, job: dict) -> dict[str, Any]:
-        """GATE 6: Check if candidate has relevant skills for the job.
+    @staticmethod
+    def _collect_candidate_skills(candidate: dict) -> list[str]:
+        """Gather every skill signal we have for a candidate.
 
-        Args:
-            candidate: Candidate object with key_skills
-            job: Job object with job_qualifications and job_description
+        The denormalized ``key_skills`` array is frequently empty even for
+        strong candidates — the rich CV data actually lives under
+        ``extracted_from_cv.extracted_fields`` (technical_skills / soft_skills).
+        Relying on ``key_skills`` alone is what produced the false
+        "Candidate has no recorded skills" rejections.
+        """
+        skills: list[str] = []
 
-        Returns:
-            {passed: bool, reason: str}
+        def _extend(value: Any) -> None:
+            if isinstance(value, list):
+                skills.extend(str(s) for s in value if s)
+            elif isinstance(value, str) and value.strip():
+                skills.append(value)
+
+        _extend(candidate.get("key_skills"))
+
+        extracted = candidate.get("extracted_from_cv") or {}
+        if isinstance(extracted, dict):
+            fields = extracted.get("extracted_fields") or {}
+            if isinstance(fields, dict):
+                _extend(fields.get("technical_skills"))
+                _extend(fields.get("soft_skills"))
+                # Technologies named inside experience entries are skills too.
+                for exp in fields.get("experience") or []:
+                    if isinstance(exp, dict):
+                        _extend(exp.get("technologies"))
+
+        # De-dupe case-insensitively while preserving order.
+        seen: set[str] = set()
+        unique: list[str] = []
+        for s in skills:
+            key = s.strip().lower()
+            if key and key not in seen:
+                seen.add(key)
+                unique.append(s.strip())
+        return unique
+
+    @staticmethod
+    def _normalize_token(text: str) -> str:
+        """Lowercase and strip punctuation so 'C#', 'c #', 'C-Sharp' align."""
+        import re
+        return re.sub(r"[^a-z0-9֐-׿]+", "", text.lower())
+
+    def _skills_overlap_job_text(self, skills: list[str], job_text: str) -> bool:
+        """Normalized, bidirectional overlap between skills and job text.
+
+        Far more forgiving than the old raw ``skill in job_text`` substring
+        check: both sides are normalized (punctuation stripped, lowercased),
+        and we match whole normalized skill tokens against the normalized
+        job text. Short tokens (<=2 chars) are ignored to avoid noise.
+        """
+        norm_job = self._normalize_token(job_text)
+        if not norm_job:
+            return False
+        for skill in skills:
+            norm_skill = self._normalize_token(skill)
+            if len(norm_skill) >= 3 and norm_skill in norm_job:
+                return True
+        return False
+
+    async def _check_relevant_skills_gate(
+        self, candidate: dict, job: dict, match: dict
+    ) -> dict[str, Any]:
+        """GATE 6: Backstop check that the candidate has relevant skills.
+
+        Design note: ``match_score`` is produced by Claude in agent_matching,
+        which ALREADY performs a full semantic evaluation of the candidate's
+        skills against the job qualifications. This gate must therefore be a
+        lightweight backstop — not a second, cruder opinion that overrides the
+        LLM. It only hard-rejects when there is genuinely no skill signal AND
+        the LLM score is also weak.
         """
         try:
-            candidate_skills = candidate.get("key_skills", []) or []
-            job_qualifications = str(job.get("job_qualifications", "")).lower()
-            job_description = str(job.get("job_description", "")).lower()
-
-            # If no skills recorded, it's a red flag
-            if not candidate_skills:
-                return {
-                    "passed": False,
-                    "reason": "Candidate has no recorded skills",
-                }
-
-            # Check if at least one skill appears in job qualifications/description
-            job_text = f"{job_qualifications} {job_description}".lower()
-            has_relevant_skill = any(
-                skill.lower() in job_text
-                for skill in candidate_skills
+            skills = self._collect_candidate_skills(candidate)
+            job_text = " ".join(
+                str(job.get(k, "") or "")
+                for k in ("job_qualifications", "job_description", "job_title")
             )
 
-            if not has_relevant_skill:
+            try:
+                score = float(match.get("match_score", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                score = 0.0
+            score_ok = score >= self.match_score_threshold
+
+            # No skill signal anywhere = a data-extraction gap, not proof of
+            # irrelevance. Defer to the LLM score rather than auto-rejecting.
+            if not skills:
+                if score_ok:
+                    return {
+                        "passed": True,
+                        "reason": (
+                            "No explicit skills list, but the match score "
+                            f"({score:.2f}) clears the bar — deferring to the "
+                            "LLM evaluation."
+                        ),
+                    }
                 return {
                     "passed": False,
-                    "reason": f"No relevant skills found. Candidate has: {', '.join(candidate_skills[:3])}",
+                    "reason": "No skills recorded and match score below threshold",
                 }
 
-            return {"passed": True, "reason": f"Has relevant skills: found match in job requirements"}
+            # Positive confirmation: a normalized skill overlaps the job text.
+            if self._skills_overlap_job_text(skills, job_text):
+                return {
+                    "passed": True,
+                    "reason": "Relevant skills confirmed against job requirements",
+                }
+
+            # No literal overlap, but the LLM already judged skills-vs-quals
+            # semantically (Hebrew/English, synonyms, paraphrase). Trust it.
+            if score_ok:
+                return {
+                    "passed": True,
+                    "reason": (
+                        "No literal keyword overlap, but the match score "
+                        f"({score:.2f}) clears the bar — deferring to the LLM "
+                        "evaluation."
+                    ),
+                }
+
+            return {
+                "passed": False,
+                "reason": (
+                    "No relevant skills found and score below threshold. "
+                    f"Candidate skills: {', '.join(skills[:3])}"
+                ),
+            }
 
         except Exception as e:
             logger.error(f"Skills gate check failed: {str(e)}")
-            return {"passed": False, "reason": f"Skills check error: {str(e)}"}
+            # Fail open: a bug in this backstop should not block the pipeline.
+            return {"passed": True, "reason": f"Skills check error (passed open): {str(e)}"}
 
     # ==================== Helper Methods: Database Operations ====================
 
@@ -732,14 +837,43 @@ Return ONLY valid JSON (no markdown, no extra text):
             f"({from_state}→{to_state}); current_state will still be updated"
         )
 
-    async def _update_match_state(self, match_id: str, new_state: str) -> None:
-        """Update match state."""
+    async def _update_match_state(
+        self, match_id: str, new_state: str, blocked_reason: str | None = None
+    ) -> None:
+        """Update match state (and, on rejection, the human-readable reason).
+
+        Persisting ``carmit_blocked_reason`` on the row means single-record
+        reads and dashboards no longer have to join match_state_history to
+        learn why a match was rejected. Best-effort on the reason column so a
+        narrower production schema never blocks the state transition.
+        """
+        payload = {
+            "current_state": new_state,
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        if blocked_reason:
+            payload["carmit_blocked_reason"] = blocked_reason
         try:
-            await self.supabase.table("matches").update({
-                "current_state": new_state,
-                "updated_at": datetime.utcnow().isoformat(),
-            }).eq("id", str(match_id)).execute()
+            await self.supabase.table("matches").update(payload).eq(
+                "id", str(match_id)
+            ).execute()
         except Exception as e:
+            # If the reason column is rejected by the schema, retry without it
+            # rather than losing the state transition.
+            if blocked_reason:
+                logger.warning(
+                    f"Match update with blocked_reason failed ({e}); "
+                    "retrying without it"
+                )
+                try:
+                    await self.supabase.table("matches").update({
+                        "current_state": new_state,
+                        "updated_at": datetime.utcnow().isoformat(),
+                    }).eq("id", str(match_id)).execute()
+                    return
+                except Exception as e2:
+                    logger.error(f"Failed to update match state: {str(e2)}")
+                    raise
             logger.error(f"Failed to update match state: {str(e)}")
             raise
 

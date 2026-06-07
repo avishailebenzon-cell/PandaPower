@@ -424,36 +424,81 @@ async def get_time_to_placement(
     return TimeToPlacementResponse(data=data)
 
 
+# Maps a raw gate/keyword token (as found in match_state_history.reasoning)
+# to a (stage, human-readable Hebrew reason) pair.
+_GATE_LABELS: list[tuple[tuple[str, ...], str, str]] = [
+    (("relevant_skills", "skills mismatch", "no skills"), "carmit_skills", "כישורים לא תואמים"),
+    (("quality_threshold", "score", "<"), "carmit_quality", "ציון מתחת לסף"),
+    (("clearance_match", "clearance mismatch"), "carmit_clearance", "סיווג ביטחוני לא מספיק"),
+    (("conflict_of_interest",), "carmit_conflict", "ניגוד עניינים"),
+    (("already_declined",), "carmit_declined", "המועמד דחה בעבר"),
+    (("past_rejection",), "carmit_past_rejection", "נדחה בעבר לתפקיד"),
+]
+
+
+def _classify_reasoning(reasoning: str) -> list[tuple[str, str]]:
+    """Parse a free-text reasoning string into (stage, reason) categories.
+
+    A single rejection can list several failed gates, so this may return
+    multiple categories. Falls back to a generic bucket when nothing matches.
+    """
+    text = (reasoning or "").lower()
+    found: list[tuple[str, str]] = []
+    for tokens, stage, label in _GATE_LABELS:
+        if any(tok in text for tok in tokens):
+            found.append((stage, label))
+    return found or [("other", "אחר / לא מסווג")]
+
+
 @router.get("/admin/analytics/rejection-reasons", response_model=RejectionReasonsResponse)
 async def get_rejection_reasons(
     period: str = Query("month", description="Time period: week, month, quarter, year"),
     supabase: Any = Depends(get_supabase_client),
 ) -> RejectionReasonsResponse:
-    """Get breakdown of rejection reasons by stage (real data)."""
+    """Get breakdown of rejection reasons by stage from real audit data.
+
+    Reasons live in ``match_state_history.reasoning`` (e.g. "Failed gates:
+    relevant_skills"), NOT in matches.carmit_blocked_reason — which was empty
+    for historical rows. We parse the reasoning text into readable categories.
+    """
     start_date, end_date = get_date_range(period)
     logger.info(f"Fetching rejection reasons for period {period}")
 
-    matches = await _fetch_matches(supabase, start_date, end_date)
+    rejected_states = list(FAILED_STATES)
 
-    # Aggregate (stage, reason) -> count.
+    # Fetch rejection events from the state-history audit trail (paginated).
+    rows: list[dict] = []
+    page_size = 1000
+    offset = 0
+    while True:
+        result = await (
+            supabase.table("match_state_history")
+            .select("to_state, reasoning, created_at")
+            .in_("to_state", rejected_states)
+            .gte("created_at", start_date.isoformat())
+            .lte("created_at", end_date.isoformat())
+            .range(offset, offset + page_size - 1)
+            .execute()
+        )
+        batch = result.data or []
+        rows.extend(batch)
+        if len(batch) < page_size:
+            break
+        offset += page_size
+
+    total_rejections = len(rows)
     buckets: dict[tuple[str, str], int] = defaultdict(int)
-    total_rejections = 0
-    for m in matches:
-        state = m.get("current_state")
-        if state not in FAILED_STATES:
-            continue
-        total_rejections += 1
-        stage = REJECTION_STAGE_LABEL.get(state, state)
-        reason_col = REASON_COLUMN_BY_STATE.get(state)
-        reason = (m.get(reason_col) if reason_col else None) or "לא צוינה סיבה"
-        reason = reason.strip()[:120]
-        buckets[(stage, reason)] += 1
+    for row in rows:
+        for stage, label in _classify_reasoning(row.get("reasoning")):
+            buckets[(stage, label)] += 1
 
     data = [
         RejectionReasonMetric(
             rejection_stage=stage,
             reason=reason,
             count=count,
+            # Percentage of rejection EVENTS that involved this reason. May sum
+            # to >100% because a single rejection can fail several gates.
             percentage=round(count / total_rejections * 100, 1) if total_rejections else 0.0,
         )
         for (stage, reason), count in sorted(buckets.items(), key=lambda kv: kv[1], reverse=True)
