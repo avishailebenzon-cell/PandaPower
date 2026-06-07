@@ -491,6 +491,131 @@ async def _run_matching_async() -> dict[str, Any]:
         return {"status": "failed", "error": str(e)}
 
 
+# ---------------------------------------------------------------------------
+# Mani — independent Level-1 clearance matcher (scheduler stage).
+#
+# Mani isn't routed jobs by Carmit like the 7 domain agents. Instead he sweeps
+# Level-1-clearance candidate × Level-1-job pairs and scores them with the same
+# Claude call. The resulting matches are created in 'found' state, so they then
+# flow through the IDENTICAL Carmit review + handoff-to-Tal pipeline as every
+# other agent. This is the scheduled body of scripts/run_mani_matching.py.
+#
+# Cost-bounded: at most MANI_PAIRS_PER_RUN Claude calls per tick. Idempotent —
+# pairs that already have a Mani match are skipped, so it advances across runs.
+# ---------------------------------------------------------------------------
+MANI_AGENT_CODE = "mani"
+MANI_PAIRS_PER_RUN = 5
+_MANI_LEVEL_1_CAND_VALUES = {"רמה 1", "level 1", "1"}
+_MANI_LEVEL_1_JOB_VALUES = {"רמה 1", "רמה 1 + שוס", "level 1", "1"}
+
+
+def _mani_is_level_1(value: Any, allowed: set[str]) -> bool:
+    if not value:
+        return False
+    return str(value).strip().lower() in {v.lower() for v in allowed}
+
+
+async def _mani_matching_async() -> dict[str, Any]:
+    """Scheduler stage: Mani sweeps Level-1 candidate×job pairs and creates
+    matches (in 'found' state) that then go through the normal Carmit→Tal flow.
+    """
+    try:
+        if not settings.ANTHROPIC_API_KEY:
+            return {"status": "skipped", "reason": "no anthropic key"}
+        supabase_client = await get_supabase_client()
+
+        # Don't burn Claude calls while over the usage limit.
+        blocked = await _get_setting(supabase_client, "anthropic.blocked_until")
+        if blocked:
+            try:
+                from datetime import timezone as _tz
+                until = datetime.fromisoformat(str(blocked).strip().strip('"').replace("Z", "+00:00"))
+                if until.tzinfo is None:
+                    until = until.replace(tzinfo=_tz.utc)
+                if datetime.now(until.tzinfo) < until:
+                    return {"status": "skipped", "reason": "anthropic over limit"}
+            except Exception:
+                pass
+
+        from pandapower.workers.agent_matching import AGENT_CONFIGS
+        agent_config = AGENT_CONFIGS.get(MANI_AGENT_CODE)
+        if not agent_config:
+            return {"status": "skipped", "reason": "mani missing from AGENT_CONFIGS"}
+
+        cands_resp = await supabase_client.table("candidates").select("*").execute()
+        jobs_resp = await supabase_client.table("jobs").select("*").eq("status", "open").execute()
+        candidates = [c for c in (cands_resp.data or [])
+                      if _mani_is_level_1(c.get("clearance_level"), _MANI_LEVEL_1_CAND_VALUES)]
+        jobs = [j for j in (jobs_resp.data or [])
+                if _mani_is_level_1(j.get("job_security_clearance"), _MANI_LEVEL_1_JOB_VALUES)]
+        if not candidates or not jobs:
+            return {"status": "success", "pairs_scored": 0, "reason": "no level-1 pairs"}
+
+        existing_resp = await supabase_client.table("matches").select(
+            "candidate_id, job_id"
+        ).eq("matched_by_agent_code", MANI_AGENT_CODE).execute()
+        already_done = {
+            (str(m["candidate_id"]), str(m["job_id"])) for m in (existing_resp.data or [])
+        }
+        todo = [
+            (c, j) for c in candidates for j in jobs
+            if (str(c["id"]), str(j["id"])) not in already_done
+        ][:MANI_PAIRS_PER_RUN]
+        if not todo:
+            return {"status": "success", "pairs_scored": 0, "reason": "all pairs done"}
+
+        claude_client = AnthropicClient(settings.ANTHROPIC_API_KEY)
+        claude_client.usage_stage = "agent_match"
+        worker = AgentMatchingWorker(supabase_client, claude_client)
+        scored = 0
+        errors = 0
+        for candidate, job in todo:
+            try:
+                result = await worker._score_candidate_job_pair(
+                    candidate, job, MANI_AGENT_CODE, agent_config
+                )
+                await worker._create_match(
+                    candidate_id=candidate["id"],
+                    job_id=job["id"],
+                    score=int(result.get("score") or 0),
+                    reasoning=result.get("reasoning") or "",
+                    strengths=result.get("strengths") or [],
+                    gaps=result.get("gaps") or [],
+                    agent_code=MANI_AGENT_CODE,
+                    tokens_used=int(result.get("tokens_used") or 0),
+                    duration_ms=float(result.get("duration_ms") or 0.0),
+                )
+                scored += 1
+            except Exception as e:
+                errors += 1
+                logger.warning(f"Mani matching failed for pair: {str(e)[:200]}")
+        try:
+            await claude_client.close()
+        except Exception:
+            pass
+        logger.info(f"Mani stage: {scored} pairs scored, {errors} errors "
+                    f"({len(candidates)} L1 cands × {len(jobs)} L1 jobs)")
+        return {"status": "completed", "pairs_scored": scored, "errors": errors}
+    except Exception as e:
+        logger.error(f"Mani matching stage failed: {e}", exc_info=True)
+        return {"status": "failed", "error": str(e)}
+
+
+@app.task(bind=True)
+def mani_matching_task(self) -> dict[str, Any]:
+    """Celery wrapper for the Mani Level-1 matching sweep."""
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(_mani_matching_async())
+        finally:
+            loop.close()
+    except Exception as e:
+        logger.error(f"Mani matching task wrapper failed: {e}", exc_info=True)
+        return {"status": "failed", "error": str(e)}
+
+
 @app.task(bind=True)
 def match_candidate_jobs_task(self, candidate_id: str, agent_code: str) -> dict[str, Any]:
     """Celery task to match jobs to a candidate using agent."""

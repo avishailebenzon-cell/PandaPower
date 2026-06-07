@@ -462,8 +462,15 @@ export const RecruitmentDepartment: React.FC = () => {
                       )}
                     </div>
 
-                    {/* Title */}
-                    <h3 className="font-bold text-white text-right">{job.job_title}</h3>
+                    {/* Title + deal number */}
+                    <div className="flex items-start justify-between gap-2">
+                      <h3 className="font-bold text-white text-right flex-1">{job.job_title}</h3>
+                      {job.pipedrive_deal_id && (
+                        <span className="text-xs font-mono px-2 py-0.5 rounded bg-gray-700 text-gray-300 shrink-0">
+                          #{job.pipedrive_deal_id}
+                        </span>
+                      )}
+                    </div>
 
                     {/* Org + contact */}
                     <div className="mt-2 space-y-0.5">

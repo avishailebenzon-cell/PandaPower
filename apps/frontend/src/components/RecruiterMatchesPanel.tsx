@@ -19,7 +19,7 @@
  * Everything shown is REAL — no mock data. Empty state is explicit.
  */
 
-import { useState } from "react";
+import { useState, useMemo, Fragment } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   fetchRecruiterMatches,
@@ -34,6 +34,8 @@ import type { DepartmentMatch } from "@/api/recruitment-departments";
 
 type Recruiter = "carmit" | "tal" | "elad";
 type SubTab = "queue" | "history";
+type SortKey = "candidate" | "job" | "score" | "state" | "days" | "updated";
+type GroupKey = "none" | "candidate" | "job" | "state";
 
 interface Props {
   recruiter: Recruiter;
@@ -136,6 +138,119 @@ export function RecruiterMatchesPanel({
 
   const matches = matchesQuery.data?.matches ?? [];
 
+  // ---- Sorting & grouping (client-side, over the loaded page) ----
+  const [sortKey, setSortKey] = useState<SortKey>("updated");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [groupBy, setGroupBy] = useState<GroupKey>("none");
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir(key === "candidate" || key === "job" || key === "state" ? "asc" : "desc");
+    }
+  };
+
+  const sortedMatches = useMemo(() => {
+    const arr = [...matches];
+    const dir = sortDir === "asc" ? 1 : -1;
+    arr.sort((a, b) => {
+      let cmp = 0;
+      switch (sortKey) {
+        case "candidate":
+          cmp = (a.candidateName || "").localeCompare(b.candidateName || "", "he");
+          break;
+        case "job":
+          cmp = (a.jobTitle || "").localeCompare(b.jobTitle || "", "he");
+          break;
+        case "score":
+          cmp = (a.matchScore || 0) - (b.matchScore || 0);
+          break;
+        case "state":
+          cmp = (STATE_LABELS[a.state]?.label || a.state).localeCompare(
+            STATE_LABELS[b.state]?.label || b.state, "he");
+          break;
+        case "days":
+          cmp = (a.daysInStage || 0) - (b.daysInStage || 0);
+          break;
+        case "updated":
+          cmp = new Date(a.lastActivity || 0).getTime() - new Date(b.lastActivity || 0).getTime();
+          break;
+      }
+      return cmp * dir;
+    });
+    return arr;
+  }, [matches, sortKey, sortDir]);
+
+  // Build grouped sections when grouping is active; otherwise one anonymous group.
+  const groups = useMemo<{ key: string; label: string; rows: Match[] }[]>(() => {
+    if (groupBy === "none") {
+      return [{ key: "__all__", label: "", rows: sortedMatches }];
+    }
+    const map = new Map<string, Match[]>();
+    for (const m of sortedMatches) {
+      const k =
+        groupBy === "candidate" ? m.candidateName || "—"
+        : groupBy === "job" ? m.jobTitle || "—"
+        : (STATE_LABELS[m.state]?.label || m.state || "—");
+      if (!map.has(k)) map.set(k, []);
+      map.get(k)!.push(m);
+    }
+    return Array.from(map.entries())
+      .sort((a, b) => a[0].localeCompare(b[0], "he"))
+      .map(([key, rows]) => ({ key, label: key, rows }));
+  }, [sortedMatches, groupBy]);
+
+  const renderRow = (m: Match) => (
+    <tr
+      key={m.id}
+      className="border-b border-gray-700 hover:bg-gray-750 transition"
+    >
+      <td className="px-4 py-3 text-white font-semibold">{m.candidateName}</td>
+      <td className="px-4 py-3 text-gray-300">{m.jobTitle}</td>
+      <td className="px-4 py-3 text-gray-300">
+        {Math.round((m.matchScore || 0) * 100)}%
+      </td>
+      <td className="px-4 py-3">
+        <StateBadge state={m.state} />
+      </td>
+      <td className="px-4 py-3 text-gray-300">{m.daysInStage} י׳</td>
+      <td className="px-4 py-3 text-gray-400">{formatDate(m.lastActivity)}</td>
+      <td className="px-4 py-3">
+        <MatchActionsMenu
+          match={m}
+          recruiter={recruiter}
+          isOpen={showActionMenu === m.id}
+          onToggle={() => setShowActionMenu(showActionMenu === m.id ? null : m.id)}
+          onActivate={() => actionMutation.mutate({ matchId: m.id, action: "activate" })}
+          onReject={() => actionMutation.mutate({ matchId: m.id, action: "reject" })}
+          onConversation={() => {
+            setSelectedMatchId(m.id);
+            setShowConversationModal(true);
+          }}
+          onDetail={() => setDetailMatchId(m.id)}
+          isLoading={actionMutation.isPending}
+        />
+      </td>
+    </tr>
+  );
+
+  const SortHeader = ({ label, col }: { label: string; col: SortKey }) => (
+    <th className="px-4 py-3 font-semibold">
+      <button
+        onClick={() => toggleSort(col)}
+        className="inline-flex items-center gap-1 hover:text-white transition"
+        title="מיון לפי עמודה זו"
+      >
+        <span>{label}</span>
+        <span className="text-xs opacity-70">
+          {sortKey === col ? (sortDir === "asc" ? "▲" : "▼") : "⇅"}
+        </span>
+      </button>
+    </th>
+  );
+
   // Counts to surface in the optional status strip
   const inQueue =
     recruiter === "carmit"
@@ -213,52 +328,54 @@ export function RecruiterMatchesPanel({
         />
       ) : (
         <>
+          {/* Group-by toolbar */}
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-gray-400">קבץ לפי:</span>
+            {([
+              { k: "none", label: "ללא" },
+              { k: "candidate", label: "מועמד" },
+              { k: "job", label: "משרה" },
+              { k: "state", label: "מצב נוכחי" },
+            ] as { k: GroupKey; label: string }[]).map(({ k, label }) => (
+              <button
+                key={k}
+                onClick={() => setGroupBy(k)}
+                className={`px-3 py-1 rounded text-sm transition ${
+                  groupBy === k
+                    ? "bg-indigo-600 text-white"
+                    : "bg-gray-800 text-gray-300 hover:text-white"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
           <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-visible">
             <table className="w-full text-right text-sm">
               <thead className="bg-gray-700 border-b border-gray-600 text-gray-200">
                 <tr>
-                  <th className="px-4 py-3 font-semibold">מועמד</th>
-                  <th className="px-4 py-3 font-semibold">משרה</th>
-                  <th className="px-4 py-3 font-semibold">ציון</th>
-                  <th className="px-4 py-3 font-semibold">מצב נוכחי</th>
-                  <th className="px-4 py-3 font-semibold">ימים במצב</th>
-                  <th className="px-4 py-3 font-semibold">עודכן</th>
+                  <SortHeader label="מועמד" col="candidate" />
+                  <SortHeader label="משרה" col="job" />
+                  <SortHeader label="ציון" col="score" />
+                  <SortHeader label="מצב נוכחי" col="state" />
+                  <SortHeader label="ימים במצב" col="days" />
+                  <SortHeader label="עודכן" col="updated" />
                   <th className="px-4 py-3 font-semibold">פעולות</th>
                 </tr>
               </thead>
               <tbody>
-                {matches.map((m: Match) => (
-                  <tr
-                    key={m.id}
-                    className="border-b border-gray-700 hover:bg-gray-750 transition"
-                  >
-                    <td className="px-4 py-3 text-white font-semibold">{m.candidateName}</td>
-                    <td className="px-4 py-3 text-gray-300">{m.jobTitle}</td>
-                    <td className="px-4 py-3 text-gray-300">
-                      {Math.round((m.matchScore || 0) * 100)}%
-                    </td>
-                    <td className="px-4 py-3">
-                      <StateBadge state={m.state} />
-                    </td>
-                    <td className="px-4 py-3 text-gray-300">{m.daysInStage} י׳</td>
-                    <td className="px-4 py-3 text-gray-400">{formatDate(m.lastActivity)}</td>
-                    <td className="px-4 py-3">
-                      <MatchActionsMenu
-                        match={m}
-                        recruiter={recruiter}
-                        isOpen={showActionMenu === m.id}
-                        onToggle={() => setShowActionMenu(showActionMenu === m.id ? null : m.id)}
-                        onActivate={() => actionMutation.mutate({ matchId: m.id, action: "activate" })}
-                        onReject={() => actionMutation.mutate({ matchId: m.id, action: "reject" })}
-                        onConversation={() => {
-                          setSelectedMatchId(m.id);
-                          setShowConversationModal(true);
-                        }}
-                        onDetail={() => setDetailMatchId(m.id)}
-                        isLoading={actionMutation.isPending}
-                      />
-                    </td>
-                  </tr>
+                {groups.map((g) => (
+                  <Fragment key={g.key}>
+                    {groupBy !== "none" && (
+                      <tr className="bg-gray-700/40">
+                        <td colSpan={7} className="px-4 py-2 text-indigo-200 font-semibold">
+                          {g.label} <span className="text-gray-400 font-normal">({g.rows.length})</span>
+                        </td>
+                      </tr>
+                    )}
+                    {g.rows.map(renderRow)}
+                  </Fragment>
                 ))}
               </tbody>
             </table>

@@ -30,6 +30,7 @@ export interface DepartmentMatch {
   candidateClearanceConfidence?: number;
   requiredClearance?: string;
   clearanceMatch?: ClearanceMatch;
+  carmitReview?: string;            // מה שכרמית קבעה על ההתאמה (החלטה + מבחני איכות)
 }
 
 export interface AssignedJob {
@@ -50,6 +51,7 @@ export interface AssignedJob {
   deadline?: string;          // דדליין (מ-Pipedrive)
   pipedrive_org_id?: number;
   pipedrive_person_id?: number;
+  pipedrive_deal_id?: number;   // מספר דיל (4 ספרות)
 }
 
 export interface EvaluatedCandidate {

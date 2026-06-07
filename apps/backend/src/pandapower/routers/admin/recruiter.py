@@ -84,6 +84,10 @@ class MatchDetailInfo(BaseModel):
     candidate_clearance: Optional[str] = None
     required_clearance: Optional[str] = None
     clearance_match: str = "unknown"
+    # What Carmit (the quality gate) concluded about this match — her decision,
+    # reasoning, and per-gate breakdown. Surfaced so Tal has the full picture
+    # before reaching out to the candidate.
+    carmit_review: Optional[str] = None
 
 
 class CandidateMatchInfo(BaseModel):
@@ -495,6 +499,7 @@ async def get_match_detail(
         #   candidates.clearance_level, jobs.job_security_clearance
         result = await supabase.table("matches").select(
             "id, candidate_id, job_id, current_state, match_score, match_reasoning, "
+            "carmit_review_notes, carmit_blocked_reason, "
             "candidates(id,name,email,phone,clearance_level), "
             "jobs(id,job_title,job_security_clearance)"
         ).eq("id", match_id).execute()
@@ -535,6 +540,57 @@ async def get_match_detail(
         except Exception:
             clearance_match = "unknown"
 
+        # What Carmit said about this match — so Tal has the full picture before
+        # contacting the candidate. Build a human-readable summary from (in order
+        # of richness): the match_state_history audit row (decision + per-gate
+        # breakdown), then the persisted columns on the match row itself.
+        carmit_review: Optional[str] = None
+        try:
+            hist = await supabase.table("match_state_history").select(
+                "to_state, reasoning, details, created_at"
+            ).eq("match_id", match_id).in_(
+                "to_state", ["carmit_approved", "carmit_rejected"]
+            ).order("created_at", desc=True).limit(1).execute()
+            if hist.data:
+                h = hist.data[0]
+                approved = h.get("to_state") == "carmit_approved"
+                lines = ["✅ כרמית אישרה את ההתאמה" if approved else "❌ כרמית דחתה את ההתאמה"]
+                if h.get("reasoning"):
+                    lines.append(str(h["reasoning"]))
+                details = h.get("details") or {}
+                gate_results = details.get("gate_results") if isinstance(details, dict) else None
+                if isinstance(gate_results, dict):
+                    gate_labels = {
+                        "past_rejection": "היסטוריית דחיות",
+                        "already_declined": "סירוב קודם",
+                        "conflict_of_interest": "ניגוד עניינים",
+                        "clearance_match": "סיווג ביטחוני",
+                        "quality_threshold": "ציון איכות",
+                        "relevant_skills": "כישורים רלוונטיים",
+                    }
+                    for key, gate in gate_results.items():
+                        if not isinstance(gate, dict):
+                            continue
+                        mark = "✓" if gate.get("passed") else "✗"
+                        label = gate_labels.get(key, key)
+                        reason = gate.get("reason") or ""
+                        lines.append(f"{mark} {label}: {reason}".rstrip())
+                carmit_review = "\n".join(lines)
+        except Exception as carmit_err:
+            logger.warning(f"Could not load Carmit review for match {match_id}: {carmit_err}")
+
+        # Fallback to the persisted columns if no audit row was available.
+        if not carmit_review:
+            notes = row.get("carmit_review_notes")
+            blocked = row.get("carmit_blocked_reason")
+            if blocked:
+                carmit_review = f"❌ כרמית דחתה את ההתאמה\n{blocked}"
+            elif notes:
+                carmit_review = str(notes)
+            elif row.get("current_state") not in ("found", None):
+                # Match advanced past Carmit's gate without a recorded note.
+                carmit_review = "✅ כרמית אישרה את ההתאמה (עברה את כל מבחני האיכות)"
+
         return MatchDetailInfo(
             id=str(row["id"]),
             candidate_name=candidate.get("name", "Unknown") if isinstance(candidate, dict) else "Unknown",
@@ -551,6 +607,7 @@ async def get_match_detail(
             candidate_clearance=candidate_clearance,
             required_clearance=required_clearance,
             clearance_match=clearance_match,
+            carmit_review=carmit_review,
         )
 
     except HTTPException:

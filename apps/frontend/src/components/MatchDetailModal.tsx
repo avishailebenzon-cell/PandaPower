@@ -176,6 +176,16 @@ export function MatchDetailModal({ match, onClose }: Props) {
             </section>
           )}
 
+          {/* What Carmit concluded — full picture for Tal before reaching out */}
+          {match.carmitReview && (
+            <section>
+              <h3 className="text-sm font-semibold text-purple-300 mb-2">🛡️ מה כרמית אמרה על ההתאמה</h3>
+              <p className="bg-purple-900/20 border border-purple-800/50 rounded-md px-3 py-2 text-sm text-purple-100 whitespace-pre-wrap leading-relaxed">
+                {match.carmitReview}
+              </p>
+            </section>
+          )}
+
           {/* Contact info */}
           {(match.email || match.phone) && (
             <section className="text-sm text-gray-300">

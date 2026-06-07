@@ -236,6 +236,7 @@ export async function fetchMatchDetail(matchId: string): Promise<import("./recru
     candidateClearance: d.candidate_clearance ?? undefined,
     requiredClearance: d.required_clearance ?? undefined,
     clearanceMatch: d.clearance_match || "unknown",
+    carmitReview: d.carmit_review ?? undefined,
   };
 }
 

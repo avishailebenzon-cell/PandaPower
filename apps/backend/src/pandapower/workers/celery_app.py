@@ -76,6 +76,14 @@ _beat_schedule = {
         "task": "pandapower.workers.tasks.carmit_review_matches_task",
         "schedule": 900.0,  # Run every 15 minutes
     },
+    # Mani: independent Level-1 clearance sweep. Produces matches in 'found'
+    # state that flow through the same Carmit review + Tal handoff as the
+    # 7 domain agents. (Authoritative scheduler is the in-process loop in
+    # main.py; this beat entry is for parity if Celery beat is ever enabled.)
+    "mani-matching-every-5-minutes": {
+        "task": "pandapower.workers.tasks.mani_matching_task",
+        "schedule": 300.0,  # Run every 5 minutes
+    },
     # Carmit → Tal handoff: move carmit_approved matches into Tal's queue.
     # Cadence intentionally faster than review (10min vs 15min) so newly-
     # approved matches reach Tal within roughly one review cycle.

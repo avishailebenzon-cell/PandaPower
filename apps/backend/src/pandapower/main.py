@@ -204,6 +204,7 @@ async def _pipeline_scheduler_loop():
         _carmit_route_jobs_async,
         _carmit_review_matches_async,
         _carmit_handoff_to_tal_async,
+        _mani_matching_async,
         _pipeline_watchdog_async,
         _pipedrive_field_sync_async,
         _pipedrive_historical_import_async,
@@ -229,6 +230,9 @@ async def _pipeline_scheduler_loop():
         # actual matching so matches grow as candidates/jobs arrive. Every 5 min,
         # a rotating batch of routed jobs; cost-bounded by MATCH_JOBS_PER_RUN.
         "matching":              (_run_matching_async,             300.0,    45.0),
+        # Mani: independent Level-1 sweep — produces matches that then flow
+        # through the same Carmit review + Tal handoff as every other agent.
+        "mani_matching":         (_mani_matching_async,            300.0,    48.0),
         "carmit_route_jobs":     (_carmit_route_jobs_async,        600.0,    50.0),
         "carmit_review_matches": (_carmit_review_matches_async,    900.0,    65.0),
         "carmit_handoff_to_tal": (_carmit_handoff_to_tal_async,    600.0,    80.0),
@@ -282,6 +286,7 @@ async def _pipeline_scheduler_loop():
                 if any(result.get(k, 0) for k in (
                     "total_processed", "success", "created", "candidates_updated",
                     "jobs_routed", "matches_reviewed", "handed_off", "candidates_scored",
+                    "pairs_scored",
                 )):
                     _logger.info(f"[pipeline:{name}] {result}")
             elif status == "skipped":

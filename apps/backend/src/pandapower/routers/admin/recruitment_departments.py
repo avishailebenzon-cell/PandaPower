@@ -196,6 +196,8 @@ class AssignedJob(BaseModel):
     # Pipedrive numeric IDs — useful as fallback labels when names aren't synced.
     pipedrive_org_id: Optional[int] = None
     pipedrive_person_id: Optional[int] = None
+    # Pipedrive deal number (4-digit) — shown on the job card next to the title.
+    pipedrive_deal_id: Optional[int] = None
 
 
 @router.get("/{department_code}/assigned-jobs", response_model=List[AssignedJob])
@@ -260,6 +262,30 @@ async def get_assigned_jobs(
             except Exception as ce:
                 logger.warning(f"Failed to batch-resolve contact names: {ce}")
 
+        # Batch-resolve organization names: jobs.org_id holds the Pipedrive numeric
+        # id, but the organizations table is keyed by a deterministic UUID derived
+        # from that id (same scheme used by pipedrive_data.py). Reverse-map so we can
+        # show the org NAME (like the contact name) instead of "ארגון #1828".
+        org_name_by_pid: dict[int, str] = {}
+        org_pids = sorted({int(j["org_id"]) for j in relevant_jobs if j.get("org_id")})
+        if org_pids:
+            try:
+                import uuid as _uuid
+                _ORG_NS = _uuid.UUID("12345678-1234-5678-1234-567812345678")
+                uuid_to_pid: dict[str, int] = {
+                    str(_uuid.uuid5(_ORG_NS, f"pipedrive_org:{pid}")): pid
+                    for pid in org_pids
+                }
+                orgs_resp = await supabase.table("organizations").select(
+                    "id, name"
+                ).in_("id", list(uuid_to_pid.keys())).execute()
+                for o in orgs_resp.data or []:
+                    pid = uuid_to_pid.get(o.get("id"))
+                    if pid is not None and o.get("name"):
+                        org_name_by_pid[pid] = o["name"]
+            except Exception as oe:
+                logger.warning(f"Failed to batch-resolve organization names: {oe}")
+
         assigned_jobs = []
         for job in relevant_jobs:
             agent_code = job.get("assigned_agent_code") or job.get("agent_code")
@@ -293,6 +319,9 @@ async def get_assigned_jobs(
             # exist in the deployed schema.
             org_name = job.get("organization_name")
             org_pid = job.get("org_id")
+            if not org_name and org_pid is not None:
+                org_name = org_name_by_pid.get(int(org_pid))
+            # Last-resort fallback when the org isn't synced yet.
             if not org_name and org_pid:
                 org_name = f"ארגון #{org_pid}"
 
@@ -322,6 +351,7 @@ async def get_assigned_jobs(
                     deadline=job.get("deadline"),  # דדליין (Pipedrive)
                     pipedrive_org_id=int(org_pid) if org_pid is not None else None,
                     pipedrive_person_id=person_pid,
+                    pipedrive_deal_id=int(job["pipedrive_deal_id"]) if job.get("pipedrive_deal_id") else None,
                 )
             )
 
