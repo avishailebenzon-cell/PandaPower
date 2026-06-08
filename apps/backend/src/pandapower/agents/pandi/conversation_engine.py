@@ -243,13 +243,22 @@ class ConversationEngine:
         }
 
     async def _check_quota(self, pandi_client_id: UUID, supabase) -> dict:
-        """Check current quota status for a client."""
-        result = await supabase.rpc(
-            "check_quota",
-            {"p_client_id": str(pandi_client_id)},
-        ).execute()
-        data = getattr(result, "data", None) or []
-        return data[0] if data else {"state": "ok", "messages_used": 0}
+        """Check current quota status for a client.
+
+        Fail-open: if the check_quota DB function (or the quota table) isn't
+        provisioned, we must NOT block the reply — quota is a soft guard rail,
+        not a gate on Pandi responding at all. Any error returns an "ok" state.
+        """
+        try:
+            result = await supabase.rpc(
+                "check_quota",
+                {"p_client_id": str(pandi_client_id)},
+            ).execute()
+            data = getattr(result, "data", None) or []
+            return data[0] if data else {"state": "ok", "messages_used": 0}
+        except Exception as e:
+            logger.warning("check_quota unavailable — failing open", error=str(e))
+            return {"state": "ok", "messages_used": 0}
 
     async def _check_inappropriate(self, text: str) -> bool:
         """Fast inappropriate content check using Haiku."""
@@ -299,13 +308,16 @@ Respond with only: YES or NO"""
     async def _increment_quota(
         self, pandi_client_id: UUID, count: int = 1, supabase=None
     ) -> None:
-        """Increment quota usage."""
+        """Increment quota usage. Best-effort — never blocks the reply."""
         if supabase is None:
             supabase = await self._get_supabase()
-        await supabase.rpc(
-            "increment_quota_usage",
-            {"p_client_id": str(pandi_client_id), "p_count": count},
-        ).execute()
+        try:
+            await supabase.rpc(
+                "increment_quota_usage",
+                {"p_client_id": str(pandi_client_id), "p_count": count},
+            ).execute()
+        except Exception as e:
+            logger.warning("increment_quota_usage unavailable — skipping", error=str(e))
 
     async def _load_conversation(self, conversation_id: UUID, supabase=None) -> dict:
         """Load conversation record."""
