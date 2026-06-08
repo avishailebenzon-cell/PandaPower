@@ -238,7 +238,15 @@ export const ConversationsScreen: React.FC<ConversationsScreenProps> = ({
             <>
               {/* Header with contact + pause toggle */}
               <div className="border-b border-gray-700 px-4 py-3 flex items-center justify-between bg-gray-900/70">
-                <div>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => navigate(backTo)}
+                    title="חזרה למסך הקודם"
+                    className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-gray-700 text-white hover:bg-gray-600 transition shrink-0"
+                  >
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                  <div>
                   <div className="text-white font-semibold flex items-center gap-2">
                     {contactName}
                     {paused ? (
@@ -256,6 +264,7 @@ export const ConversationsScreen: React.FC<ConversationsScreenProps> = ({
                     )}
                   </div>
                   {jobTitle && <div className="text-xs text-gray-400">{jobTitle}</div>}
+                  </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <button

@@ -213,67 +213,83 @@ class RecruiterChatEngine:
             return {}
 
     async def _build_match_context(self, match_id, supabase) -> str:
+        """Build the per-match context Tal/Elad are grounded in.
+
+        For both real and test matches we always surface the match analysis and
+        Carmit's notes as "פערים אפשריים בהתאמה" — these are the gaps Tal must
+        walk the candidate through to decide real fit. Job/candidate display
+        fields come from test_meta for test matches, otherwise from the joins."""
         if not match_id:
             return ""
-        # Test matches are self-contained — build the context from test_meta.
         test = await self._load_test_fields(match_id, supabase)
-        if test.get("is_test"):
-            meta = test.get("test_meta") or {}
-            if isinstance(meta, dict):
-                lines = []
-                if meta.get("contact_name"):
-                    lines.append(f"מועמד: {meta['contact_name']}")
-                if meta.get("candidate_clearance"):
-                    lines.append(f"סיווג המועמד: {meta['candidate_clearance']}")
-                if meta.get("job_title"):
-                    lines.append(f"משרה: {meta['job_title']}")
-                if meta.get("organization_name"):
-                    lines.append(f"ארגון/לקוח: {meta['organization_name']}")
-                if meta.get("job_location"):
-                    lines.append(f"מיקום: {meta['job_location']}")
-                if meta.get("job_security_clearance"):
-                    lines.append(f"סיווג נדרש: {meta['job_security_clearance']}")
-                if meta.get("job_description"):
-                    lines.append(f"תיאור המשרה: {str(meta['job_description'])[:600]}")
-                if meta.get("job_qualifications"):
-                    lines.append(f"דרישות: {str(meta['job_qualifications'])[:600]}")
-                if lines:
-                    return "\n".join(lines)
+        is_test = bool(test.get("is_test"))
+        meta = test.get("test_meta") if (is_test and isinstance(test.get("test_meta"), dict)) else {}
+
+        row: dict = {}
         try:
             res = await supabase.table("matches").select(
-                "id, match_score, match_reasoning, carmit_review_notes, "
+                "id, match_score, match_reasoning, carmit_review_notes, carmit_blocked_reason, "
                 "candidates(name, clearance_level), "
                 "jobs(job_title, job_description, job_qualifications, "
                 "job_location, job_security_clearance, organization_name)"
             ).eq("id", str(match_id)).limit(1).execute()
-            if not res.data:
-                return ""
-            row = res.data[0]
-            cand = row.get("candidates") or {}
-            job = row.get("jobs") or {}
-            lines = []
-            if cand.get("name"):
-                lines.append(f"מועמד: {cand['name']}")
-            if cand.get("clearance_level"):
-                lines.append(f"סיווג המועמד: {cand['clearance_level']}")
-            if job.get("job_title"):
-                lines.append(f"משרה: {job['job_title']}")
-            if job.get("organization_name"):
-                lines.append(f"ארגון/לקוח: {job['organization_name']}")
-            if job.get("job_location"):
-                lines.append(f"מיקום: {job['job_location']}")
-            if job.get("job_security_clearance"):
-                lines.append(f"סיווג נדרש: {job['job_security_clearance']}")
-            if job.get("job_description"):
-                lines.append(f"תיאור המשרה: {str(job['job_description'])[:600]}")
-            if job.get("job_qualifications"):
-                lines.append(f"דרישות: {str(job['job_qualifications'])[:600]}")
-            if row.get("match_reasoning"):
-                lines.append(f"למה ההתאמה טובה: {str(row['match_reasoning'])[:400]}")
-            return "\n".join(lines)
+            if res.data:
+                row = res.data[0]
         except Exception as e:
             logger.warning(f"{self.recruiter} context build failed for match {match_id}: {e}")
-            return ""
+            if not is_test:
+                return ""
+
+        cand = row.get("candidates") or {}
+        job = row.get("jobs") or {}
+
+        def field(meta_key: str, src: dict, src_key: str):
+            """Prefer the test-meta value for test matches, else the joined row."""
+            if is_test and meta.get(meta_key):
+                return meta.get(meta_key)
+            return src.get(src_key)
+
+        name = field("contact_name", cand, "name")
+        cand_clear = field("candidate_clearance", cand, "clearance_level")
+        title = field("job_title", job, "job_title")
+        org = field("organization_name", job, "organization_name")
+        loc = field("job_location", job, "job_location")
+        clear_req = field("job_security_clearance", job, "job_security_clearance")
+        desc = field("job_description", job, "job_description")
+        quals = field("job_qualifications", job, "job_qualifications")
+
+        lines = []
+        if name:
+            lines.append(f"מועמד: {name}")
+        if cand_clear:
+            lines.append(f"סיווג המועמד: {cand_clear}")
+        if title:
+            lines.append(f"משרה: {title}")
+        if org:
+            lines.append(f"ארגון/לקוח: {org}")
+        if loc:
+            lines.append(f"מיקום: {loc}")
+        if clear_req:
+            lines.append(f"סיווג נדרש: {clear_req}")
+        if desc:
+            lines.append(f"תיאור המשרה: {str(desc)[:600]}")
+        if quals:
+            lines.append(f"דרישות: {str(quals)[:600]}")
+
+        # The gaps Tal must clarify with the candidate.
+        gaps = []
+        if row.get("match_reasoning"):
+            gaps.append(f"ניתוח הסוכן: {str(row['match_reasoning'])[:600]}")
+        if row.get("carmit_review_notes"):
+            gaps.append(f"הערות כרמית: {str(row['carmit_review_notes'])[:400]}")
+        if row.get("carmit_blocked_reason"):
+            gaps.append(f"הסתייגות כרמית: {str(row['carmit_blocked_reason'])[:300]}")
+        if gaps:
+            lines.append(
+                "פערים אפשריים בהתאמה (לברר מול המועמד — ייתכן שחלקם רק לא נכתבו בקו\"ח):\n"
+                + "\n".join(f"  • {g}" for g in gaps)
+            )
+        return "\n".join(lines)
 
     async def _load_behavior_addendum(self, supabase) -> str:
         try:
