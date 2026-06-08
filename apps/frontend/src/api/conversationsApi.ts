@@ -133,3 +133,4 @@ export function makeConversationsApi(basePath: string): ConversationsApi {
 export const talConversationsApi = makeConversationsApi("/admin/tal");
 export const eladConversationsApi = makeConversationsApi("/admin/elad");
 export const pandiConversationsApi = makeConversationsApi("/admin/pandi-chat");
+export const pandiusConversationsApi = makeConversationsApi("/admin/pandius-chat");

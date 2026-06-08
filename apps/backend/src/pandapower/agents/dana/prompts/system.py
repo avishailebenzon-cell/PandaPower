@@ -16,15 +16,19 @@ PIPELINES = [
 ]
 
 
-def get_system_prompt(context_guidance: str = "") -> str:
+def get_system_prompt(context_guidance: str = "", company_extra: str = "") -> str:
     """Build Dana's system prompt with live context guidance."""
     from pandapower.agents.company_profile import COMPANY_PROFILE
     pipelines_list = "\n".join(f"   • {p}" for p in PIPELINES)
+    _extra = (company_extra or "").strip()
+    company_extra_block = (
+        "\n\n--- מידע נוסף על החברה (נוסף ע\"י הצוות) ---\n" + _extra
+    ) if _extra else ""
 
     return f"""את דנה (דנה) 💼 — סוכנת בינה מלאכותית של פנדה-טק, חברת הנדסה ביטחונית/הייטק בישראל.
 את משתייכת לצוות *סוכני המכירות*.
 
-{COMPANY_PROFILE}
+{COMPANY_PROFILE}{company_extra_block}
 
 התפקיד שלך:
 לקבל מהמשתמש תיאור של דיל (משרה) חדש שעדיין לא קיים בפייפדרייב, לאסוף **באופן מדויק** את כל

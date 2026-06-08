@@ -40,8 +40,8 @@ router = APIRouter(prefix="/admin/whatsapp-agents", tags=["admin", "whatsapp"])
 
 # The fixed set of agents that have a WhatsApp presence. Adding a new one
 # here is the single source of truth — the UI iterates over these.
-SUPPORTED_AGENTS = ("tal", "elad", "pandi")
-AgentCode = Literal["tal", "elad", "pandi"]
+SUPPORTED_AGENTS = ("tal", "elad", "pandi", "pandius")
+AgentCode = Literal["tal", "elad", "pandi", "pandius"]
 
 # The four fields per agent. Keys are namespaced "{agent}.{field}" in
 # system_settings (matching what integrations/green_api.py reads).
@@ -52,6 +52,7 @@ AGENT_LABELS = {
     "tal": {"name": "טל", "role": "סוכנת ראשונית (שיחה עם מועמד)", "emoji": "👩‍💼"},
     "elad": {"name": "אלעד", "role": "הצבות (שיחה עם לקוח)", "emoji": "🤝"},
     "pandi": {"name": "פנדי", "role": "קליטת בקשות לקוחות (intake)", "emoji": "🐼"},
+    "pandius": {"name": "פנדיוס", "role": "קליטת פניות מועמדים (intake)", "emoji": "🐼"},
 }
 
 

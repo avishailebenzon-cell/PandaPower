@@ -7,6 +7,14 @@ Same structure for both; the persona and the conversation goal differ by role:
 
 from pandapower.agents.company_profile import COMPANY_PROFILE, FACILITY_FACTS
 
+
+def _company_extra_block(extra: str) -> str:
+    """Render the operator-added company content, or "" when there is none."""
+    extra = (extra or "").strip()
+    if not extra:
+        return ""
+    return "--- מידע נוסף על החברה (נוסף ע\"י הצוות) ---\n" + extra
+
 # The candidate intake form Tal sends once she's confident the candidate fits.
 CANDIDATE_FORM_URL = "https://forms.gle/u5GtAhgp6myCM8W66"
 # Where candidates are redirected for anything beyond the initial screening.
@@ -68,6 +76,7 @@ def get_system_prompt(
     recruiter: str,
     match_context: str = "",
     behavior_addendum: str = "",
+    company_extra: str = "",
 ) -> str:
     """Build the recruiter's system prompt with live per-match context."""
     persona = _ELAD_PERSONA if recruiter == "elad" else _TAL_PERSONA
@@ -99,6 +108,7 @@ def get_system_prompt(
 {match_context or "אין הקשר זמין — שאל/י באופן כללי."}
 
 {FACILITY_FACTS}
+{_company_extra_block(company_extra)}
 """
     if recruiter != "elad":
         base += f"\n--- מהלך השיחה של טל ---\n{_tal_flow(CANDIDATE_FORM_URL, JOBS_CONTACT_EMAIL)}\n"

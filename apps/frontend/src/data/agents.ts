@@ -163,6 +163,18 @@ export const RECRUITERS: Record<string, Recruiter> = {
     stage: "Final Placement",
     email: "elad@pandapower.io",
   },
+  pandius: {
+    code: "pandius",
+    name: "פנדיוס",
+    title: "סוכן פניות מועמדים",
+    role: "Candidate Intake Agent",
+    emoji: "🐼",
+    avatar: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%230f766e'/%3E%3Ctext x='50' y='60' text-anchor='middle' font-size='40' font-weight='bold' fill='white'%3E פ%3C/text%3E%3C/svg%3E",
+    color: "from-teal-600 to-teal-800",
+    description: "סוכן WhatsApp נכנס שעונה למועמדים המחפשים עבודה: אוסף פרטים, קולט קורות חיים ומנסה לאתר משרה מתאימה. עונה לפניות בלבד.",
+    stage: "Candidate Intake",
+    email: "pandius@pandapower.io",
+  },
 };
 
 // Sales agents (סוכני מכירות) — client/deal-facing AI agents.
@@ -202,7 +214,7 @@ export function getAllAgents(): Agent[] {
  */
 export function agentNameHe(code: string | null | undefined): string {
   if (!code) return "—";
-  const extra: Record<string, string> = { carmit: "כרמית", pandi: "פנדי" };
+  const extra: Record<string, string> = { carmit: "כרמית", pandi: "פנדי", pandius: "פנדיוס" };
   return (
     RECRUITMENT_AGENTS[code]?.name ||
     RECRUITERS[code]?.name ||

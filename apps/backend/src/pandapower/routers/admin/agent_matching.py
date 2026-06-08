@@ -1490,6 +1490,7 @@ async def get_all_jobs_with_assignments(
                 "assigned_agent_code": agent_code,
                 "assigned_agent_name": agent_name,
                 "organization_name": job.get("organization_name"),  # Organization (ארגון)
+                "pipedrive_deal_id": job.get("pipedrive_deal_id"),  # 4-digit Pipedrive job number
                 "contact_person_name": job.get("contact_person_name"),  # Contact person (איש קשר)
                 "job_opening_date": job.get("job_opening_date"),  # Job opening date
                 "created_at": job.get("created_at"),

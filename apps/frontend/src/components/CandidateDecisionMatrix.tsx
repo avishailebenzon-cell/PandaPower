@@ -3,9 +3,10 @@
  * Shows all candidates that were evaluated with their match reasoning
  */
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchAllCandidateMatches, type CandidateMatch } from "@/api/recruiter";
+import { GeoMismatchBadge } from "@/components/GeoMismatchBadge";
 
 const STATE_COLORS: Record<string, string> = {
   found: "bg-yellow-900",
@@ -48,6 +49,17 @@ interface Props {
 export function CandidateDecisionMatrix({ showTitle = true, agentCode }: Props) {
   const [selectedJobId, setSelectedJobId] = useState<string>("");
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  const [sortCol, setSortCol] = useState<"candidate" | "job" | "score">("score");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
+  const handleSort = (col: "candidate" | "job" | "score") => {
+    if (sortCol === col) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortCol(col);
+      setSortDir(col === "score" ? "desc" : "asc");
+    }
+  };
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["candidate-decision-matrix", selectedJobId, agentCode],
@@ -63,8 +75,25 @@ export function CandidateDecisionMatrix({ showTitle = true, agentCode }: Props) 
     );
   }
 
-  const matches = data?.matches || [];
+  const rawMatches = data?.matches || [];
   const jobs = data?.jobs || [];
+
+  const matches = useMemo(() => {
+    const sorted = [...rawMatches];
+    const dir = sortDir === "asc" ? 1 : -1;
+    sorted.sort((a, b) => {
+      let cmp = 0;
+      if (sortCol === "score") {
+        cmp = (a.matchScore || 0) - (b.matchScore || 0);
+      } else if (sortCol === "candidate") {
+        cmp = (a.candidateName || "").localeCompare(b.candidateName || "", "he");
+      } else if (sortCol === "job") {
+        cmp = (a.jobTitle || "").localeCompare(b.jobTitle || "", "he");
+      }
+      return cmp * dir;
+    });
+    return sorted;
+  }, [rawMatches, sortCol, sortDir]);
 
   const toggleRow = (matchId: string) => {
     const newExpanded = new Set(expandedRows);
@@ -116,10 +145,42 @@ export function CandidateDecisionMatrix({ showTitle = true, agentCode }: Props) 
           <table className="w-full text-right text-sm bg-gray-800 rounded-lg border border-gray-700">
             <thead className="bg-gray-700 border-b border-gray-600">
               <tr>
-                <th className="px-4 py-3 font-semibold text-gray-200 text-right">מועמד</th>
-                <th className="px-4 py-3 font-semibold text-gray-200 text-right">משרה</th>
+                <th className="px-4 py-3 font-semibold text-gray-200 text-right">
+                  <button
+                    onClick={() => handleSort("candidate")}
+                    className="flex items-center gap-1 hover:text-white transition"
+                  >
+                    מועמד
+                    <span className="text-xs">
+                      {sortCol === "candidate" ? (sortDir === "asc" ? "▲" : "▼") : "⇅"}
+                    </span>
+                  </button>
+                </th>
+                <th className="px-4 py-3 font-semibold text-gray-200 text-right">
+                  <button
+                    onClick={() => handleSort("job")}
+                    className="flex items-center gap-1 hover:text-white transition"
+                  >
+                    משרה
+                    <span className="text-xs">
+                      {sortCol === "job" ? (sortDir === "asc" ? "▲" : "▼") : "⇅"}
+                    </span>
+                  </button>
+                </th>
+                <th className="px-4 py-3 font-semibold text-gray-200 text-right">שם לקוח</th>
+                <th className="px-4 py-3 font-semibold text-gray-200 text-right">מספר משרה</th>
                 <th className="px-4 py-3 font-semibold text-gray-200 text-right">סוכן</th>
-                <th className="px-4 py-3 font-semibold text-gray-200 text-right">ציון</th>
+                <th className="px-4 py-3 font-semibold text-gray-200 text-right">
+                  <button
+                    onClick={() => handleSort("score")}
+                    className="flex items-center gap-1 hover:text-white transition"
+                  >
+                    ציון
+                    <span className="text-xs">
+                      {sortCol === "score" ? (sortDir === "asc" ? "▲" : "▼") : "⇅"}
+                    </span>
+                  </button>
+                </th>
                 <th className="px-4 py-3 font-semibold text-gray-200 text-right">מצב</th>
                 <th className="px-4 py-3 font-semibold text-gray-200 text-right">תאריך</th>
                 <th className="px-4 py-3 font-semibold text-gray-200 text-center">📝</th>
@@ -136,7 +197,17 @@ export function CandidateDecisionMatrix({ showTitle = true, agentCode }: Props) 
                   <tbody key={match.id}>
                     <tr className="border-b border-gray-700 hover:bg-gray-750 transition">
                       <td className="px-4 py-3 text-white font-semibold">{match.candidateName}</td>
-                      <td className="px-4 py-3 text-gray-300">{match.jobTitle}</td>
+                      <td className="px-4 py-3 text-gray-300">
+                        <div className="flex flex-col gap-1.5">
+                          <span>{match.jobTitle}</span>
+                          <GeoMismatchBadge
+                            mismatch={match.geographicMismatch}
+                            reason={match.geographicMismatchReason}
+                          />
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-gray-300">{match.organizationName || "—"}</td>
+                      <td className="px-4 py-3 text-gray-400 font-mono">{match.pipedriveDealId ?? "—"}</td>
                       <td className="px-4 py-3 text-gray-300">{agentName}</td>
                       <td className="px-4 py-3 text-gray-300">
                         {Math.round((match.matchScore || 0) * 100)}%
@@ -164,13 +235,24 @@ export function CandidateDecisionMatrix({ showTitle = true, agentCode }: Props) 
                     </tr>
 
                     {/* Expanded reasoning row */}
-                    {isExpanded && match.matchReasoning && (
+                    {isExpanded && (match.matchReasoning || match.geographicMismatch) && (
                       <tr className="bg-gray-750 border-b border-gray-700">
-                        <td colSpan={7} className="px-4 py-4">
-                          <div className="bg-gray-900 rounded p-4 border border-gray-600">
-                            <p className="text-sm text-gray-300 leading-relaxed whitespace-pre-wrap">
-                              {match.matchReasoning}
-                            </p>
+                        <td colSpan={9} className="px-4 py-4">
+                          <div className="bg-gray-900 rounded p-4 border border-gray-600 space-y-3">
+                            {match.geographicMismatch && (
+                              <div className="flex items-start gap-2 text-sm text-red-300 font-semibold">
+                                <span>📍 אין התאמה גיאוגרפית:</span>
+                                <span className="font-normal">
+                                  {match.geographicMismatchReason ||
+                                    "המועמד אינו נמצא במיקום גיאוגרפי מתאים למשרה"}
+                                </span>
+                              </div>
+                            )}
+                            {match.matchReasoning && (
+                              <p className="text-sm text-gray-300 leading-relaxed whitespace-pre-wrap">
+                                {match.matchReasoning}
+                              </p>
+                            )}
                           </div>
                         </td>
                       </tr>

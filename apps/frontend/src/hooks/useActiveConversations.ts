@@ -16,6 +16,7 @@ import {
   talConversationsApi,
   eladConversationsApi,
   pandiConversationsApi,
+  pandiusConversationsApi,
   type ConversationSummary,
 } from "@/api/conversationsApi";
 
@@ -24,6 +25,7 @@ export interface ActiveConversationsState {
   tal: number;
   elad: number;
   pandi: number;
+  pandius: number;
 }
 
 // A conversation counts as "live" if its last message is this recent.
@@ -37,7 +39,7 @@ const isActive = (c: ConversationSummary): boolean => {
   return Date.now() - ts <= ACTIVE_WINDOW_MS;
 };
 
-const EMPTY: ActiveConversationsState = { total: 0, tal: 0, elad: 0, pandi: 0 };
+const EMPTY: ActiveConversationsState = { total: 0, tal: 0, elad: 0, pandi: 0, pandius: 0 };
 
 export function useActiveConversations(pollMs = 8000): ActiveConversationsState {
   const [state, setState] = useState<ActiveConversationsState>(EMPTY);
@@ -46,16 +48,18 @@ export function useActiveConversations(pollMs = 8000): ActiveConversationsState 
     let cancelled = false;
 
     const tick = async () => {
-      const [tal, elad, pandi] = await Promise.all([
+      const [tal, elad, pandi, pandius] = await Promise.all([
         talConversationsApi.list().catch(() => [] as ConversationSummary[]),
         eladConversationsApi.list().catch(() => [] as ConversationSummary[]),
         pandiConversationsApi.list().catch(() => [] as ConversationSummary[]),
+        pandiusConversationsApi.list().catch(() => [] as ConversationSummary[]),
       ]);
       if (cancelled) return;
       const t = tal.filter(isActive).length;
       const e = elad.filter(isActive).length;
       const p = pandi.filter(isActive).length;
-      setState({ total: t + e + p, tal: t, elad: e, pandi: p });
+      const pu = pandius.filter(isActive).length;
+      setState({ total: t + e + p + pu, tal: t, elad: e, pandi: p, pandius: pu });
     };
 
     tick();

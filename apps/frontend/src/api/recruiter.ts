@@ -10,6 +10,7 @@ export interface Match {
   candidateName: string;
   jobTitle: string;
   company: string;
+  pipedriveDealId?: number; // 4-digit Pipedrive job number
   matchScore: number;
   status: string;
   state: string;
@@ -18,6 +19,8 @@ export interface Match {
   candidateId: string;
   jobId: string;
   daysInStage: number;
+  geographicMismatch?: boolean;
+  geographicMismatchReason?: string;
 }
 
 export interface StatusMetrics {
@@ -64,12 +67,15 @@ export interface CandidateMatch {
   jobId: string;
   jobTitle: string;
   organizationName?: string;
+  pipedriveDealId?: number; // 4-digit Pipedrive job number
   matchScore: number;
   currentState: string;
   matchedByAgentCode: string;
   matchReasoning?: string;
   createdAt: string;
   evaluatedScoreRaw?: number;
+  geographicMismatch?: boolean;
+  geographicMismatchReason?: string;
 }
 
 export interface AllCandidateMatchesResponse {
@@ -135,6 +141,7 @@ export async function fetchRecruiterMatches(
       candidateName: match.candidate_name,
       jobTitle: match.job_title,
       company: match.company,
+      pipedriveDealId: match.pipedrive_deal_id ?? undefined,
       matchScore: match.match_score,
       status: match.status,
       state: match.state,
@@ -143,6 +150,8 @@ export async function fetchRecruiterMatches(
       candidateId: match.candidate_id,
       jobId: match.job_id,
       daysInStage: match.days_in_stage,
+      geographicMismatch: match.geographic_mismatch ?? false,
+      geographicMismatchReason: match.geographic_mismatch_reason ?? undefined,
     })),
     total: data.total,
     page: data.page,
@@ -236,6 +245,8 @@ export async function fetchMatchDetail(matchId: string): Promise<import("./recru
     candidateClearance: d.candidate_clearance ?? undefined,
     requiredClearance: d.required_clearance ?? undefined,
     clearanceMatch: d.clearance_match || "unknown",
+    geographicMismatch: d.geographic_mismatch ?? false,
+    geographicMismatchReason: d.geographic_mismatch_reason ?? undefined,
     carmitReview: d.carmit_review ?? undefined,
   };
 }
@@ -308,12 +319,15 @@ export async function fetchAllCandidateMatches(
       jobId: m.job_id,
       jobTitle: m.job_title,
       organizationName: m.organization_name,
+      pipedriveDealId: m.pipedrive_deal_id ?? undefined,
       matchScore: m.match_score,
       currentState: m.current_state,
       matchedByAgentCode: m.matched_by_agent_code,
       matchReasoning: m.match_reasoning,
       createdAt: m.created_at,
       evaluatedScoreRaw: m.evaluated_score_raw,
+      geographicMismatch: m.geographic_mismatch ?? false,
+      geographicMismatchReason: m.geographic_mismatch_reason ?? undefined,
     })),
     total: data.total,
     jobs: data.jobs || [],

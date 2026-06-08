@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
 
-SUPPORTED_AGENTS = {"tal", "elad", "pandi"}
+SUPPORTED_AGENTS = {"tal", "elad", "pandi", "pandius"}
 
 
 async def _get_webhook_secret(supabase, agent_code: str) -> str:
@@ -106,6 +106,18 @@ def _normalise_green_api_payload(payload: dict) -> dict:
     elif msg_type == "extendedTextMessage":
         text = (message_data.get("extendedTextMessageData") or {}).get("text")
 
+    # File attachments (CVs sent by candidates to Pandius). Green API puts these
+    # under fileMessageData for documentMessage / imageMessage events.
+    download_url: Optional[str] = None
+    filename: Optional[str] = None
+    mime_type: Optional[str] = None
+    if msg_type in ("documentMessage", "imageMessage"):
+        file_data = message_data.get("fileMessageData") or {}
+        download_url = file_data.get("downloadUrl")
+        filename = file_data.get("fileName")
+        mime_type = file_data.get("mimeType")
+        text = text or file_data.get("caption")
+
     return {
         "event_type": event_type,
         "green_api_message_id": payload.get("idMessage"),
@@ -114,6 +126,9 @@ def _normalise_green_api_payload(payload: dict) -> dict:
         "sender_name": sender_data.get("senderName"),
         "text": text,
         "message_type": msg_type,
+        "download_url": download_url,
+        "filename": filename,
+        "mime_type": mime_type,
         "timestamp": payload.get("timestamp"),
     }
 
@@ -338,6 +353,38 @@ async def receive_whatsapp_webhook(
             logger.info("Spawned in-process Pandi message handler")
         except Exception as e:
             logger.error(f"Failed to spawn Pandi message handler: {e}", exc_info=True)
+
+    # Pandius (candidate-facing, inbound-only): handle text AND CV file uploads.
+    # Run in-process for the same reason as Pandi (Celery worker retired). The
+    # file branch carries the Green API downloadUrl so the handler can ingest the
+    # CV into the normal scan pipeline.
+    if agent_code == "pandius" and parsed.get("event_type") == "incomingMessageReceived":
+        is_file = (
+            parsed.get("message_type") in ("documentMessage", "imageMessage")
+            and parsed.get("download_url")
+        )
+        if parsed.get("text") or is_file:
+            try:
+                from pandapower.workers.pandius.message_handler import (
+                    _process_pandius_incoming_message_async,
+                )
+
+                pandius_payload = {
+                    "messages": [{
+                        "id": parsed.get("green_api_message_id"),
+                        "from": parsed.get("from_chat_id"),
+                        "text": parsed.get("text") or "",
+                        "message_type": "document" if is_file else "text",
+                        "download_url": parsed.get("download_url"),
+                        "filename": parsed.get("filename"),
+                        "mime_type": parsed.get("mime_type"),
+                        "timestamp": parsed.get("timestamp", int(datetime.now().timestamp())),
+                    }]
+                }
+                asyncio.create_task(_process_pandius_incoming_message_async(pandius_payload))
+                logger.info("Spawned in-process Pandius message handler")
+            except Exception as e:
+                logger.error(f"Failed to spawn Pandius message handler: {e}", exc_info=True)
 
     return {"status": "ok", "agent": agent_code, "event": parsed.get("event_type")}
 

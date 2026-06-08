@@ -238,6 +238,8 @@ class AgentMatchingWorker:
                         agent_code=agent_code,
                         tokens_used=match_info["tokens_used"],
                         duration_ms=match_info["duration_ms"],
+                        geographic_mismatch=match_info.get("geographic_mismatch", False),
+                        geographic_mismatch_reason=match_info.get("geographic_mismatch_reason"),
                     )
                     result["tokens_used"] += match_info["tokens_used"]
                     if match_info["score"] >= 70:
@@ -372,6 +374,8 @@ class AgentMatchingWorker:
                         agent_code=agent_code,
                         tokens_used=match_info["tokens_used"],
                         duration_ms=match_info["duration_ms"],
+                        geographic_mismatch=match_info.get("geographic_mismatch", False),
+                        geographic_mismatch_reason=match_info.get("geographic_mismatch_reason"),
                     )
                     result["matches_found"] += 1
                     result["tokens_used"] += match_info["tokens_used"]
@@ -503,11 +507,16 @@ class AgentMatchingWorker:
             # Parse response
             data = response.get("parsed", {})
 
+            geo_mismatch = bool(data.get("geographic_mismatch", False))
+            geo_reason = (data.get("geographic_reason") or "").strip() if geo_mismatch else None
+
             return {
                 "score": int(data.get("score", 0)),
                 "reasoning": data.get("reasoning", ""),
                 "strengths": data.get("strengths", []),
                 "gaps": data.get("gaps", []),
+                "geographic_mismatch": geo_mismatch,
+                "geographic_mismatch_reason": geo_reason,
                 "tokens_used": response.get("tokens_used", 0),
                 "duration_ms": (datetime.utcnow() - start_time).total_seconds() * 1000,
             }
@@ -573,6 +582,7 @@ class AgentMatchingWorker:
         job_quals = job.get("job_qualifications", "")
         job_clearance = job.get("job_security_clearance")
         job_domain = job.get("classification_level") or agent_config.get("domain", "")
+        job_location = job.get("job_location") or job.get("location")
 
         # Format skills for readability
         technical_skills_text = ", ".join(technical_skills[:20]) if technical_skills else "Not listed"
@@ -717,6 +727,8 @@ Description:
 
 Required Security Clearance: {job_clearance or 'None'}
 
+Job Location: {job_location or 'Unknown'}
+
 AGENT SPECIALIZATION:
 Agent: {agent_code} ({agent_config['name']})
 Focuses on: {agent_config['keywords']}
@@ -730,14 +742,31 @@ COMPREHENSIVE EVALUATION CRITERIA:
 6. Language requirements met? (if applicable)
 7. Is there a security clearance gap or mismatch (if required)?
 
-IMPORTANT: Write the "reasoning", "strengths", and "gaps" text in HEBREW (עברית). The score must remain an integer. Do NOT write these explanations in English — they are displayed to Hebrew-speaking recruiters.
+GEOGRAPHIC FIT (separate from the score):
+Compare the candidate's location to the job's location. Both are in Israel.
+A candidate is geographically MISMATCHED only when the daily commute between
+their home area and the job's area is impractical (roughly more than ~60-70 km
+or ~1.5 hours each way) — e.g. a candidate in Eilat / Kiryat Shmona for a job
+in Tel Aviv. Same city, neighboring cities, or the same metropolitan area
+(e.g. Gush Dan, the Sharon, greater Jerusalem, greater Haifa) are NOT a
+mismatch. If either location is unknown/blank, do NOT flag a mismatch.
+IMPORTANT: Geographic distance must NOT lower the "score" — score the
+professional fit only. The geographic mismatch is reported as a SEPARATE flag
+because some candidates are willing to relocate.
+
+IMPORTANT: Write the "reasoning", "strengths", "gaps", and
+"geographic_reason" text in HEBREW (עברית). The score must remain an integer.
+Do NOT write these explanations in English — they are displayed to
+Hebrew-speaking recruiters.
 
 Return ONLY valid JSON (no extra text):
 {{
   "score": <integer 0-100 where 70+ is a viable match>,
   "reasoning": "<הסבר של 2-3 משפטים בעברית הכולל: ניסיון רלוונטי, התאמת כישורים מרכזיים, וכל חשש לגבי סיווג ביטחוני/שפה>",
   "strengths": ["<נקודת התאמה קונקרטית 1 מתוך נתוני קורות החיים, בעברית>", "<נקודת התאמה קונקרטית 2 מתוך נתוני קורות החיים, בעברית>"],
-  "gaps": ["<פער כישורים אם קיים, בעברית>", "<פער סיווג ביטחוני אם קיים, בעברית>", "<חשש אם קיים, בעברית>"]
+  "gaps": ["<פער כישורים אם קיים, בעברית>", "<פער סיווג ביטחוני אם קיים, בעברית>", "<חשש אם קיים, בעברית>"],
+  "geographic_mismatch": <true אם המיקום של המועמד אינו מאפשר נסיעה יומית סבירה למשרה, אחרת false>,
+  "geographic_reason": "<אם geographic_mismatch=true: משפט קצר בעברית המסביר את הפער הגיאוגרפי, למשל 'המועמד מאילת והמשרה בתל אביב (~340 ק\"מ)'. אם false: מחרוזת ריקה>"
 }}"""
 
         return prompt
@@ -753,6 +782,8 @@ Return ONLY valid JSON (no extra text):
         agent_code: str,
         tokens_used: int,
         duration_ms: float,
+        geographic_mismatch: bool = False,
+        geographic_mismatch_reason: Optional[str] = None,
     ) -> None:
         """Create match record in database and log the activity."""
 
@@ -771,6 +802,11 @@ Return ONLY valid JSON (no extra text):
                 "state_updated_by_agent": agent_code,
                 "is_passing": score >= 70,  # Distinguish viable (≥70) from evaluated (<70)
                 "evaluated_score_raw": score,  # Store absolute score 0-100
+                # Geographic fit is tracked separately from the score: an
+                # excellent professional match can still be a long commute, and
+                # we keep it (the candidate may relocate) but flag it loudly.
+                "geographic_mismatch": bool(geographic_mismatch),
+                "geographic_mismatch_reason": geographic_mismatch_reason,
             }
 
             result = await self.supabase.table("matches").insert(match_data).execute()

@@ -8,7 +8,7 @@
 
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
-export type WhatsAppAgentCode = "tal" | "elad" | "pandi";
+export type WhatsAppAgentCode = "tal" | "elad" | "pandi" | "pandius";
 
 export interface WhatsAppAgentConfig {
   agent_code: WhatsAppAgentCode;

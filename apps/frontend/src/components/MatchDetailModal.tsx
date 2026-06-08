@@ -14,6 +14,7 @@ import type {
   DepartmentMatch,
   ClearanceMatch,
 } from "@/api/recruitment-departments";
+import { GeoMismatchBadge } from "@/components/GeoMismatchBadge";
 
 interface Props {
   match: DepartmentMatch | null;
@@ -92,7 +93,26 @@ export function MatchDetailModal({ match, onClose }: Props) {
             >
               {CLEARANCE_LABEL[clearance]}
             </div>
+
+            <GeoMismatchBadge
+              mismatch={match.geographicMismatch}
+              reason={match.geographicMismatchReason}
+              size="lg"
+            />
           </div>
+
+          {/* Geographic mismatch — prominent, since the match is otherwise kept */}
+          {match.geographicMismatch && (
+            <section className="bg-red-900/30 border border-red-700 rounded-lg p-4">
+              <h3 className="text-sm font-bold text-red-200 mb-1 flex items-center gap-2">
+                <span>📍 אין התאמה גיאוגרפית</span>
+              </h3>
+              <p className="text-sm text-red-100 leading-relaxed">
+                {match.geographicMismatchReason ||
+                  "המועמד אינו נמצא במיקום גיאוגרפי מתאים למשרה. ההתאמה נשמרה כיוון שלעיתים מועמדים מוכנים לעבור דירה — יש להחליט אם לקדם אותה לשיחה של טל."}
+              </p>
+            </section>
+          )}
 
           {/* Security-clearance comparison block */}
           <section className="bg-gray-800 border border-gray-700 rounded-lg p-4">

@@ -72,12 +72,13 @@ const StatusEntry: React.FC<{ item: StatusItem }> = ({ item }) => (
  * conversations are happening right now; otherwise it sits calm and grey.
  */
 const LiveConversationsBadge: React.FC = () => {
-  const { total, tal, elad, pandi } = useActiveConversations();
+  const { total, tal, elad, pandi, pandius } = useActiveConversations();
   const live = total > 0;
   const parts = [
     tal ? `טל ${tal}` : null,
     elad ? `אלעד ${elad}` : null,
     pandi ? `פנדי ${pandi}` : null,
+    pandius ? `פנדיוס ${pandius}` : null,
   ].filter(Boolean);
 
   return (

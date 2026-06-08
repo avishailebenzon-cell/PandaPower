@@ -35,6 +35,9 @@ interface AgentMatchRow {
   job_id: string;
   job_title: string;
   job_description: string | null;
+  // Client/organization name + 4-digit Pipedrive job number for the job.
+  company_name: string | null;
+  pipedrive_deal_id: number | null;
   required_clearance: string | null;
   clearance_match: ClearanceMatch;
   agent_code: string;
@@ -97,6 +100,8 @@ interface CarmitDecision {
   match_id: string;
   candidate_name: string;
   job_title: string;
+  company_name?: string | null;
+  pipedrive_deal_id?: number | null;
   decision: 'approved' | 'rejected';
   match_score: number;
   gate_results: Record<string, GateResult>;
@@ -269,6 +274,7 @@ export const CarmitPage = () => {
           assigned_agent_name?: string;
           contact_person_name?: string;
           organization_name?: string;
+          pipedrive_deal_id?: number;
           job_opening_date?: string;
           is_routed: boolean;
           created_at: string;
@@ -527,7 +533,15 @@ export const CarmitPage = () => {
                           {decision.state_display}
                         </span>
                       </div>
-                      <p className="text-sm text-gray-400">{decision.job_title}</p>
+                      <p className="text-sm text-gray-400">
+                        {decision.job_title}
+                        {decision.company_name && (
+                          <span className="text-gray-500"> · 🏢 {decision.company_name}</span>
+                        )}
+                        {decision.pipedrive_deal_id && (
+                          <span className="text-gray-500"> · משרה #{decision.pipedrive_deal_id}</span>
+                        )}
+                      </p>
                     </div>
                     <div className="text-right">
                       <div className="text-2xl font-bold text-blue-400">
@@ -751,6 +765,10 @@ export const CarmitPage = () => {
                             );
                           });
                         })()}
+                        {/* Client name + 4-digit Pipedrive job number — always
+                            visible so the row is unambiguous. */}
+                        <th className="px-4 py-3 font-semibold text-gray-200">שם לקוח</th>
+                        <th className="px-4 py-3 font-semibold text-gray-200">מספר משרה</th>
                         {/* Non-sortable actions column — explicit "spec" button,
                             same affordance as the recruitment-agent screens. */}
                         <th className="px-4 py-3 font-semibold text-gray-200">מפרט</th>
@@ -781,7 +799,7 @@ export const CarmitPage = () => {
                           candidateId: m.candidate_id,
                           jobId: m.job_id,
                           jobTitle: m.job_title,
-                          company: 'Unknown Company',
+                          company: m.company_name || 'Unknown Company',
                           phone: m.candidate_phone || undefined,
                           email: m.candidate_email || undefined,
                           status: m.current_state,
@@ -896,6 +914,9 @@ export const CarmitPage = () => {
                                 year: 'numeric',
                               }) : '—'}
                             </td>
+                            {/* Client name + Pipedrive job number */}
+                            <td className="px-4 py-3 text-gray-300">{m.company_name || '—'}</td>
+                            <td className="px-4 py-3 text-gray-400 font-mono">{m.pipedrive_deal_id ?? '—'}</td>
                             {/* Spec button — opens the same MatchDetailModal
                                 (strengths / gaps / reasoning / clearance). */}
                             <td className="px-4 py-3">
@@ -990,6 +1011,8 @@ export const CarmitPage = () => {
                                 <th className="px-4 py-3 font-semibold">מצב</th>
                                 <th className="px-4 py-3 font-semibold">סיווג ביטחוני</th>
                                 <th className="px-4 py-3 font-semibold">נוצר</th>
+                                <th className="px-4 py-3 font-semibold">שם לקוח</th>
+                                <th className="px-4 py-3 font-semibold">מספר משרה</th>
                                 <th className="px-4 py-3 font-semibold">מפרט</th>
                               </tr>
                             </thead>
@@ -1006,7 +1029,7 @@ export const CarmitPage = () => {
                                 const cfg = clrCfg[m.clearance_match] || clrCfg.unknown;
                                 return (
                                   <tr key={m.id} className="border-b border-gray-700 hover:bg-gray-750 transition">
-                                    <td className="px-4 py-3"><button onClick={() => setSelectedAgentMatchForDetail({ id: m.id, candidateName: m.candidate_name, candidateId: m.candidate_id, jobId: m.job_id, jobTitle: m.job_title, company: 'Unknown Company', phone: m.candidate_phone || undefined, email: m.candidate_email || undefined, status: m.current_state, matchScore: m.match_score, dateAdded: m.created_at, lastActivity: m.updated_at, matchReasoning: m.match_reasoning, strengths: m.strengths, gaps: m.gaps, candidateClearance: m.candidate_clearance || undefined, requiredClearance: m.required_clearance || undefined, clearanceMatch: m.clearance_match })} className={`inline-block px-2 py-1 rounded text-xs font-bold cursor-pointer ${scoreCls}`}>{pct}%</button></td>
+                                    <td className="px-4 py-3"><button onClick={() => setSelectedAgentMatchForDetail({ id: m.id, candidateName: m.candidate_name, candidateId: m.candidate_id, jobId: m.job_id, jobTitle: m.job_title, company: m.company_name || 'Unknown Company', phone: m.candidate_phone || undefined, email: m.candidate_email || undefined, status: m.current_state, matchScore: m.match_score, dateAdded: m.created_at, lastActivity: m.updated_at, matchReasoning: m.match_reasoning, strengths: m.strengths, gaps: m.gaps, candidateClearance: m.candidate_clearance || undefined, requiredClearance: m.required_clearance || undefined, clearanceMatch: m.clearance_match })} className={`inline-block px-2 py-1 rounded text-xs font-bold cursor-pointer ${scoreCls}`}>{pct}%</button></td>
                                     <td className="px-4 py-3"><button onClick={() => setSelectedAgentCandidate(m)} className="text-white font-semibold hover:text-blue-300 text-right">{m.candidate_name}</button></td>
                                     <td className="px-4 py-3 text-gray-300">{m.job_title}</td>
                                     <td className="px-4 py-3"><span className="px-2 py-0.5 rounded bg-indigo-900/40 border border-indigo-700 text-indigo-200 text-xs font-semibold">{agentNameHe(m.agent_code)}</span></td>
@@ -1032,7 +1055,9 @@ export const CarmitPage = () => {
                                     </td>
                                     <td className="px-4 py-3 text-xs"><div className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border font-bold ${cfg.cls}`}><span>{cfg.icon}</span><span>{cfg.label}</span></div></td>
                                     <td className="px-4 py-3 text-xs text-gray-500">{m.created_at ? new Date(m.created_at).toLocaleDateString('he-IL') : '—'}</td>
-                                    <td className="px-4 py-3"><button onClick={() => setSelectedAgentMatchForDetail({ id: m.id, candidateName: m.candidate_name, candidateId: m.candidate_id, jobId: m.job_id, jobTitle: m.job_title, company: 'Unknown Company', phone: m.candidate_phone || undefined, email: m.candidate_email || undefined, status: m.current_state, matchScore: m.match_score, dateAdded: m.created_at, lastActivity: m.updated_at, matchReasoning: m.match_reasoning, strengths: m.strengths, gaps: m.gaps, candidateClearance: m.candidate_clearance || undefined, requiredClearance: m.required_clearance || undefined, clearanceMatch: m.clearance_match })} title="פרטי התאמה מלאים" className="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded transition">מפרט</button></td>
+                                    <td className="px-4 py-3 text-gray-300 text-xs">{m.company_name || '—'}</td>
+                                    <td className="px-4 py-3 text-gray-400 font-mono text-xs">{m.pipedrive_deal_id ?? '—'}</td>
+                                    <td className="px-4 py-3"><button onClick={() => setSelectedAgentMatchForDetail({ id: m.id, candidateName: m.candidate_name, candidateId: m.candidate_id, jobId: m.job_id, jobTitle: m.job_title, company: m.company_name || 'Unknown Company', phone: m.candidate_phone || undefined, email: m.candidate_email || undefined, status: m.current_state, matchScore: m.match_score, dateAdded: m.created_at, lastActivity: m.updated_at, matchReasoning: m.match_reasoning, strengths: m.strengths, gaps: m.gaps, candidateClearance: m.candidate_clearance || undefined, requiredClearance: m.required_clearance || undefined, clearanceMatch: m.clearance_match })} title="פרטי התאמה מלאים" className="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded transition">מפרט</button></td>
                                   </tr>
                                 );
                               })}
@@ -1077,6 +1102,7 @@ export const CarmitPage = () => {
                 <thead>
                   <tr className="border-b border-gray-700">
                     <th className="text-right px-4 py-3 text-gray-300 font-semibold">כותרת משרה</th>
+                    <th className="text-right px-4 py-3 text-gray-300 font-semibold">מספר משרה</th>
                     <th className="text-right px-4 py-3 text-gray-300 font-semibold">עדיפות</th>
                     <th className="text-right px-4 py-3 text-gray-300 font-semibold">ארגון</th>
                     <th className="text-right px-4 py-3 text-gray-300 font-semibold">איש קשר</th>
@@ -1094,6 +1120,7 @@ export const CarmitPage = () => {
                       className="border-b border-gray-800 hover:bg-gray-800/50 transition"
                     >
                       <td className="px-4 py-3 text-white">{job.title}</td>
+                      <td className="px-4 py-3 text-gray-400 font-mono text-sm">{job.pipedrive_deal_id ?? '—'}</td>
                       <td className="px-4 py-3 text-gray-400">
                         <span
                           className={`px-2 py-1 rounded text-sm font-semibold ${
@@ -1194,6 +1221,7 @@ export const CarmitPage = () => {
                           <thead className="bg-gray-700 border-b border-gray-600 text-gray-300">
                             <tr>
                               <th className="text-right px-4 py-3 font-semibold">כותרת משרה</th>
+                              <th className="text-right px-4 py-3 font-semibold">מספר משרה</th>
                               <th className="text-right px-4 py-3 font-semibold">עדיפות</th>
                               <th className="text-right px-4 py-3 font-semibold">ארגון</th>
                               <th className="text-right px-4 py-3 font-semibold">סוכן מוקצה</th>
@@ -1206,6 +1234,7 @@ export const CarmitPage = () => {
                             {groupJobs.map((job) => (
                               <tr key={job.id} className="border-b border-gray-700 hover:bg-gray-750 transition">
                                 <td className="px-4 py-3 text-white">{job.title}</td>
+                                <td className="px-4 py-3 text-gray-400 font-mono text-xs">{job.pipedrive_deal_id ?? '—'}</td>
                                 <td className="px-4 py-3"><span className={`px-2 py-1 rounded text-xs font-semibold ${job.priority === 1 ? 'bg-red-900 text-red-300' : job.priority <= 2 ? 'bg-orange-900 text-orange-300' : job.priority <= 3 ? 'bg-yellow-900 text-yellow-300' : 'bg-gray-700 text-gray-300'}`}>{job.priority}</span></td>
                                 <td className="px-4 py-3 text-gray-300 text-sm">{job.organization_name || '-'}</td>
                                 <td className="px-4 py-3">{job.assigned_agent_name ? (<span className="px-2 py-1 bg-green-900 text-green-300 rounded text-xs font-semibold">{job.assigned_agent_name}</span>) : (<span className="text-gray-500 text-xs">לא הוקצה</span>)}</td>
@@ -1455,7 +1484,7 @@ export const CarmitPage = () => {
                         candidateId: m.candidate_id,
                         jobId: m.job_id,
                         jobTitle: m.job_title,
-                        company: 'Unknown Company',
+                        company: m.company_name || 'Unknown Company',
                         phone: m.candidate_phone || undefined,
                         email: m.candidate_email || undefined,
                         status: m.current_state,

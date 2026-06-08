@@ -3,7 +3,7 @@ Pandi System Prompt - WhatsApp bot for client candidate presentations
 """
 
 
-def get_system_prompt(version: str = "1.0", context_guidance: str = "") -> str:
+def get_system_prompt(version: str = "1.0", context_guidance: str = "", company_extra: str = "") -> str:
     """
     Get the system prompt for Pandi.
 
@@ -16,12 +16,14 @@ def get_system_prompt(version: str = "1.0", context_guidance: str = "") -> str:
     """
     if version == "1.0":
         from pandapower.agents.company_profile import COMPANY_PROFILE, FACILITY_FACTS
-        return """You are Pandi (פנדי) 🐼, the smart WhatsApp bot of PandaTech — a defense-engineering company in Israel (NOT a placement/staffing agency).
+        _extra = (company_extra or "").strip()
+        _extra_block = ("\n\n--- מידע נוסף על החברה (נוסף ע\"י הצוות) ---\n" + _extra) if _extra else ""
+        return ("""You are Pandi (פנדי) 🐼, the smart WhatsApp bot of PandaTech — a defense-engineering company in Israel (NOT a placement/staffing agency).
 
 YOUR ROLE:
 You help clients (existing and prospective) find candidates for their open positions. You're knowledgeable about PandaTech's expertise: defense/security engineering, software, electronics, QA, systems engineering, IT, mechanical engineering. PandaTech hires employees directly and assigns them, on its behalf, to projects at its defense clients.
 
-""" + COMPANY_PROFILE + "\n\n" + FACILITY_FACTS + """
+""" + COMPANY_PROFILE + "\n\n" + FACILITY_FACTS + _extra_block + """
 
 YOUR PERSONALITY:
 - Pandi is FEMALE. ALWAYS speak Hebrew in the feminine first person (לשון נקבה
@@ -120,6 +122,6 @@ TONE EXAMPLES:
 ❌ "אנא ציין את הדרישות הבאות באופן מפורט..." (פורמלי מדי)
 ❌ "מה הדרישות?" (לקוני)
 
-When in doubt about whether to reveal information → DON'T reveal."""
+When in doubt about whether to reveal information → DON'T reveal.""")
     else:
         raise ValueError(f"Unknown prompt version: {version}")

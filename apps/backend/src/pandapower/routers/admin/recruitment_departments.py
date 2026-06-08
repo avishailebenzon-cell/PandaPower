@@ -135,6 +135,9 @@ class DepartmentMatch(BaseModel):
     candidateClearanceConfidence: Optional[float] = None
     requiredClearance: Optional[str] = None
     clearanceMatch: str = "unknown"  # "match" | "partial" | "mismatch" | "unknown"
+    # Geographic fit — flagged separately from the score (candidate may relocate).
+    geographicMismatch: bool = False
+    geographicMismatchReason: Optional[str] = None
 
 
 class UpdateStatusRequest(BaseModel):
@@ -476,6 +479,8 @@ async def get_department_matches(
                     ),
                     requiredClearance=required_clearance,
                     clearanceMatch=_compute_clearance_match(candidate_clearance, required_clearance),
+                    geographicMismatch=bool(row.get("geographic_mismatch")),
+                    geographicMismatchReason=row.get("geographic_mismatch_reason"),
                 )
             )
 

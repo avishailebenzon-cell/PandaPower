@@ -187,7 +187,7 @@ class GreenAPIClient:
 
 
 async def get_green_api_client(
-    agent_code: Literal["tal", "elad", "pandi"]
+    agent_code: Literal["tal", "elad", "pandi", "pandius"]
 ) -> Optional[GreenAPIClient]:
     """Factory function to get Green API client for specific agent.
 

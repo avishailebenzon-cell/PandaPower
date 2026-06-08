@@ -87,7 +87,9 @@ class RecruiterChatEngine:
 
         match_context = await self._build_match_context(conv.get("match_id"), supabase)
         addendum = await self._load_behavior_addendum(supabase)
-        system_prompt = get_system_prompt(self.recruiter, match_context, addendum)
+        from pandapower.agents.company_profile import load_company_extra
+        company_extra = await load_company_extra(supabase)
+        system_prompt = get_system_prompt(self.recruiter, match_context, addendum, company_extra)
 
         if self.recruiter == "elad":
             cue = (
@@ -170,7 +172,9 @@ class RecruiterChatEngine:
 
         match_context = await self._build_match_context(conv.get("match_id"), supabase)
         addendum = await self._load_behavior_addendum(supabase)
-        system_prompt = get_system_prompt(self.recruiter, match_context, addendum)
+        from pandapower.agents.company_profile import load_company_extra
+        company_extra = await load_company_extra(supabase)
+        system_prompt = get_system_prompt(self.recruiter, match_context, addendum, company_extra)
 
         try:
             response = self.anthropic.messages.create(

@@ -30,6 +30,9 @@ export interface DepartmentMatch {
   candidateClearanceConfidence?: number;
   requiredClearance?: string;
   clearanceMatch?: ClearanceMatch;
+  // Geographic fit — flagged separately from the score (candidate may relocate).
+  geographicMismatch?: boolean;
+  geographicMismatchReason?: string;
   carmitReview?: string;            // מה שכרמית קבעה על ההתאמה (החלטה + מבחני איכות)
 }
 

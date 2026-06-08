@@ -21,6 +21,7 @@ import {
 import { useParams } from 'react-router-dom';
 import { getAgent } from '@/data/agents';
 import { MatchDetailModal, ClearanceBadge } from '@/components/MatchDetailModal';
+import { GeoMismatchBadge } from '@/components/GeoMismatchBadge';
 import { CandidateDecisionMatrix } from '@/components/CandidateDecisionMatrix';
 
 type TabType = 'active' | 'history' | 'evaluated';
@@ -63,7 +64,8 @@ export const RecruitmentDepartment: React.FC = () => {
   // in Carmit's "התאמות מסוכני הגיוס" tab for UX consistency.
   const [minScoreFilter, setMinScoreFilter] = useState<number>(0);
   const [groupBy, setGroupBy] = useState<GroupBy>('none');
-  const [sortBy, setSortBy] = useState<'newest' | 'oldest' | 'score_high' | 'score_low'>('newest');
+  const [sortCol, setSortCol] = useState<'date' | 'score' | 'candidate' | 'job'>('date');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedMatches, setSelectedMatches] = useState<Set<string>>(new Set());
   const [showApproveModal, setShowApproveModal] = useState(false);
@@ -181,17 +183,33 @@ export const RecruitmentDepartment: React.FC = () => {
   // Sort matches
   const sortedMatches = useMemo(() => {
     const sorted = [...filteredMatches];
-    if (sortBy === 'newest') {
-      sorted.sort((a, b) => new Date(b.dateAdded).getTime() - new Date(a.dateAdded).getTime());
-    } else if (sortBy === 'oldest') {
-      sorted.sort((a, b) => new Date(a.dateAdded).getTime() - new Date(b.dateAdded).getTime());
-    } else if (sortBy === 'score_high') {
-      sorted.sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0));
-    } else if (sortBy === 'score_low') {
-      sorted.sort((a, b) => (a.matchScore || 0) - (b.matchScore || 0));
-    }
+    const dir = sortDir === 'asc' ? 1 : -1;
+    sorted.sort((a, b) => {
+      let cmp = 0;
+      if (sortCol === 'date') {
+        cmp = new Date(a.dateAdded).getTime() - new Date(b.dateAdded).getTime();
+      } else if (sortCol === 'score') {
+        cmp = (a.matchScore || 0) - (b.matchScore || 0);
+      } else if (sortCol === 'candidate') {
+        cmp = (a.candidateName || '').localeCompare(b.candidateName || '', 'he');
+      } else if (sortCol === 'job') {
+        cmp = (a.jobTitle || '').localeCompare(b.jobTitle || '', 'he');
+      }
+      return cmp * dir;
+    });
     return sorted;
-  }, [filteredMatches, sortBy]);
+  }, [filteredMatches, sortCol, sortDir]);
+
+  // Toggle sort when a column header is clicked
+  const handleSort = (col: 'date' | 'score' | 'candidate' | 'job') => {
+    if (sortCol === col) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortCol(col);
+      // Text columns default to A→Z, numeric/date default to high→new first
+      setSortDir(col === 'candidate' || col === 'job' ? 'asc' : 'desc');
+    }
+  };
 
   // Group matches
   const groupedMatches = useMemo(() => {
@@ -649,14 +667,25 @@ export const RecruitmentDepartment: React.FC = () => {
 
             {/* Sort */}
             <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as any)}
+              value={`${sortCol}_${sortDir}`}
+              onChange={(e) => {
+                const [col, dir] = e.target.value.split('_') as [
+                  'date' | 'score' | 'candidate' | 'job',
+                  'asc' | 'desc'
+                ];
+                setSortCol(col);
+                setSortDir(dir);
+              }}
               className="bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500"
             >
-              <option value="newest">הכי חדש</option>
-              <option value="oldest">הכי ישן</option>
-              <option value="score_high">ציון גבוה</option>
-              <option value="score_low">ציון נמוך</option>
+              <option value="date_desc">הכי חדש</option>
+              <option value="date_asc">הכי ישן</option>
+              <option value="score_desc">ציון גבוה</option>
+              <option value="score_asc">ציון נמוך</option>
+              <option value="candidate_asc">מועמד א׳→ת׳</option>
+              <option value="candidate_desc">מועמד ת׳→א׳</option>
+              <option value="job_asc">משרה א׳→ת׳</option>
+              <option value="job_desc">משרה ת׳→א׳</option>
             </select>
           </div>
         </div>
@@ -755,10 +784,43 @@ export const RecruitmentDepartment: React.FC = () => {
                             className="cursor-pointer"
                           />
                         </th>
-                        <th className="px-4 py-3 text-right font-semibold text-gray-200">מועמד</th>
-                        <th className="px-4 py-3 text-right font-semibold text-gray-200">משרה</th>
+                        <th className="px-4 py-3 text-right font-semibold text-gray-200">
+                          <button
+                            type="button"
+                            onClick={() => handleSort('candidate')}
+                            className="flex items-center gap-1 hover:text-white transition"
+                          >
+                            מועמד
+                            <span className="text-xs">
+                              {sortCol === 'candidate' ? (sortDir === 'asc' ? '▲' : '▼') : '⇅'}
+                            </span>
+                          </button>
+                        </th>
+                        <th className="px-4 py-3 text-right font-semibold text-gray-200">
+                          <button
+                            type="button"
+                            onClick={() => handleSort('job')}
+                            className="flex items-center gap-1 hover:text-white transition"
+                          >
+                            משרה
+                            <span className="text-xs">
+                              {sortCol === 'job' ? (sortDir === 'asc' ? '▲' : '▼') : '⇅'}
+                            </span>
+                          </button>
+                        </th>
                         <th className="px-4 py-3 text-right font-semibold text-gray-200">חברה</th>
-                        <th className="px-4 py-3 text-right font-semibold text-gray-200">ציון</th>
+                        <th className="px-4 py-3 text-right font-semibold text-gray-200">
+                          <button
+                            type="button"
+                            onClick={() => handleSort('score')}
+                            className="flex items-center gap-1 hover:text-white transition"
+                          >
+                            ציון
+                            <span className="text-xs">
+                              {sortCol === 'score' ? (sortDir === 'asc' ? '▲' : '▼') : '⇅'}
+                            </span>
+                          </button>
+                        </th>
                         <th className="px-4 py-3 text-right font-semibold text-gray-200">סיווג ביטחוני</th>
                         <th className="px-4 py-3 text-right font-semibold text-gray-200">סטטוס</th>
                         <th className="px-4 py-3 text-right font-semibold text-gray-200">פעולות</th>
@@ -788,7 +850,15 @@ export const RecruitmentDepartment: React.FC = () => {
                               {match.candidateName}
                             </button>
                           </td>
-                          <td className="px-4 py-3 text-gray-300">{match.jobTitle}</td>
+                          <td className="px-4 py-3 text-gray-300">
+                            <div className="flex flex-col gap-1.5">
+                              <span>{match.jobTitle}</span>
+                              <GeoMismatchBadge
+                                mismatch={match.geographicMismatch}
+                                reason={match.geographicMismatchReason}
+                              />
+                            </div>
+                          </td>
                           <td className="px-4 py-3 text-gray-400">{match.company}</td>
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-2">
