@@ -126,32 +126,39 @@ export const StatusBar: React.FC = () => {
 
   return (
     <div className="fixed bottom-0 left-0 right-0 bg-gray-950 border-t-2 border-gray-800 py-2 px-4 z-40">
-      <div className="relative overflow-hidden h-12 flex">
+      <div className="h-12 flex">
         {/* Pinned, always-visible live-conversations indicator (RTL: right edge) */}
         <LiveConversationsBadge />
-        {/* Two adjacent identical tracks animating in lockstep → no gap */}
-        {[0, 1].map((trackIdx) => (
-          <div
-            key={trackIdx}
-            className="flex items-center flex-shrink-0 animate-marquee"
-            aria-hidden={trackIdx === 1}
-          >
-            {track.map((item, index) => (
-              <StatusEntry key={`${trackIdx}-${item.id}-${index}`} item={item} />
+        {/* The scrolling ticker lives in its OWN clipped viewport to the left of
+         * the pinned badge, so it can never slide over/behind it. We force the
+         * inner layout to LTR: that keeps the two-track lockstep math working
+         * (tracks laid out [0,W][W,2W], animated by -100%) regardless of the
+         * page's RTL direction — avoiding both the growing gap and the overlap. */}
+        <div className="relative overflow-hidden flex-1" dir="ltr">
+          <div className="absolute inset-0 flex">
+            {[0, 1].map((trackIdx) => (
+              <div
+                key={trackIdx}
+                className="flex items-center flex-shrink-0 animate-marquee"
+                aria-hidden={trackIdx === 1}
+              >
+                {track.map((item, index) => (
+                  <StatusEntry key={`${trackIdx}-${item.id}-${index}`} item={item} />
+                ))}
+              </div>
             ))}
           </div>
-        ))}
+        </div>
       </div>
 
       <style>{`
-        /* RTL marquee: the pinned WhatsApp badge sits at the RIGHT edge and the
-         * tracks flow to its left. Animating toward +100% makes the leading
-         * track slide off behind the badge (right) while the second identical
-         * track fills in seamlessly from the left — no growing gap next to the
-         * badge. (Animating to -100% opens an ever-widening empty gap in RTL.) */
+        /* Standard seamless marquee. The ticker runs inside its own LTR-forced,
+         * clipped viewport (see StatusBar render), so the classic two-track
+         * lockstep works: [0,W][W,2W] sliding by -100% loops with no gap and
+         * never touches the pinned badge. */
         @keyframes marquee {
           from { transform: translateX(0); }
-          to { transform: translateX(100%); }
+          to { transform: translateX(-100%); }
         }
 
         .animate-marquee {
