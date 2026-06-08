@@ -104,7 +104,14 @@ class DanaConversationEngine:
                 logger.warning("dana_tool_loop_exhausted", conversation_id=str(conversation_id))
         except Exception as e:
             logger.error("dana_claude_call_failed", error=str(e))
-            return {"text": "סליחה, נתקלתי בבעיה טכנית. ננסה שוב בעוד רגע.", "error": True}
+            # Make it explicit to the user that the task was NOT completed,
+            # and why — then persist it so it stays in the conversation history.
+            err_text = _explain_llm_error(e)
+            try:
+                await self._save_message(conversation_id, "outbound", err_text, supabase)
+            except Exception:
+                pass
+            return {"text": err_text, "error": True}
 
         if not reply_text:
             reply_text = "קיבלתי. נמשיך 🙂"
@@ -175,3 +182,65 @@ def _stringify_result(result: dict) -> str:
     """Compact, Claude-friendly rendering of a tool result."""
     import json
     return json.dumps(result, ensure_ascii=False)
+
+
+def _explain_llm_error(e: Exception) -> str:
+    """Build a clear Hebrew message stating the task was NOT done, and why.
+
+    Distinguishes the Anthropic usage/quota limit (the known blocker) from
+    rate-limiting, temporary overload, auth, and generic failures so the user
+    understands the task did not run and what to do about it.
+    """
+    status = getattr(e, "status_code", None)
+    name = type(e).__name__
+    text = str(e).lower()
+
+    prefix = "⚠️ לא הצלחתי לבצע את המשימה — המשרה לא נוצרה ולא נשמרה."
+
+    # Usage / quota / billing limit (the documented Anthropic blocker).
+    if (
+        any(k in text for k in ("credit", "billing", "quota", "usage limit", "spend", "plan"))
+        or (status == 400 and "rate" not in text and "limit" in text)
+    ):
+        return (
+            f"{prefix}\n"
+            "הסיבה: שירות ה-AI (Anthropic) חרג ממכסת השימוש/התקציב, ולכן איני "
+            "יכולה לעבד את הבקשה כרגע.\n"
+            "מה לעשות: יש להעלות את מכסת השימוש ב-Anthropic Console, ואז לנסות שוב. "
+            "כל הפרטים שכבר מסרת נשמרו וימשיכו מכאן."
+        )
+
+    # Rate limited (429) — transient.
+    if status == 429 or "rate limit" in text or name == "RateLimitError":
+        return (
+            f"{prefix}\n"
+            "הסיבה: שירות ה-AI (Anthropic) מוגבל כרגע בקצב הבקשות (rate limit).\n"
+            "מה לעשות: נסה שוב בעוד כמה דקות. הפרטים שמסרת נשמרו."
+        )
+
+    # Temporary overload / server / connection issues.
+    if (
+        (isinstance(status, int) and status >= 500)
+        or name in ("InternalServerError", "APIConnectionError", "APITimeoutError", "APIStatusError")
+        or any(k in text for k in ("overloaded", "timeout", "connection"))
+    ):
+        return (
+            f"{prefix}\n"
+            "הסיבה: שירות ה-AI (Anthropic) אינו זמין כרגע (עומס/תקלה זמנית).\n"
+            "מה לעשות: נסה שוב בעוד מספר דקות. הפרטים שמסרת נשמרו."
+        )
+
+    # Authentication / configuration.
+    if status in (401, 403) or name == "AuthenticationError" or "api key" in text or "authentication" in text:
+        return (
+            f"{prefix}\n"
+            "הסיבה: בעיית הרשאה/הגדרה במפתח ה-AI (Anthropic).\n"
+            "מה לעשות: יש לפנות למנהל המערכת לבדיקת מפתח ה-API."
+        )
+
+    # Unknown.
+    return (
+        f"{prefix}\n"
+        "הסיבה: תקלה טכנית בשירות ה-AI ולא ניתן היה לעבד את הבקשה כעת.\n"
+        "מה לעשות: נסה שוב בעוד רגע; אם זה חוזר, פנה למנהל המערכת. הפרטים שמסרת נשמרו."
+    )
