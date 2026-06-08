@@ -19,7 +19,7 @@ async def auto_identify_by_phone(phone: str, supabase: Any) -> dict[str, Any]:
     """
     try:
         # Look up contact by phone
-        contact_result = supabase.table("contacts").select("*").eq(
+        contact_result = await supabase.table("contacts").select("*").eq(
             "phone", phone
         ).execute()
 
@@ -41,7 +41,7 @@ async def auto_identify_by_phone(phone: str, supabase: Any) -> dict[str, Any]:
             "first_message_at": datetime.utcnow().isoformat()
         }
 
-        client_result = supabase.table("pandi_clients").insert(client_data).execute()
+        client_result = await supabase.table("pandi_clients").insert(client_data).execute()
 
         if not client_result.data:
             logger.error(f"Failed to create pandi_client for contact {contact_id}")

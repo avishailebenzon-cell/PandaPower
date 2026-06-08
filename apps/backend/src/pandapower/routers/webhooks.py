@@ -309,13 +309,23 @@ async def receive_whatsapp_webhook(
         except Exception as e:
             logger.error(f"Failed to spawn {agent_code} inbound handler: {e}", exc_info=True)
 
-    # Enqueue Celery task to process the message (Session 34)
+    # Pandi: process the inbound message in-process (same pattern as Tal/Elad).
+    #
+    # IMPORTANT: this used to enqueue a Celery task (process_pandi_incoming_message
+    # .delay(...)). But the separate Celery worker was RETIRED in Session 36 — in
+    # production nothing consumes the Redis queue, so enqueued Pandi messages sat
+    # there forever and Pandi never replied. (It "worked" locally only because dev
+    # runs Celery in task_always_eager mode.) We now run the async handler directly
+    # in a background task so we still return 200 immediately and Green API never
+    # retries, exactly like the Tal/Elad path above.
     if agent_code == "pandi" and parsed.get("event_type") == "incomingMessageReceived" and parsed.get("text"):
         try:
-            from pandapower.workers.pandi.message_handler import process_pandi_incoming_message
+            from pandapower.workers.pandi.message_handler import (
+                _process_pandi_incoming_message_async,
+            )
 
-            # Convert parsed fields back to Green API format for message_handler
-            celery_payload = {
+            # Convert parsed fields back to Green API format for the handler.
+            pandi_payload = {
                 "messages": [{
                     "id": parsed.get("green_api_message_id"),
                     "from": parsed.get("from_chat_id"),
@@ -324,11 +334,10 @@ async def receive_whatsapp_webhook(
                 }]
             }
 
-            # Enqueue async task
-            task = process_pandi_incoming_message.delay(celery_payload)
-            logger.info(f"Enqueued Celery task {task.id} for Pandi message processing")
+            asyncio.create_task(_process_pandi_incoming_message_async(pandi_payload))
+            logger.info("Spawned in-process Pandi message handler")
         except Exception as e:
-            logger.error(f"Failed to enqueue Pandi message task: {e}", exc_info=True)
+            logger.error(f"Failed to spawn Pandi message handler: {e}", exc_info=True)
 
     return {"status": "ok", "agent": agent_code, "event": parsed.get("event_type")}
 

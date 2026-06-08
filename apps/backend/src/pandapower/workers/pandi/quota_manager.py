@@ -24,7 +24,7 @@ async def initialize_quota(client_id: str, supabase: Any, month: date = None) ->
             month = today.replace(day=1)
 
         # Get default limit from settings
-        settings_result = supabase.table("system_settings").select("value").eq(
+        settings_result = await supabase.table("system_settings").select("value").eq(
             "key", "pandi.default_monthly_limit"
         ).execute()
 
@@ -36,7 +36,7 @@ async def initialize_quota(client_id: str, supabase: Any, month: date = None) ->
                 pass
 
         # Check if quota already exists for this month
-        existing = supabase.table("pandi_message_quotas").select("id").eq(
+        existing = await supabase.table("pandi_message_quotas").select("id").eq(
             "pandi_client_id", client_id
         ).eq("month", month.isoformat()).execute()
 
@@ -57,7 +57,7 @@ async def initialize_quota(client_id: str, supabase: Any, month: date = None) ->
             "updated_at": datetime.utcnow().isoformat()
         }
 
-        quota_result = supabase.table("pandi_message_quotas").insert(quota_data).execute()
+        quota_result = await supabase.table("pandi_message_quotas").insert(quota_data).execute()
 
         if not quota_result.data:
             logger.error(f"Failed to create quota for client {client_id}")
@@ -93,7 +93,7 @@ async def check_quota(client_id: str, supabase: Any) -> dict[str, Any]:
         month = today.replace(day=1)
 
         # Get quota for this month
-        quota_result = supabase.table("pandi_message_quotas").select("*").eq(
+        quota_result = await supabase.table("pandi_message_quotas").select("*").eq(
             "pandi_client_id", client_id
         ).eq("month", month.isoformat()).execute()
 
@@ -149,7 +149,7 @@ async def increment_quota_usage(client_id: str, message_count: int, supabase: An
         month = today.replace(day=1)
 
         # Get current quota
-        quota_result = supabase.table("pandi_message_quotas").select("*").eq(
+        quota_result = await supabase.table("pandi_message_quotas").select("*").eq(
             "pandi_client_id", client_id
         ).eq("month", month.isoformat()).execute()
 
@@ -161,7 +161,7 @@ async def increment_quota_usage(client_id: str, message_count: int, supabase: An
         new_usage = quota.get("messages_used", 0) + message_count
 
         # Update quota
-        supabase.table("pandi_message_quotas").update({
+        await supabase.table("pandi_message_quotas").update({
             "messages_used": new_usage,
             "updated_at": datetime.utcnow().isoformat()
         }).eq("id", quota.get("id")).execute()
