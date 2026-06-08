@@ -31,6 +31,15 @@ logger = logging.getLogger(__name__)
 
 # ---- Shared response models ------------------------------------------------
 
+ELAD_STAGE_LABELS = {
+    "client_contacted": "בוצעה פנייה ללקוח",
+    "details_sent": "הועברו פרטי מועמד ללקוח",
+    "awaiting_cv_decision": "ממתין להחלטת לקוח על קו\"ח",
+    "cv_sent": "הועברו קורות חיים ללקוח",
+    "cv_declined": "הלקוח בחר שלא לקבל קו\"ח כרגע",
+}
+
+
 class ConversationSummary(BaseModel):
     id: str
     match_id: Optional[str] = None
@@ -41,6 +50,10 @@ class ConversationSummary(BaseModel):
     last_message: Optional[str] = None
     last_message_at: Optional[str] = None
     started_at: Optional[str] = None
+    # Elad placement flow (None for Tal).
+    elad_stage: Optional[str] = None
+    elad_stage_label: Optional[str] = None
+    iron_number: Optional[str] = None
 
 
 class ChatMessage(BaseModel):
@@ -59,6 +72,9 @@ class ConversationDetail(BaseModel):
     status: str = "active"
     auto_reply_paused: bool = False
     messages: List[ChatMessage] = []
+    elad_stage: Optional[str] = None
+    elad_stage_label: Optional[str] = None
+    iron_number: Optional[str] = None
 
 
 class SendMessageRequest(BaseModel):
@@ -117,7 +133,7 @@ def make_recruiter_chat_router(recruiter: str) -> APIRouter:
         try:
             res = await supabase.table("recruiter_conversations").select(
                 "id, match_id, status, auto_reply_paused, started_at, updated_at, "
-                "matches(candidates(name), jobs(job_title))"
+                "matches(elad_stage, iron_number, candidates(name), jobs(job_title))"
             ).eq("recruiter", recruiter).order("updated_at", desc=True).limit(limit).execute()
 
             out: List[ConversationSummary] = []
@@ -146,6 +162,7 @@ def make_recruiter_chat_router(recruiter: str) -> APIRouter:
                     cand_name = cand_name or tm.get("contact_name") or "מועמד"
                     job_title = job_title or tm.get("job_title") or ""
 
+                stage = (match.get("elad_stage") if isinstance(match, dict) else None)
                 out.append(ConversationSummary(
                     id=conv["id"],
                     match_id=conv.get("match_id"),
@@ -156,6 +173,9 @@ def make_recruiter_chat_router(recruiter: str) -> APIRouter:
                     last_message=last_text,
                     last_message_at=last_at,
                     started_at=conv.get("started_at"),
+                    elad_stage=stage,
+                    elad_stage_label=ELAD_STAGE_LABELS.get(stage),
+                    iron_number=(match.get("iron_number") if isinstance(match, dict) else None),
                 ))
             return out
         except Exception as e:
@@ -167,7 +187,7 @@ def make_recruiter_chat_router(recruiter: str) -> APIRouter:
         try:
             res = await supabase.table("recruiter_conversations").select(
                 "id, match_id, status, auto_reply_paused, "
-                "matches(candidates(name), jobs(job_title))"
+                "matches(elad_stage, iron_number, candidates(name), jobs(job_title))"
             ).eq("id", str(conversation_id)).eq("recruiter", recruiter).limit(1).execute()
             if not res.data:
                 raise HTTPException(status_code=404, detail="Conversation not found")
@@ -198,6 +218,7 @@ def make_recruiter_chat_router(recruiter: str) -> APIRouter:
                 cand_name = cand_name or tm.get("contact_name") or "מועמד"
                 job_title = job_title or tm.get("job_title") or ""
 
+            stage = (match.get("elad_stage") if isinstance(match, dict) else None)
             return ConversationDetail(
                 id=conv["id"],
                 match_id=conv.get("match_id"),
@@ -206,6 +227,9 @@ def make_recruiter_chat_router(recruiter: str) -> APIRouter:
                 status=conv.get("status") or "active",
                 auto_reply_paused=bool(conv.get("auto_reply_paused")),
                 messages=messages,
+                elad_stage=stage,
+                elad_stage_label=ELAD_STAGE_LABELS.get(stage),
+                iron_number=(match.get("iron_number") if isinstance(match, dict) else None),
             )
         except HTTPException:
             raise

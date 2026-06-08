@@ -286,6 +286,24 @@ async def _handle_recruiter_inbound(recruiter: str, parsed: dict) -> None:
 
         engine = RecruiterChatEngine(recruiter)
         await engine.record_inbound(UUID(conv_id), parsed["text"])
+
+        # Elad: if we're awaiting the client's CV decision, this inbound may be
+        # the explicit yes/no (button tap or text). Handle it directly — and skip
+        # the normal auto-reply so we don't talk over the deterministic flow.
+        if recruiter == "elad":
+            try:
+                from pandapower.agents.recruiter_chat import elad_flow
+                conv = await engine._load_conversation(UUID(conv_id), supabase)
+                if conv and not conv.get("auto_reply_paused"):
+                    consumed = await elad_flow.handle_cv_decision_if_awaiting(
+                        engine, UUID(conv_id), conv,
+                        parsed.get("text"), parsed.get("selected_button_id"),
+                    )
+                    if consumed:
+                        return
+            except Exception as e:
+                logger.warning(f"elad: CV-decision handling failed: {e}")
+
         # Debounced auto-reply: if the candidate fires several messages in quick
         # succession, only the last triggers a single consolidated reply (the
         # engine itself also skips if the conversation is paused).

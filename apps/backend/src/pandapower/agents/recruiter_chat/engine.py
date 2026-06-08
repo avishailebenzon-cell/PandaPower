@@ -135,6 +135,16 @@ class RecruiterChatEngine:
 
         await self._save_message(conversation_id, "outbound", reply_text, supabase, author="agent")
         delivery = await self._send_whatsapp(conversation_id, reply_text, supabase)
+
+        # Elad: opening = first client outreach → mark "client_contacted".
+        if self.recruiter == "elad" and conv.get("match_id"):
+            try:
+                from pandapower.agents.recruiter_chat import elad_flow
+                await elad_flow.ensure_iron_number(self, conv["match_id"])
+                await elad_flow._set_stage(self, conv["match_id"], elad_flow.STAGE_CONTACTED)
+            except Exception as e:
+                logger.warning(f"elad: opening stage update failed: {e}")
+
         return {"text": reply_text, "skipped": False,
                 "delivered": delivery["sent"], "delivery_reason": delivery["reason"]}
 
@@ -197,6 +207,17 @@ class RecruiterChatEngine:
 
         await self._save_message(conversation_id, "outbound", reply_text, supabase, author="agent")
         delivery = await self._send_whatsapp(conversation_id, reply_text, supabase)
+
+        # Elad: after replying, progress the visible status and (on clear client
+        # interest) offer the CV via buttons. Never sends the CV itself.
+        if self.recruiter == "elad" and conv.get("match_id"):
+            try:
+                from pandapower.agents.recruiter_chat import elad_flow
+                fresh = await self._load_recent_messages(conversation_id, supabase)
+                await elad_flow.advance_after_turn(self, conversation_id, conv, fresh)
+            except Exception as e:
+                logger.warning(f"elad: post-reply advance failed: {e}")
+
         return {"text": reply_text, "skipped": False,
                 "delivered": delivery["sent"], "delivery_reason": delivery["reason"]}
 
@@ -240,7 +261,8 @@ class RecruiterChatEngine:
         row: dict = {}
         try:
             res = await supabase.table("matches").select(
-                "id, match_score, match_reasoning, carmit_review_notes, carmit_blocked_reason, "
+                "id, candidate_id, iron_number, match_score, match_reasoning, "
+                "carmit_review_notes, carmit_blocked_reason, "
                 "candidates(name, clearance_level), "
                 "jobs(job_title, job_description, job_qualifications, "
                 "job_location, job_security_clearance, organization_name)"
@@ -276,6 +298,14 @@ class RecruiterChatEngine:
         desc = field("job_description", job, "job_description")
         quals = field("job_qualifications", job, "job_qualifications")
 
+        # Elad presents the candidate to the CLIENT in sales language, with a
+        # full *anonymised* dossier (no phone/email) keyed by an iron number.
+        if self.recruiter == "elad":
+            return await self._build_elad_context(
+                match_id, row, job, name, title, org, loc, clear_req, desc, quals,
+                meta, is_test, supabase,
+            )
+
         lines = []
         if name:
             lines.append(f"מועמד: {name}")
@@ -307,6 +337,55 @@ class RecruiterChatEngine:
                 "פערים אפשריים בהתאמה (לברר מול המועמד — ייתכן שחלקם רק לא נכתבו בקו\"ח):\n"
                 + "\n".join(f"  • {g}" for g in gaps)
             )
+        return "\n".join(lines)
+
+    async def _build_elad_context(
+        self, match_id, row, job, name, title, org, loc, clear_req, desc, quals,
+        meta, is_test, supabase,
+    ) -> str:
+        """Client-facing context for Elad: the job + a full anonymised candidate
+        dossier (no phone/email) + iron number + Carmit's fit assessment."""
+        from pandapower.agents.recruiter_chat import elad_flow
+
+        iron = row.get("iron_number") or await elad_flow.ensure_iron_number(self, match_id)
+
+        # Pull the full candidate row for the dossier (joined select only had
+        # name/clearance). Test matches may have no real candidate — fall back to
+        # a minimal row built from test_meta.
+        cand_full: dict = {}
+        cand_id = row.get("candidate_id")
+        if cand_id:
+            try:
+                cres = await supabase.table("candidates").select(
+                    "name, clearance_level, location, top_education, experiences, "
+                    "key_skills, years_of_experience, extracted_from_cv"
+                ).eq("id", str(cand_id)).limit(1).execute()
+                if cres.data:
+                    cand_full = cres.data[0]
+            except Exception as e:
+                logger.warning(f"elad: candidate fetch failed for {cand_id}: {e}")
+        if not cand_full and name:
+            cand_full = {"name": name}
+
+        carmit = row.get("carmit_review_notes") or row.get("match_reasoning") or ""
+        dossier = elad_flow.build_candidate_dossier(cand_full, carmit, iron or "")
+
+        lines = ["=== המועמד שאתה מציג ללקוח (פרטים מלאים, ללא טלפון/אימייל) ==="]
+        if dossier:
+            lines.append(dossier)
+        lines.append("=== המשרה הפתוחה אצל הלקוח ===")
+        if title:
+            lines.append(f"משרה: {title}")
+        if org:
+            lines.append(f"ארגון/לקוח: {org}")
+        if loc:
+            lines.append(f"מיקום: {loc}")
+        if clear_req:
+            lines.append(f"סיווג נדרש: {clear_req}")
+        if desc:
+            lines.append(f"תיאור המשרה: {str(desc)[:600]}")
+        if quals:
+            lines.append(f"דרישות: {str(quals)[:600]}")
         return "\n".join(lines)
 
     async def _load_behavior_addendum(self, supabase) -> str:
