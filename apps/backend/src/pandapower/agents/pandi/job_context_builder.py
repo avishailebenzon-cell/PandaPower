@@ -117,11 +117,12 @@ Guidelines:
         """
         supabase = await self._get_supabase()
         # Get existing context
-        conversation = await supabase.table(
+        _conv_res = await supabase.table(
             "pandi_conversations"
-        ).select("job_context").eq("id", str(conversation_id)).single()
+        ).select("job_context").eq("id", str(conversation_id)).limit(1).execute()
+        conversation = _conv_res.data[0] if _conv_res.data else {}
 
-        existing_context = conversation.get("job_context") or {}
+        existing_context = (conversation.get("job_context") if conversation else None) or {}
 
         # Merge: prefer new values, keep existing if new is null
         merged_context = {**existing_context}
@@ -132,7 +133,7 @@ Guidelines:
         # Update
         await supabase.table("pandi_conversations").update(
             {"job_context": merged_context}
-        ).eq("id", str(conversation_id))
+        ).eq("id", str(conversation_id)).execute()
 
         logger.info(
             "job_context_updated",

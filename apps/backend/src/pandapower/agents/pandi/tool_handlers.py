@@ -596,43 +596,44 @@ async def handle_create_client(
         from pandapower.integrations.pipedrive import PipedriveClient
         from pandapower.core.config import settings
 
-        if not settings.PIPEDRIVE_API_TOKEN:
-            logger.error("PIPEDRIVE_API_TOKEN not configured")
-            return {
-                "status": "error",
-                "message": "סליחה, בעיה בתיכנון המערכת (Pipedrive לא מוגדר)",
-            }
+        # Pipedrive person creation is BEST-EFFORT. If Pipedrive is unconfigured,
+        # rate-limited (429), or otherwise failing, we must still register the
+        # client locally so Pandi can keep the conversation going — the contact
+        # gets synced to Pipedrive later by the regular sync. Never let a CRM
+        # hiccup turn into "סליחה, בעיה בשמירת הפרטים".
+        pipedrive_person_id = None
+        if settings.PIPEDRIVE_API_TOKEN:
+            try:
+                pipedrive_client = PipedriveClient(
+                    settings.PIPEDRIVE_API_TOKEN,
+                    settings.PIPEDRIVE_API_DOMAIN or "https://api.pipedrive.com",
+                )
+                from pandapower.workers.pipedrive_sync import CONTACT_STATUS_FIELD
 
-        pipedrive_client = PipedriveClient(
-            settings.PIPEDRIVE_API_TOKEN,
-            settings.PIPEDRIVE_API_DOMAIN or "https://api.pipedrive.com",
-        )
+                CONTACT_STATUS_POTENTIAL_CLIENT = 33  # לקוח פוטנציאלי
 
-        # Create the person in Pipedrive with contact status = "לקוח פוטנציאלי"
-        # (option id 33). The hash + option id are the real PandaTech workspace
-        # values, kept canonical in workers.pipedrive_sync.
-        from pandapower.workers.pipedrive_sync import CONTACT_STATUS_FIELD
-
-        CONTACT_STATUS_POTENTIAL_CLIENT = 33  # לקוח פוטנציאלי
-
-        # Note: company_name / role are NOT person fields in Pipedrive — company
-        # belongs on the organization and role has no dedicated person field —
-        # so they are passed only to the admin notification below, not here.
-        pd_person = await pipedrive_client.create_person(
-            name=full_name,
-            email=email,
-            phone=phone,
-            custom_fields={
-                CONTACT_STATUS_FIELD: CONTACT_STATUS_POTENTIAL_CLIENT,
-            },
-        )
-
-        pipedrive_person_id = pd_person.get("id")
-        logger.info(
-            "pipedrive_person_created",
-            pipedrive_person_id=pipedrive_person_id,
-            full_name=full_name,
-        )
+                # company_name / role are NOT person fields in Pipedrive — they
+                # go only to the admin notification below.
+                pd_person = await pipedrive_client.create_person(
+                    name=full_name,
+                    email=email,
+                    phone=phone,
+                    custom_fields={
+                        CONTACT_STATUS_FIELD: CONTACT_STATUS_POTENTIAL_CLIENT,
+                    },
+                )
+                pipedrive_person_id = pd_person.get("id")
+                logger.info(
+                    "pipedrive_person_created",
+                    pipedrive_person_id=pipedrive_person_id,
+                    full_name=full_name,
+                )
+            except Exception as pd_err:
+                logger.warning(
+                    f"Pipedrive create_person failed (continuing local-only): {pd_err}"
+                )
+        else:
+            logger.warning("PIPEDRIVE_API_TOKEN not configured — registering client locally only")
 
         # 3. Create contact in local DB
         contact_result = await supabase.table("contacts").insert({
@@ -642,7 +643,9 @@ async def handle_create_client(
             "phone": phone,
             "contact_status": "potential_client",  # לקוח פוטנציאלי (canonical)
             "professional_domain": None,  # Will be updated later
-            "pipedrive_last_synced_at": datetime.utcnow().isoformat(),
+            # Only mark as synced if Pipedrive actually accepted the person;
+            # otherwise leave NULL so the regular sync picks it up later.
+            "pipedrive_last_synced_at": datetime.utcnow().isoformat() if pipedrive_person_id else None,
         }).execute()
 
         if not contact_result.data:

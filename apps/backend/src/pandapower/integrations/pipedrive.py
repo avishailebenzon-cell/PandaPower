@@ -200,13 +200,23 @@ class PipedriveClient:
                 # Handle rate limiting (429)
                 if response.status_code == 429:
                     retry_after = int(response.headers.get("retry-after", 60))
-                    if attempt < MAX_RETRIES - 1:
+                    # Pipedrive can return an absurd Retry-After (e.g. 9412s when
+                    # the daily budget is exhausted). NEVER block a live request
+                    # for that long — it would hang the caller (and any user
+                    # conversation behind it) for hours. Only retry inline for a
+                    # short, capped wait; otherwise fail fast so the caller can
+                    # degrade gracefully and try again later.
+                    MAX_RETRY_WAIT = 10  # seconds
+                    if retry_after <= MAX_RETRY_WAIT and attempt < MAX_RETRIES - 1:
                         logger.warning(
                             f"Rate limited by Pipedrive (429), retrying after {retry_after}s"
                         )
                         await asyncio.sleep(retry_after)
                         continue
-                    raise Exception(f"Rate limited by Pipedrive after {MAX_RETRIES} attempts")
+                    raise Exception(
+                        f"Pipedrive rate limited (429), Retry-After={retry_after}s "
+                        f"exceeds cap ({MAX_RETRY_WAIT}s) — failing fast"
+                    )
 
                 # Handle server errors (5xx)
                 if response.status_code in (500, 502, 503, 504):
