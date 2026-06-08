@@ -112,28 +112,27 @@ async def _process_pandi_incoming_message_async(payload: dict) -> dict[str, Any]
                     "message_saved": True,
                 }
 
-            # Check if client is in intake flow
-            if client.get("intake_status") == "in_progress":
-                # Continue intake
-                logger.info(f"Continuing intake for client {client_id}")
-                await continue_intake_flow(client_id, message_text, supabase)
-            else:
-                # Route to conversation handler (Session 28)
-                logger.info(f"Routing to conversation handler for client {client_id}")
-                if conversation_id:
-                    conv_handler_result = await handle_client_message(
-                        conversation_id=UUID(str(conversation_id)),
-                        pandi_client_id=UUID(str(client_id)),
-                        incoming_text=message_text,
-                        chat_id=client.get("whatsapp_chat_id"),
-                    )
-                    logger.info(f"Conversation handler result: {conv_handler_result}")
+            # Always route to the conversational engine. The LLM engine (Session
+            # 34) handles identification/intake naturally via tools AND replies,
+            # so we no longer divert in-progress clients to the rigid 4-question
+            # continue_intake_flow — that questionnaire hijacked real
+            # conversations (e.g. treating "I'm Boruch from Tomer" as the name)
+            # and, on the 2nd+ message, left the client without a reply.
+            logger.info(f"Routing to conversation handler for client {client_id}")
+            if conversation_id:
+                conv_handler_result = await handle_client_message(
+                    conversation_id=UUID(str(conversation_id)),
+                    pandi_client_id=UUID(str(client_id)),
+                    incoming_text=message_text,
+                    chat_id=client.get("whatsapp_chat_id"),
+                )
+                logger.info(f"Conversation handler result: {conv_handler_result}")
 
             return {
                 "status": "processed",
                 "client_id": client_id,
                 "is_new_client": False,
-                "intake_in_progress": client.get("intake_status") == "in_progress"
+                "intake_in_progress": False,
             }
 
         else:
