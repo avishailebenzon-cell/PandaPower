@@ -14,8 +14,19 @@ logger = logging.getLogger(__name__)
 
 
 async def _process_pandi_outreach_async(campaign_id: str) -> dict:
-    """Process outreach campaign: send messages with rate limiting"""
-    try:
+    """Process outreach campaign: send messages with rate limiting.
+
+    DISABLED: Pandi is inbound-only and never initiates outreach (that is
+    Elad's role). This guard makes any queued Pandi-outreach task a no-op.
+    """
+    logger.warning(
+        "pandi_outreach_disabled: refusing to send outbound campaign %s — "
+        "Pandi is inbound-only.",
+        campaign_id,
+    )
+    return {"status": "disabled", "reason": "Pandi is inbound-only; outreach is Elad's role"}
+
+    try:  # pragma: no cover - unreachable, kept for easy re-enable
         supabase = await get_supabase_client()
 
         # Get campaign

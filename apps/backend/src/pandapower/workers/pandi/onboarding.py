@@ -124,7 +124,7 @@ async def complete_intake(
         # Create Contact
         contact_data = {
             "full_name": intake_data.get("name", "Unknown"),
-            "contact_status": "prospect",
+            "contact_status": "potential_client",  # לקוח פוטנציאלי (canonical)
             "created_at": datetime.utcnow().isoformat()
         }
 
