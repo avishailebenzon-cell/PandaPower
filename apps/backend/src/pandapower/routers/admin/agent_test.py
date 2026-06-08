@@ -15,7 +15,6 @@ test is just messaging her number directly.
 from __future__ import annotations
 
 import logging
-import re
 from datetime import datetime
 from typing import Optional
 
@@ -61,9 +60,18 @@ async def create_test_match(
     if body.recruiter not in VALID_RECRUITERS:
         raise HTTPException(status_code=400, detail="recruiter must be 'tal' or 'elad'")
 
-    digits = re.sub(r"\D", "", body.phone or "")
-    if not digits:
-        raise HTTPException(status_code=400, detail="A valid phone number is required")
+    from pandapower.core import phone as phone_utils
+
+    if not phone_utils.is_valid(body.phone):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "מספר טלפון לא תקין. הזינו מספר ישראלי תקין, למשל 050-1234567 "
+                "או +972501234567 (השליחה תיכשל בשקט אם המספר חסר ספרות)."
+            ),
+        )
+    # Store the canonical international form so delivery resolves consistently.
+    digits = phone_utils.to_international(body.phone)
 
     state = STATE_BY_RECRUITER[body.recruiter]
     test_meta = {

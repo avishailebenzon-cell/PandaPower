@@ -35,6 +35,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Request, Depends
 
 from pandapower.core.supabase import get_supabase_client
+from pandapower.core import phone as phone_utils
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
@@ -109,7 +110,7 @@ def _normalise_green_api_payload(payload: dict) -> dict:
         "event_type": event_type,
         "green_api_message_id": payload.get("idMessage"),
         "from_chat_id": sender_data.get("chatId"),
-        "from_phone": (sender_data.get("chatId") or "").split("@")[0] or None,
+        "from_phone": phone_utils.chat_id_to_phone(sender_data.get("chatId")) or None,
         "sender_name": sender_data.get("senderName"),
         "text": text,
         "message_type": msg_type,
@@ -165,25 +166,26 @@ async def _find_recruiter_conversation_for_phone(
     the candidate by phone and finding their most recent conversation for this
     recruiter. Returns the conversation id (uuid str) or None.
     """
-    from pandapower.agents.recruiter_chat.engine import normalize_phone
+    from pandapower.core import phone as phone_utils
 
-    digits = normalize_phone(phone)
-    if not digits:
+    intl = phone_utils.to_international(phone)
+    if not intl:
         return None
 
-    # 1) Cached candidate_phone on the conversation.
+    # 1) Cached candidate_phone on the conversation. We match tolerantly across
+    #    formats (the column may hold "0586…", "972586…" or "+972 58…") by
+    #    pulling this recruiter's conversations and comparing canonical forms.
     try:
         res = await (
             supabase.table("recruiter_conversations")
-            .select("id, updated_at")
+            .select("id, candidate_phone, updated_at")
             .eq("recruiter", recruiter)
-            .eq("candidate_phone", digits)
             .order("updated_at", desc=True)
-            .limit(1)
             .execute()
         )
-        if res.data:
-            return res.data[0]["id"]
+        for row in (res.data or []):
+            if phone_utils.phones_match(row.get("candidate_phone"), intl):
+                return row["id"]
     except Exception as e:
         logger.warning(f"{recruiter} conv lookup by cached phone failed: {e}")
 
@@ -192,8 +194,7 @@ async def _find_recruiter_conversation_for_phone(
         cand_res = await supabase.table("candidates").select("id, phone").execute()
         candidate_ids = [
             c["id"] for c in (cand_res.data or [])
-            if normalize_phone(c.get("phone")).endswith(digits[-9:])
-            or digits.endswith(normalize_phone(c.get("phone"))[-9:] if c.get("phone") else "")
+            if phone_utils.phones_match(c.get("phone"), intl)
         ]
         if not candidate_ids:
             return None
@@ -220,7 +221,7 @@ async def _find_recruiter_conversation_for_phone(
             # Cache the phone for fast routing next time.
             try:
                 await supabase.table("recruiter_conversations").update(
-                    {"candidate_phone": digits}
+                    {"candidate_phone": intl}
                 ).eq("id", conv_id).execute()
             except Exception:
                 pass

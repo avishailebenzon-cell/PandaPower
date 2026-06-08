@@ -68,6 +68,10 @@ class SendMessageRequest(BaseModel):
 class SendMessageResponse(BaseModel):
     text: str
     delivered: bool
+    # When delivered is False, a short machine code explaining why the WhatsApp
+    # wasn't sent: "no_phone" | "invalid_phone" | "not_configured" |
+    # "green_api_error" | "exception". None when delivered.
+    delivery_reason: Optional[str] = None
 
 
 class PauseRequest(BaseModel):
@@ -209,7 +213,11 @@ def make_recruiter_chat_router(recruiter: str) -> APIRouter:
         try:
             engine = RecruiterChatEngine(recruiter)
             result = await engine.save_human_message(conversation_id, request.text.strip())
-            return SendMessageResponse(text=result["text"], delivered=bool(result.get("delivered")))
+            return SendMessageResponse(
+                text=result["text"],
+                delivered=bool(result.get("delivered")),
+                delivery_reason=result.get("delivery_reason"),
+            )
         except Exception as e:
             logger.error(f"{recruiter} send_message failed: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="Failed to send message")
@@ -240,7 +248,8 @@ def make_recruiter_chat_router(recruiter: str) -> APIRouter:
             result = await engine.generate_reply(conversation_id)
             return SendMessageResponse(
                 text=result.get("text", ""),
-                delivered=not result.get("skipped", False),
+                delivered=bool(result.get("delivered")) and not result.get("skipped", False),
+                delivery_reason=result.get("delivery_reason"),
             )
         except Exception as e:
             logger.error(f"{recruiter} generate_reply failed: {e}", exc_info=True)

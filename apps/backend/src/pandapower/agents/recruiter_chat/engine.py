@@ -17,6 +17,7 @@ from uuid import UUID
 
 from pandapower.integrations.anthropic_client import get_anthropic_client
 from pandapower.core.supabase import get_supabase_client
+from pandapower.core import phone as phone_utils
 from .prompts import get_system_prompt
 
 logger = logging.getLogger(__name__)
@@ -28,8 +29,12 @@ VALID_RECRUITERS = ("tal", "elad")
 
 
 def normalize_phone(raw: Optional[str]) -> str:
-    """Reduce a phone string to digits only, for tolerant matching."""
-    return re.sub(r"\D", "", raw or "")
+    """Reduce a phone string to digits only, for tolerant matching.
+
+    Delegates to the shared phone utilities so every caller shares one
+    definition. Prefer :func:`pandapower.core.phone.to_chat_id` for anything
+    that actually sends over Green API."""
+    return phone_utils.normalize_phone(raw)
 
 
 class RecruiterChatEngine:
@@ -53,8 +58,8 @@ class RecruiterChatEngine:
         counterpart over WhatsApp. Does NOT invoke the AI."""
         supabase = await self._get_supabase()
         await self._save_message(conversation_id, "outbound", text, supabase, author="human")
-        sent = await self._send_whatsapp(conversation_id, text, supabase)
-        return {"text": text, "delivered": sent}
+        delivery = await self._send_whatsapp(conversation_id, text, supabase)
+        return {"text": text, "delivered": delivery["sent"], "delivery_reason": delivery["reason"]}
 
     async def record_inbound(self, conversation_id: UUID, text: str) -> None:
         """Persist a counterpart's incoming message."""
@@ -119,8 +124,9 @@ class RecruiterChatEngine:
             return {"text": "", "skipped": True}
 
         await self._save_message(conversation_id, "outbound", reply_text, supabase, author="agent")
-        await self._send_whatsapp(conversation_id, reply_text, supabase)
-        return {"text": reply_text, "skipped": False}
+        delivery = await self._send_whatsapp(conversation_id, reply_text, supabase)
+        return {"text": reply_text, "skipped": False,
+                "delivered": delivery["sent"], "delivery_reason": delivery["reason"]}
 
     async def generate_reply(self, conversation_id: UUID) -> dict:
         """Produce the agent's next reply from history + match context, persist
@@ -178,8 +184,9 @@ class RecruiterChatEngine:
             return {"text": "", "skipped": True}
 
         await self._save_message(conversation_id, "outbound", reply_text, supabase, author="agent")
-        await self._send_whatsapp(conversation_id, reply_text, supabase)
-        return {"text": reply_text, "skipped": False}
+        delivery = await self._send_whatsapp(conversation_id, reply_text, supabase)
+        return {"text": reply_text, "skipped": False,
+                "delivered": delivery["sent"], "delivery_reason": delivery["reason"]}
 
     # ------------------------------------------------------------------
     # Context helpers
@@ -317,21 +324,23 @@ class RecruiterChatEngine:
     # ------------------------------------------------------------------
     # WhatsApp delivery
     # ------------------------------------------------------------------
-    async def _resolve_chat_id(self, conversation_id: UUID, supabase) -> Optional[str]:
-        """Find the counterpart's WhatsApp chatId (phone@c.us).
+    async def _resolve_phone(self, conversation_id: UUID, supabase) -> Optional[str]:
+        """Find the counterpart's raw phone number (any format).
 
         Uses the cached candidate_phone first. For Tal, falls back to the
         candidate's phone on the match. (For Elad the counterpart is the client;
-        their number is expected to be cached on the conversation.)"""
+        their number is expected to be cached on the conversation.) Returns the
+        number as stored — validation/normalization for Green API happens in
+        :meth:`_send_whatsapp` so a bad number yields a clear reason."""
         conv = await self._load_conversation(conversation_id, supabase)
         if not conv:
             return None
-        phone = normalize_phone(conv.get("candidate_phone"))
+        phone = (conv.get("candidate_phone") or "").strip()
         # Test matches carry their destination phone on the match itself.
         if not phone and conv.get("match_id"):
             test = await self._load_test_fields(conv.get("match_id"), supabase)
             if test.get("is_test"):
-                phone = normalize_phone(test.get("test_phone"))
+                phone = (test.get("test_phone") or "").strip()
         if not phone and self.recruiter == "tal" and conv.get("match_id"):
             try:
                 res = await supabase.table("matches").select(
@@ -339,40 +348,52 @@ class RecruiterChatEngine:
                 ).eq("id", str(conv["match_id"])).limit(1).execute()
                 if res.data:
                     cand = res.data[0].get("candidates") or {}
-                    phone = normalize_phone(cand.get("phone"))
+                    phone = (cand.get("phone") or "").strip()
                     if phone:
                         await supabase.table("recruiter_conversations").update(
-                            {"candidate_phone": phone}
+                            {"candidate_phone": phone_utils.normalize_phone(phone)}
                         ).eq("id", str(conversation_id)).execute()
             except Exception as e:
                 logger.warning(f"{self.recruiter} could not resolve phone: {e}")
-        if not phone:
-            return None
-        return f"{phone}@c.us"
+        return phone or None
 
-    async def _send_whatsapp(self, conversation_id: UUID, text: str, supabase) -> bool:
+    async def _send_whatsapp(self, conversation_id: UUID, text: str, supabase) -> dict:
         """Best-effort WhatsApp delivery via this recruiter's Green-API instance.
-        Never raises — a delivery failure must not lose the saved message."""
+
+        Never raises — a delivery failure must not lose the saved message.
+        Returns ``{"sent": bool, "reason": str | None}`` so callers can surface
+        *why* a message wasn't delivered instead of dropping it silently."""
         try:
-            chat_id = await self._resolve_chat_id(conversation_id, supabase)
-            if not chat_id:
+            raw_phone = await self._resolve_phone(conversation_id, supabase)
+            if not raw_phone:
                 logger.info(f"{self.recruiter}: no phone — message stored but not sent")
-                return False
+                return {"sent": False, "reason": "no_phone"}
+            chat_id = phone_utils.to_chat_id(raw_phone)
+            if not chat_id:
+                logger.warning(
+                    f"{self.recruiter}: invalid phone '{raw_phone}' — message stored but not sent"
+                )
+                return {"sent": False, "reason": "invalid_phone"}
             creds = await self._load_green_api_creds(supabase)
             if not creds:
                 logger.info(f"{self.recruiter}: Green-API not configured — stored but not sent")
-                return False
+                return {"sent": False, "reason": "not_configured"}
             from pandapower.integrations.green_api import GreenAPIClient
 
             client = GreenAPIClient(instance_id=creds["instance_id"], token=creds["token"])
             try:
                 result = await client.send_message(chat_id, text)
-                return bool(result.get("success"))
+                if result.get("success"):
+                    return {"sent": True, "reason": None}
+                logger.warning(
+                    f"{self.recruiter}: Green-API rejected send to {chat_id}: {result.get('error')}"
+                )
+                return {"sent": False, "reason": "green_api_error"}
             finally:
                 await client.close()
         except Exception as e:
             logger.warning(f"{self.recruiter} WhatsApp send failed (message still saved): {e}")
-            return False
+            return {"sent": False, "reason": "exception"}
 
     async def _load_green_api_creds(self, supabase) -> Optional[dict]:
         try:

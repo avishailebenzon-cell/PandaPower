@@ -19,6 +19,7 @@ import type {
   ChatMessage,
   ConversationSummary,
 } from "@/api/conversationsApi";
+import { deliveryReasonText } from "@/api/conversationsApi";
 
 export interface ConversationsScreenProps {
   api: ConversationsApi;
@@ -112,7 +113,17 @@ export const ConversationsScreen: React.FC<ConversationsScreenProps> = ({
     setMessages((prev) => [...prev, { direction: "outbound", text, author: "human" }]);
     setSending(true);
     try {
-      await api.send(activeId, text);
+      const res = await api.send(activeId, text);
+      if (!res.delivered) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            direction: "outbound",
+            text: "⚠️ " + deliveryReasonText(res.delivery_reason ?? null),
+            author: "human",
+          },
+        ]);
+      }
       refreshConversations();
     } catch (e) {
       setMessages((prev) => [
@@ -225,12 +236,12 @@ export const ConversationsScreen: React.FC<ConversationsScreenProps> = ({
                         מושהה
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-green-700/70 text-green-100 animate-pulse">
+                      <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-green-600 text-white animate-live-glow ring-1 ring-green-300/70">
                         <span className="relative flex h-2 w-2">
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-300 opacity-80" />
-                          <span className="relative inline-flex h-2 w-2 rounded-full bg-green-200" />
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-200 opacity-90" />
+                          <span className="relative inline-flex h-2 w-2 rounded-full bg-green-100" />
                         </span>
-                        בשיחה פעילה
+                        <span className="animate-blink">בשיחה פעילה</span>
                       </span>
                     )}
                   </div>

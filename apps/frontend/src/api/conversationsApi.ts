@@ -16,6 +16,39 @@ export interface ChatMessage {
   created_at?: string;
 }
 
+/** Why a WhatsApp wasn't delivered (mirrors the backend codes). */
+export type DeliveryReason =
+  | "no_phone"
+  | "invalid_phone"
+  | "not_configured"
+  | "green_api_error"
+  | "exception"
+  | null;
+
+export interface SendResult {
+  text: string;
+  delivered: boolean;
+  delivery_reason?: DeliveryReason;
+}
+
+/** Human-readable Hebrew explanation for a non-delivery reason. */
+export function deliveryReasonText(reason: DeliveryReason): string {
+  switch (reason) {
+    case "no_phone":
+      return "אין מספר טלפון לנמען — ההודעה נשמרה אך לא נשלחה.";
+    case "invalid_phone":
+      return "מספר הטלפון אינו תקין — ההודעה נשמרה אך לא נשלחה. בדקו את המספר (לדוגמה: 050-1234567).";
+    case "not_configured":
+      return "חיבור ה-WhatsApp (Green API) אינו מוגדר — ההודעה נשמרה אך לא נשלחה.";
+    case "green_api_error":
+      return "Green API דחה את השליחה — ההודעה נשמרה אך לא נשלחה. ודאו שהמספר קיים בוואטסאפ.";
+    case "exception":
+      return "אירעה שגיאה בשליחה — ההודעה נשמרה אך לא נשלחה.";
+    default:
+      return "ההודעה לא נשלחה.";
+  }
+}
+
 export interface ConversationSummary {
   id: string;
   candidate_name: string;
@@ -39,9 +72,9 @@ export interface ConversationDetail {
 export interface ConversationsApi {
   list: () => Promise<ConversationSummary[]>;
   get: (id: string) => Promise<ConversationDetail>;
-  send: (id: string, text: string) => Promise<{ text: string; delivered: boolean }>;
+  send: (id: string, text: string) => Promise<SendResult>;
   pause: (id: string, paused: boolean) => Promise<{ auto_reply_paused: boolean }>;
-  generate: (id: string) => Promise<{ text: string; delivered: boolean }>;
+  generate: (id: string) => Promise<SendResult>;
 }
 
 /** Build a conversations client for a given backend base path (e.g. "/admin/tal"). */

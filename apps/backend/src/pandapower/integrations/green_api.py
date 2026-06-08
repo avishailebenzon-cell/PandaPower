@@ -9,7 +9,30 @@ import logging
 from typing import Literal, Optional
 from pydantic import BaseModel
 
+from pandapower.core import phone as phone_utils
+
 logger = logging.getLogger(__name__)
+
+
+def normalize_chat_id(chat_id: str) -> Optional[str]:
+    """Coerce any caller-supplied recipient into a valid Green API chatId.
+
+    Accepts the three shapes that flow through this client:
+      * a bare phone in any format ("058-666-5248", "+972…", "0586665248")
+        -> canonical "<intl>@c.us"
+      * an already-built individual chatId ("9725…@c.us") -> re-validated
+      * a group / lid chatId ("…@g.us" / "…@lid") -> passed through as-is
+
+    Returns ``None`` when an individual recipient's number is not a valid
+    WhatsApp number, so the caller can fail loudly instead of POSTing junk."""
+    cid = (chat_id or "").strip()
+    if not cid:
+        return None
+    if cid.endswith("@g.us") or cid.endswith("@lid"):
+        return cid
+    # Individual chatId or bare phone — validate/normalize the number part.
+    raw = phone_utils.chat_id_to_phone(cid) if "@" in cid else cid
+    return phone_utils.to_chat_id(raw)
 
 
 class GreenAPIMessage(BaseModel):
@@ -55,6 +78,12 @@ class GreenAPIClient:
         Returns:
             API response with message ID if successful
         """
+        normalized = normalize_chat_id(chat_id)
+        if not normalized:
+            logger.error(f"Green API send aborted: invalid recipient '{chat_id}'")
+            return {"success": False, "error": f"invalid phone/chatId: {chat_id}"}
+        chat_id = normalized
+
         session = await self._get_session()
         url = f"{self.base_url}/sendMessage/{self.token}"
         payload = {
@@ -92,6 +121,12 @@ class GreenAPIClient:
         Returns:
             API response with message ID if successful
         """
+        normalized = normalize_chat_id(chat_id)
+        if not normalized:
+            logger.error(f"Green API file send aborted: invalid recipient '{chat_id}'")
+            return {"success": False, "error": f"invalid phone/chatId: {chat_id}"}
+        chat_id = normalized
+
         session = await self._get_session()
         url = f"{self.base_url}/sendFileByUrl/{self.token}"
         payload = {
@@ -173,13 +208,13 @@ async def get_green_api_client(
             f"{agent_code}.token"
         ]
 
-        settings_response = supabase.table("system_settings").select(
-            "key, value"
-        ).in_("key", settings_keys).execute()
+        settings_response = await supabase.table("system_settings").select(
+            "setting_key, setting_value"
+        ).in_("setting_key", settings_keys).execute()
 
         settings_dict = {}
         for row in settings_response.data or []:
-            settings_dict[row["key"]] = row["value"]
+            settings_dict[row["setting_key"]] = row["setting_value"]
 
         instance_id = settings_dict.get(f"{agent_code}.instance_id", "").strip()
         token = settings_dict.get(f"{agent_code}.token", "").strip()

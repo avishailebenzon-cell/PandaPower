@@ -71,14 +71,14 @@ function StateBadge({ state }: { state: string }) {
   if (cfg.live) {
     return (
       <span
-        className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold ring-1 ring-white/40 animate-pulse ${cfg.cls}`}
+        className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold ring-1 ring-green-300/70 animate-live-glow ${cfg.cls}`}
         title="שיחה פעילה בזמן אמת"
       >
-        <span className="relative flex h-2 w-2">
-          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-300 opacity-80" />
-          <span className="relative inline-flex h-2 w-2 rounded-full bg-green-200" />
+        <span className="relative flex h-2.5 w-2.5">
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-300 opacity-90" />
+          <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-green-300" />
         </span>
-        {cfg.label}
+        <span className="animate-blink">● {cfg.label}</span>
       </span>
     );
   }

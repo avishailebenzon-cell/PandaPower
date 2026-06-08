@@ -84,7 +84,7 @@ const LiveConversationsBadge: React.FC = () => {
     <div
       className={`flex items-center gap-2 flex-shrink-0 px-4 h-full border-l-2 ${
         live
-          ? 'bg-green-950/60 border-green-600 animate-pulse'
+          ? 'bg-green-900/70 border-green-500 animate-live-glow'
           : 'bg-gray-900 border-gray-700'
       }`}
       title={live ? `${total} שיחות וואטסאפ פעילות כעת` : 'אין שיחות פעילות'}
@@ -100,7 +100,7 @@ const LiveConversationsBadge: React.FC = () => {
         />
       </span>
       <div className="flex flex-col gap-0.5 leading-tight">
-        <span className="text-sm font-semibold text-white whitespace-nowrap">
+        <span className={`text-sm font-semibold text-white whitespace-nowrap ${live ? 'animate-blink' : ''}`}>
           {live ? `🟢 שיחות וואטסאפ פעילות (${total})` : '💬 שיחות וואטסאפ'}
         </span>
         <span className="text-xs text-gray-400 whitespace-nowrap">
