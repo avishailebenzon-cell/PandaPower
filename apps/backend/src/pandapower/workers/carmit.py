@@ -74,7 +74,7 @@ class CarmitOrchestrator:
         # Agent specialties (from Phase 4)
         self.agent_specialties = {
             "alik": {"name": "אליק", "domain": "Electronics", "skills": ["FPGA", "VHDL", "PCB", "RF", "Analog"]},
-            "naama": {"name": "נעמה", "domain": "Software", "skills": ["Python", "Java", "C++", "Cloud", "Microservices"]},
+            "naama": {"name": "נעמה", "domain": "Software Development (פיתוח תוכנה)", "skills": ["Python", "Java", "C++", "C#", ".NET", "WPF", "Cloud", "Microservices", "Machine Learning", "Real-time / Embedded software", "פיתוח תוכנה", "מפתח/ת תוכנה", "מהנדס/ת תוכנה"]},
             "dganit": {"name": "דגנית", "domain": "QA", "skills": ["Testing", "Selenium", "LoadRunner", "Automation"]},
             "ofir": {"name": "אופיר", "domain": "Systems", "skills": ["Linux", "Networking", "DevOps", "Container"]},
             "itai": {"name": "איתי", "domain": "IT", "skills": ["Infrastructure", "Windows", "Helpdesk", "Networks"]},
@@ -309,34 +309,29 @@ class CarmitOrchestrator:
             for code, data in self.agent_specialties.items()
         ])
 
-        candidate_summary = (
-            f"{job_context['candidate_pool']['total']} candidates total, "
-            f"with top expertise in: {', '.join(job_context['candidate_pool']['top_domains'])}"
-        )
+        prompt = f"""You are an expert recruiter routing a job to the specialized agent whose DOMAIN best matches the JOB itself.
 
-        prompt = f"""You are an expert recruiter routing jobs to specialized agents.
-
-CONTEXT:
+JOB TO ROUTE (the job text is authoritative — it may be in Hebrew or English):
 Job Title: {job_context['job_title']}
 Description: {job_context['job_description']}
-Required Skills: {', '.join(job_context['required_skills'])}
+Qualifications: {job_context['job_qualifications']}
+Detected Skills (hint only, may be incomplete): {', '.join(job_context['required_skills'])}
 Seniority Level: {job_context['seniority_level']}
-Candidate Pool: {candidate_summary}
 
 AVAILABLE AGENTS:
 {agents_list}
 
 TASK:
-1. Analyze the job requirements against agent specialties
-2. Select the SINGLE best-fit agent (not a tie - pick one clearly)
-3. Explain your reasoning in 1-2 sentences
-4. Rate confidence 0.0-1.0 (how well this agent fits the job)
+1. Read the job title, description and qualifications and determine the job's PRIMARY professional domain.
+2. Select the SINGLE best-fit agent for that domain (not a tie - pick one clearly).
+3. Explain your reasoning in 1-2 sentences, referencing the JOB's own content.
+4. Rate confidence 0.0-1.0 (how well this agent's domain fits the job).
 
-CONSTRAINTS:
-- Be deterministic and reproducible
-- Explain your logic clearly
-- Rate confidence realistically (0.8+ for good matches, 0.6+ for okay matches)
-- If no perfect fit, pick the closest domain match
+CRITICAL ROUTING RULES:
+- Route based ONLY on the JOB's own requirements and domain. Do NOT consider who is currently in the candidate database — agents own domains, not the current candidate mix.
+- A software-development job (Hebrew: "מפתח/ת", "פיתוח תוכנה", "מהנדס/ת תוכנה"; English: developer, software engineer; languages like Python/Java/C++/C#/.NET; cloud/microservices/ML) goes to naama (Software) — even if the job also mentions team leadership or project coordination.
+- Reserve gc (General) ONLY for jobs that genuinely fall outside every specialist domain (e.g. pure procurement, office administration, budgeting, logistics, non-technical business operations). Engineering and development roles must NEVER go to gc.
+- The Hebrew job title alone is usually enough to identify the domain — read it carefully.
 
 Return ONLY valid JSON (no markdown, no extra text):
 {{
