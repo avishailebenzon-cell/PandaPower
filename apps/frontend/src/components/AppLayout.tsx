@@ -41,7 +41,7 @@ export function AppLayout() {
             <li className="pt-2 pb-1 px-3 font-semibold text-purple-400 border-t border-gray-700">מנהלת גיוס</li>
             <li><a href="/admin/carmit" className="block px-3 py-2 rounded text-white hover:bg-gray-700">כרמית</a></li>
 
-            <li><a href="/admin/recruiter" className="block px-3 py-2 rounded text-white hover:bg-gray-700">מנהל מגייסים (טל)</a></li>
+            <li><a href="/admin/recruiter" className="block px-3 py-2 rounded text-white hover:bg-gray-700">מנהלת גיוס (טל)</a></li>
             <li><a href="/admin/elad" className="block px-3 py-2 rounded text-white hover:bg-gray-700">מנהל מגייסים (אלעד)</a></li>
 
             <li className="pt-2 pb-1 px-3 font-semibold text-green-400 border-t border-gray-700">מחלקות גיוס</li>
