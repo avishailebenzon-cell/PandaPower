@@ -43,7 +43,9 @@ CREATE TABLE IF NOT EXISTS pandi_message_quotas (
   increase_requested_at TIMESTAMPTZ,
   increase_requested_amount INT,
   increase_approved_at TIMESTAMPTZ,
-  increase_approved_by_user_id UUID REFERENCES users(id),
+  -- NB: no FK to users(id) — that table does not exist in prod and the FK was
+  -- the original reason this migration silently failed to apply. Plain UUID.
+  increase_approved_by_user_id UUID,
   increase_approved_amount INT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -60,7 +62,7 @@ CREATE TABLE IF NOT EXISTS candidate_referral_history (
   referral_id UUID NOT NULL REFERENCES candidate_referrals(id) ON DELETE CASCADE,
   from_status TEXT,
   to_status TEXT NOT NULL,
-  triggered_by_user_id UUID REFERENCES users(id),
+  triggered_by_user_id UUID,
   triggered_by_pandi_client_id UUID REFERENCES pandi_clients(id),
   reasoning TEXT,
   metadata JSONB,
