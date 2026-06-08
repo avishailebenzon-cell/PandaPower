@@ -32,6 +32,7 @@ import WhatsAppAgentsSettingsPage from '@/pages/admin/WhatsAppAgentsSettingsPage
 import { PipedriveConfigPage } from '@/pages/admin/PipedriveConfigPage'
 import { PandiPage } from '@/pages/admin/PandiPage'
 import { PandiClientRequestPage } from '@/pages/admin/PandiClientRequestPage'
+import { DanaPage } from '@/pages/admin/DanaPage'
 import { EmployeesPage } from '@/pages/admin/EmployeesPage'
 import { ClientsPage } from '@/pages/admin/ClientsPage'
 import { PotentialClientsPage } from '@/pages/admin/PotentialClientsPage'
@@ -47,6 +48,9 @@ import { EladPageNew } from '@/pages/admin/EladPageNew'
 import EladOutreachPage from '@/pages/admin/EladOutreachPage'
 import PandiOutreachPage from '@/pages/admin/PandiOutreachPage'
 import { TalPage } from '@/pages/admin/TalPage'
+import { TalConversationsPage } from '@/pages/admin/TalConversationsPage'
+import { EladConversationsPage } from '@/pages/admin/EladConversationsPage'
+import { PandiConversationsPage } from '@/pages/admin/PandiConversationsPage'
 import { MatchFlowDashboard } from '@/pages/admin/MatchFlowDashboard'
 
 // Other Pages
@@ -100,7 +104,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 
             {/* Recruiters */}
             <Route path="/recruiting/tal" element={<ProtectedRoute><TalPage /></ProtectedRoute>} />
+            <Route path="/recruiting/tal/conversations" element={<ProtectedRoute><TalConversationsPage /></ProtectedRoute>} />
             <Route path="/recruiting/elad" element={<ProtectedRoute><EladPageNew /></ProtectedRoute>} />
+            <Route path="/recruiting/elad/conversations" element={<ProtectedRoute><EladConversationsPage /></ProtectedRoute>} />
             <Route path="/recruiting/elad/outreach" element={<ProtectedRoute><EladOutreachPage /></ProtectedRoute>} />
             <Route path="/recruiting/pandi/outreach" element={<ProtectedRoute><PandiOutreachPage /></ProtectedRoute>} />
 
@@ -120,6 +126,10 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             <Route path="/admin/pandi" element={<ProtectedRoute><PandiPage /></ProtectedRoute>} />
             <Route path="/admin/pandi-conversations" element={<ProtectedRoute><PandiClientRequestPage /></ProtectedRoute>} />
             <Route path="/recruiting/pandi" element={<ProtectedRoute><PandiClientRequestPage /></ProtectedRoute>} />
+            <Route path="/recruiting/pandi/conversations" element={<ProtectedRoute><PandiConversationsPage /></ProtectedRoute>} />
+
+            {/* Dana (AI sales agent — new-job-deal intake) */}
+            <Route path="/recruiting/dana" element={<ProtectedRoute><DanaPage /></ProtectedRoute>} />
           </Route>
 
           {/* AGENT PAGES - AI Agents */}

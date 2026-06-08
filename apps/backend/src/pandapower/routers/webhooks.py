@@ -156,6 +156,102 @@ async def _log_inbound_message(supabase, agent_code: str, parsed: dict) -> None:
     logger.info(f"pandi_messages table unavailable — skipping persistence for {agent_code} event")
 
 
+async def _find_recruiter_conversation_for_phone(
+    supabase, recruiter: str, phone: str
+) -> Optional[str]:
+    """Locate the recruiter conversation a given phone belongs to.
+
+    First tries the cached candidate_phone column, then falls back to matching
+    the candidate by phone and finding their most recent conversation for this
+    recruiter. Returns the conversation id (uuid str) or None.
+    """
+    from pandapower.agents.recruiter_chat.engine import normalize_phone
+
+    digits = normalize_phone(phone)
+    if not digits:
+        return None
+
+    # 1) Cached candidate_phone on the conversation.
+    try:
+        res = await (
+            supabase.table("recruiter_conversations")
+            .select("id, updated_at")
+            .eq("recruiter", recruiter)
+            .eq("candidate_phone", digits)
+            .order("updated_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if res.data:
+            return res.data[0]["id"]
+    except Exception as e:
+        logger.warning(f"{recruiter} conv lookup by cached phone failed: {e}")
+
+    # 2) Fallback: find candidate(s) by phone, then their conversation.
+    try:
+        cand_res = await supabase.table("candidates").select("id, phone").execute()
+        candidate_ids = [
+            c["id"] for c in (cand_res.data or [])
+            if normalize_phone(c.get("phone")).endswith(digits[-9:])
+            or digits.endswith(normalize_phone(c.get("phone"))[-9:] if c.get("phone") else "")
+        ]
+        if not candidate_ids:
+            return None
+        match_res = await (
+            supabase.table("matches")
+            .select("id")
+            .in_("candidate_id", candidate_ids)
+            .execute()
+        )
+        match_ids = [m["id"] for m in (match_res.data or [])]
+        if not match_ids:
+            return None
+        conv_res = await (
+            supabase.table("recruiter_conversations")
+            .select("id, updated_at")
+            .eq("recruiter", recruiter)
+            .in_("match_id", match_ids)
+            .order("updated_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if conv_res.data:
+            conv_id = conv_res.data[0]["id"]
+            # Cache the phone for fast routing next time.
+            try:
+                await supabase.table("recruiter_conversations").update(
+                    {"candidate_phone": digits}
+                ).eq("id", conv_id).execute()
+            except Exception:
+                pass
+            return conv_id
+    except Exception as e:
+        logger.warning(f"{recruiter} conv lookup by candidate phone failed: {e}")
+    return None
+
+
+async def _handle_recruiter_inbound(recruiter: str, parsed: dict) -> None:
+    """Record an inbound message for a recruiter (tal/elad) and auto-reply if
+    the conversation isn't paused."""
+    from uuid import UUID
+    from pandapower.agents.recruiter_chat.engine import RecruiterChatEngine
+
+    try:
+        supabase = await get_supabase_client()
+        phone = parsed.get("from_phone") or ""
+        conv_id = await _find_recruiter_conversation_for_phone(supabase, recruiter, phone)
+        if not conv_id:
+            logger.info(f"{recruiter} inbound: no conversation matched phone={phone}; dropping")
+            return
+
+        engine = RecruiterChatEngine(recruiter)
+        await engine.record_inbound(UUID(conv_id), parsed["text"])
+        # Auto-reply (the engine itself skips if the conversation is paused).
+        await engine.generate_reply(UUID(conv_id))
+    except Exception as e:
+        logger.error(f"{recruiter} inbound handling failed: {e}", exc_info=True)
+
+
 @router.post("/whatsapp/{agent_code}")
 async def receive_whatsapp_webhook(
     agent_code: str,
@@ -199,6 +295,15 @@ async def receive_whatsapp_webhook(
         await _log_inbound_message(supabase, agent_code, parsed)
     except Exception as e:
         logger.warning(f"Webhook logging failed for {agent_code}: {e}")
+
+    # Tal/Elad: route the inbound message into the recruiter conversation and
+    # let the agent auto-reply (unless a human has paused it). Done in the
+    # background so we return 200 immediately and Green API never retries.
+    if agent_code in ("tal", "elad") and parsed.get("event_type") == "incomingMessageReceived" and parsed.get("text"):
+        try:
+            asyncio.create_task(_handle_recruiter_inbound(agent_code, parsed))
+        except Exception as e:
+            logger.error(f"Failed to spawn {agent_code} inbound handler: {e}", exc_info=True)
 
     # Enqueue Celery task to process the message (Session 34)
     if agent_code == "pandi" and parsed.get("event_type") == "incomingMessageReceived" and parsed.get("text"):

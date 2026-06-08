@@ -12,7 +12,9 @@
  */
 
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import { MessageCircle } from "lucide-react";
 import { fetchPandiClients, type PandiClient } from "@/api/pandi";
 
 const PANDI_OPENING_GREETING =
@@ -41,6 +43,7 @@ const INTAKE_STATUS_LABEL: Record<string, { label: string; cls: string }> = {
 };
 
 export const PandiClientRequestPage = () => {
+  const navigate = useNavigate();
   const [filter, setFilter] = useState<"all" | "active" | "inactive">("all");
 
   const clientsQuery = useQuery({
@@ -59,14 +62,22 @@ export const PandiClientRequestPage = () => {
   return (
     <div dir="rtl" className="p-6 space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-3xl font-bold text-white flex items-center gap-2">
-          <span>🐼</span> פנדי — שיחות עם לקוחות
-        </h1>
-        <p className="text-gray-400 mt-1">
-          פנדי היא סוכנת WhatsApp חכמה שמטפלת בבקשות לקוחות לאיתור מועמדים. כל השיחות
-          המוצגות כאן הן אמיתיות, מהדאטה-בייס של המערכת.
-        </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-white flex items-center gap-2">
+            <span>🐼</span> פנדי — שיחות עם לקוחות
+          </h1>
+          <p className="text-gray-400 mt-1">
+            פנדי היא סוכנת WhatsApp חכמה שמטפלת בבקשות לקוחות לאיתור מועמדים. כל השיחות
+            המוצגות כאן הן אמיתיות, מהדאטה-בייס של המערכת.
+          </p>
+        </div>
+        <button
+          onClick={() => navigate("/recruiting/pandi/conversations")}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-teal-600 text-white hover:bg-teal-700 transition shrink-0"
+        >
+          <MessageCircle className="w-4 h-4" /> שיחות
+        </button>
       </div>
 
       {/* Opening greeting card */}

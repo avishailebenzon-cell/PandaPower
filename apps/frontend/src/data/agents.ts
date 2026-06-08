@@ -165,6 +165,23 @@ export const RECRUITERS: Record<string, Recruiter> = {
   },
 };
 
+// Sales agents (סוכני מכירות) — client/deal-facing AI agents.
+export const SALES_AGENTS: Record<string, Agent> = {
+  dana: {
+    code: "dana",
+    name: "דנה",
+    title: "סוכנת הזנת משרות",
+    department: "מכירות",
+    emoji: "💼",
+    avatar: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%230d9488'/%3E%3Ctext x='50' y='60' text-anchor='middle' font-size='40' font-weight='bold' fill='white'%3E ד%3C/text%3E%3C/svg%3E",
+    color: "from-teal-600 to-teal-800",
+    description: "מקבלת תיאור של דיל חדש, אוספת את פרטי המשרה ופותחת דיל בפייפדרייב",
+    specialization: ["Deal Intake", "Pipedrive", "File Parsing", "Sales"],
+    experience: "AI-powered",
+    email: "dana@pandapower.io",
+  },
+};
+
 export function getAgent(code: string): Agent | undefined {
   return RECRUITMENT_AGENTS[code];
 }

@@ -326,6 +326,106 @@ class PipedriveClient:
             )
             raise Exception(f"Pipedrive API error: {response.get('error')}")
 
+    async def get_pipelines(self) -> list:
+        """Fetch all deal pipelines (id + name). Used to map a pipeline name
+        like 'גיוס מגזר רפאל' / 'Presale' to its numeric pipeline_id."""
+        response = await self._make_request_with_retry("GET", "/v1/pipelines")
+        return response.get("data") or []
+
+    async def get_stages(self, pipeline_id: int = None) -> list:
+        """Fetch deal stages, optionally filtered to a single pipeline."""
+        params = {"pipeline_id": pipeline_id} if pipeline_id else {}
+        response = await self._make_request_with_retry(
+            "GET", "/v1/stages", params=params
+        )
+        return response.get("data") or []
+
+    async def search_persons(self, term: str) -> list:
+        """Search persons by name/email/phone. Returns list of matched items."""
+        if not term:
+            return []
+        params = {"term": term, "fields": "name", "limit": 20}
+        response = await self._make_request_with_retry(
+            "GET", "/v1/persons/search", params=params
+        )
+        items = (response.get("data") or {}).get("items") or []
+        return [it.get("item", {}) for it in items if it.get("item")]
+
+    async def search_organizations(self, term: str) -> list:
+        """Search organizations by name. Returns list of matched items."""
+        if not term:
+            return []
+        params = {"term": term, "fields": "name", "limit": 20}
+        response = await self._make_request_with_retry(
+            "GET", "/v1/organizations/search", params=params
+        )
+        items = (response.get("data") or {}).get("items") or []
+        return [it.get("item", {}) for it in items if it.get("item")]
+
+    async def create_organization(
+        self, name: str, custom_fields: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """Create a new organization in Pipedrive. Returns created org data."""
+        payload = {"name": name}
+        if custom_fields:
+            payload.update(custom_fields)
+        response = await self._make_request_with_retry(
+            "POST", "/v1/organizations", json=payload
+        )
+        if response.get("success"):
+            logger.info(
+                f"Created Pipedrive organization: {name}",
+                pipedrive_org_id=response.get("data", {}).get("id"),
+            )
+            return response.get("data", {})
+        raise Exception(f"Pipedrive API error (create org): {response.get('error')}")
+
+    async def create_deal(
+        self,
+        title: str,
+        pipeline_id: int = None,
+        stage_id: int = None,
+        person_id: int = None,
+        org_id: int = None,
+        custom_fields: Dict[str, Any] = None,
+    ) -> Dict[str, Any]:
+        """
+        Create a new deal (job) in Pipedrive.
+
+        Args:
+            title: Deal title (built as "#job title# אצל #contact# חברת #org#")
+            pipeline_id: Target pipeline id (resolve from pipeline name first)
+            stage_id: Optional initial stage id
+            person_id: Pipedrive person id (contact)
+            org_id: Pipedrive organization id
+            custom_fields: dict of custom-field-hash -> value (job fields)
+
+        Returns:
+            Created deal data (includes 'id').
+        """
+        payload: Dict[str, Any] = {"title": title}
+        if pipeline_id is not None:
+            payload["pipeline_id"] = pipeline_id
+        if stage_id is not None:
+            payload["stage_id"] = stage_id
+        if person_id is not None:
+            payload["person_id"] = person_id
+        if org_id is not None:
+            payload["org_id"] = org_id
+        if custom_fields:
+            payload.update(custom_fields)
+
+        response = await self._make_request_with_retry(
+            "POST", "/v1/deals", json=payload
+        )
+        if response.get("success"):
+            logger.info(
+                f"Created Pipedrive deal: {title}",
+                pipedrive_deal_id=response.get("data", {}).get("id"),
+            )
+            return response.get("data", {})
+        raise Exception(f"Pipedrive API error (create deal): {response.get('error')}")
+
     async def close(self):
         """Close the httpx client"""
         if self.client:

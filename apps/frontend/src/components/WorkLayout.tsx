@@ -161,6 +161,9 @@ export function WorkLayout() {
                   <a href="/admin/pandi-conversations" className="block px-3 py-2 rounded text-white hover:bg-gray-700 transition text-sm">
                     💬 פנדי (בקשות לקוחות)
                   </a>
+                  <a href="/recruiting/dana" className="block px-3 py-2 rounded text-white hover:bg-gray-700 transition text-sm">
+                    💼 דנה (הזנת משרות)
+                  </a>
                 </nav>
               )}
             </div>

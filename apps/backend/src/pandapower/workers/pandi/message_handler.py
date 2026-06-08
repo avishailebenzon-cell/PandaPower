@@ -75,7 +75,8 @@ async def _process_pandi_incoming_message_async(payload: dict) -> dict[str, Any]
                 "pandi_client_id", client_id
             ).eq("status", "open").execute()
 
-            conversation_id = conv_result.data[0]["id"] if conv_result.data else None
+            conv_row = conv_result.data[0] if conv_result.data else None
+            conversation_id = conv_row["id"] if conv_row else None
 
             # Create conversation if needed
             if not conversation_id:
@@ -97,6 +98,19 @@ async def _process_pandi_incoming_message_async(payload: dict) -> dict[str, Any]
                 "text": message_text,
                 "sent_at": datetime.fromtimestamp(timestamp).isoformat()
             }).execute()
+
+            # Human takeover: if an operator paused Pandi's auto-reply for this
+            # conversation, store the inbound message (done above) but don't let
+            # Pandi respond. The operator replies manually from the chat screen;
+            # Pandi resumes once the pause is lifted.
+            if conv_row and conv_row.get("auto_reply_paused"):
+                logger.info(f"Pandi auto-reply paused for conversation {conversation_id} — skipping")
+                return {
+                    "status": "paused",
+                    "client_id": client_id,
+                    "is_new_client": False,
+                    "message_saved": True,
+                }
 
             # Check if client is in intake flow
             if client.get("intake_status") == "in_progress":
