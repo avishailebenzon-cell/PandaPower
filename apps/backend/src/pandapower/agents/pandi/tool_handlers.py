@@ -1,6 +1,7 @@
 """Tool handlers for Pandi conversation engine tool calls."""
 
 import logging
+from datetime import datetime
 from typing import Any, Optional
 from uuid import UUID
 
@@ -85,9 +86,10 @@ async def handle_search_candidates(
 
         # Load full job context from conversation
         supabase = await get_supabase_client()
-        conversation = await supabase.table("pandi_conversations").select(
+        _conv_res = await supabase.table("pandi_conversations").select(
             "job_context"
-        ).eq("id", str(conversation_id)).single()
+        ).eq("id", str(conversation_id)).limit(1).execute()
+        conversation = _conv_res.data[0] if _conv_res.data else None
 
         job_context = conversation.get("job_context", {}) if conversation else {}
 
@@ -111,9 +113,10 @@ async def handle_search_candidates(
             for candidate in candidates:
                 # Get candidate ID for referral creation
                 candidate_number = candidate.get("candidate_number")
-                candidate_result = await supabase.table("candidates").select(
+                _cand_res = await supabase.table("candidates").select(
                     "id"
-                ).eq("candidate_number", candidate_number).single()
+                ).eq("candidate_number", candidate_number).limit(1).execute()
+                candidate_result = _cand_res.data[0] if _cand_res.data else None
 
                 if candidate_result:
                     candidate_id = candidate_result["id"]
@@ -197,9 +200,10 @@ async def handle_mark_client_interested(
 
         # Get candidate ID from candidate_number
         supabase = await get_supabase_client()
-        candidate = await supabase.table("candidates").select(
+        _cand_res = await supabase.table("candidates").select(
             "id"
-        ).eq("candidate_number", candidate_number).single()
+        ).eq("candidate_number", candidate_number).limit(1).execute()
+        candidate = _cand_res.data[0] if _cand_res.data else None
 
         if not candidate:
             logger.warning(
@@ -234,9 +238,10 @@ async def handle_mark_client_interested(
             referral_id = result.get("referral_id")
             referral_number = "REF-2026-?"
             if referral_id:
-                referral_result = await supabase.table("candidate_referrals").select(
-                    "referral_number, candidate_number, pandi_clients(full_name:contact_id->contacts.full_name)"
-                ).eq("id", str(referral_id)).single()
+                _ref_res = await supabase.table("candidate_referrals").select(
+                    "referral_number, candidate_number"
+                ).eq("id", str(referral_id)).limit(1).execute()
+                referral_result = _ref_res.data[0] if _ref_res.data else None
 
                 if referral_result:
                     referral_number = referral_result.get("referral_number", referral_number)
@@ -309,9 +314,10 @@ async def handle_check_referral_history(
 
         # Get candidate ID from candidate_number
         supabase = await get_supabase_client()
-        candidate = await supabase.table("candidates").select(
+        _cand_res = await supabase.table("candidates").select(
             "id"
-        ).eq("candidate_number", candidate_number).single()
+        ).eq("candidate_number", candidate_number).limit(1).execute()
+        candidate = _cand_res.data[0] if _cand_res.data else None
 
         if not candidate:
             logger.warning(
@@ -456,7 +462,7 @@ async def handle_transfer_to_recruitment(
             supabase = await get_supabase_client()
             await supabase.table("pandi_conversations").update(
                 {"status": "transferred_to_recruitment"}
-            ).eq("id", str(conversation_id))
+            ).eq("id", str(conversation_id)).execute()
 
             logger.info(
                 "conversation_transferred",
@@ -502,9 +508,10 @@ async def handle_identify_client(
         supabase = await get_supabase_client()
 
         # Search contacts by phone
-        result = await supabase.table("contacts").select(
+        _id_res = await supabase.table("contacts").select(
             "id, full_name, email, organization_id, contact_status, professional_domain"
-        ).eq("phone", phone).single()
+        ).eq("phone", phone).limit(1).execute()
+        result = _id_res.data[0] if _id_res.data else None
 
         if result:
             logger.info(
@@ -568,9 +575,10 @@ async def handle_create_client(
         supabase = await get_supabase_client()
 
         # 1. Check if contact already exists (double-check)
-        existing = await supabase.table("contacts").select(
+        _exist_res = await supabase.table("contacts").select(
             "id"
-        ).eq("phone", phone).single()
+        ).eq("phone", phone).limit(1).execute()
+        existing = _exist_res.data[0] if _exist_res.data else None
 
         if existing:
             logger.warning(
@@ -634,7 +642,7 @@ async def handle_create_client(
             "phone": phone,
             "contact_status": "potential_client",  # לקוח פוטנציאלי (canonical)
             "professional_domain": None,  # Will be updated later
-            "pipedrive_last_synced_at": "now()",
+            "pipedrive_last_synced_at": datetime.utcnow().isoformat(),
         }).execute()
 
         if not contact_result.data:
@@ -654,9 +662,9 @@ async def handle_create_client(
         # 4. Update pandi_client to link to this contact
         await supabase.table("pandi_clients").update({
             "contact_id": contact_id,
-            "identified_at": "now()",
+            "identified_at": datetime.utcnow().isoformat(),
             "identification_method": "manual_intake_via_bot",
-        }).eq("id", str(pandi_client_id))
+        }).eq("id", str(pandi_client_id)).execute()
 
         # 5. Send admin notification via Resend
         from pandapower.agents.pandi.notification_service import NotificationService
