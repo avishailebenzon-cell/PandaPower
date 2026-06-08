@@ -77,6 +77,25 @@ export const ConversationsScreen: React.FC<ConversationsScreenProps> = ({
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // Poll for real-time updates: refresh the contact list, and (while a
+  // conversation is open and the operator isn't mid-typing) pull new messages.
+  useEffect(() => {
+    const id = setInterval(() => {
+      refreshConversations();
+      if (activeId && !input.trim()) {
+        api
+          .get(activeId)
+          .then((detail) => {
+            setMessages(detail.messages);
+            setPaused(detail.auto_reply_paused);
+          })
+          .catch(() => {});
+      }
+    }, 6000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId, input, api]);
+
   const openConversation = async (id: string) => {
     setActiveId(id);
     const detail = await api.get(id);
@@ -168,9 +187,14 @@ export const ConversationsScreen: React.FC<ConversationsScreenProps> = ({
               >
                 <div className="text-sm text-white truncate flex items-center justify-between gap-1">
                   <span className="truncate">{c.candidate_name}</span>
-                  {c.auto_reply_paused && (
+                  {c.auto_reply_paused ? (
                     <Pause className="w-3 h-3 text-amber-400 shrink-0" />
-                  )}
+                  ) : (c.status === "active" || c.status === "open") ? (
+                    <span className="relative flex h-2 w-2 shrink-0" title="שיחה פעילה">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                      <span className="relative inline-flex h-2 w-2 rounded-full bg-green-400" />
+                    </span>
+                  ) : null}
                 </div>
                 {c.job_title && (
                   <div className="text-xs text-gray-500 truncate">{c.job_title}</div>
@@ -194,7 +218,22 @@ export const ConversationsScreen: React.FC<ConversationsScreenProps> = ({
               {/* Header with contact + pause toggle */}
               <div className="border-b border-gray-700 px-4 py-3 flex items-center justify-between bg-gray-900/70">
                 <div>
-                  <div className="text-white font-semibold">{contactName}</div>
+                  <div className="text-white font-semibold flex items-center gap-2">
+                    {contactName}
+                    {paused ? (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-amber-700/70 text-amber-100">
+                        מושהה
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-green-700/70 text-green-100 animate-pulse">
+                        <span className="relative flex h-2 w-2">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-300 opacity-80" />
+                          <span className="relative inline-flex h-2 w-2 rounded-full bg-green-200" />
+                        </span>
+                        בשיחה פעילה
+                      </span>
+                    )}
+                  </div>
                   {jobTitle && <div className="text-xs text-gray-400">{jobTitle}</div>}
                 </div>
                 <div className="flex items-center gap-2">

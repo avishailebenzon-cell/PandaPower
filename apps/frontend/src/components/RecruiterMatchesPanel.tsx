@@ -47,17 +47,20 @@ interface Props {
   showStatusStrip?: boolean;
 }
 
-const STATE_LABELS: Record<string, { label: string; cls: string }> = {
+// Each status has its own colour. The two "in conversation" states are marked
+// `live` — their badge pulses with a blinking dot so it's obvious, at a glance,
+// that a real-time WhatsApp conversation is in progress.
+const STATE_LABELS: Record<string, { label: string; cls: string; live?: boolean }> = {
   found: { label: "נמצאה התאמה", cls: "bg-yellow-900 text-yellow-200" },
   evaluated_but_rejected: { label: "נבדק — לא התאים (<70)", cls: "bg-gray-700 text-gray-300" },
   carmit_approved: { label: "אושרה על ידי כרמית", cls: "bg-green-900 text-green-200" },
   carmit_rejected: { label: "נדחתה על ידי כרמית", cls: "bg-red-900 text-red-200" },
   sent_to_tal: { label: "ממתינה לטל", cls: "bg-blue-900 text-blue-200" },
-  tal_conversation: { label: "בשיחה עם טל", cls: "bg-indigo-900 text-indigo-200" },
+  tal_conversation: { label: "בשיחה עם טל", cls: "bg-indigo-600 text-white", live: true },
   tal_approved: { label: "אושר ע״י טל", cls: "bg-green-900 text-green-200" },
   tal_rejected: { label: "נדחה ע״י טל", cls: "bg-red-900 text-red-200" },
   sent_to_elad: { label: "ממתינה לאלעד", cls: "bg-purple-900 text-purple-200" },
-  elad_conversation: { label: "בשיחה עם אלעד", cls: "bg-fuchsia-900 text-fuchsia-200" },
+  elad_conversation: { label: "בשיחה עם אלעד", cls: "bg-fuchsia-600 text-white", live: true },
   elad_approved: { label: "אושר ע״י אלעד", cls: "bg-emerald-900 text-emerald-200" },
   hired: { label: "🎉 הושמה", cls: "bg-emerald-700 text-white" },
   placement_failed: { label: "כשלון השמה", cls: "bg-red-900 text-red-200" },
@@ -65,6 +68,20 @@ const STATE_LABELS: Record<string, { label: string; cls: string }> = {
 
 function StateBadge({ state }: { state: string }) {
   const cfg = STATE_LABELS[state] || { label: state, cls: "bg-gray-700 text-gray-300" };
+  if (cfg.live) {
+    return (
+      <span
+        className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold ring-1 ring-white/40 animate-pulse ${cfg.cls}`}
+        title="שיחה פעילה בזמן אמת"
+      >
+        <span className="relative flex h-2 w-2">
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-300 opacity-80" />
+          <span className="relative inline-flex h-2 w-2 rounded-full bg-green-200" />
+        </span>
+        {cfg.label}
+      </span>
+    );
+  }
   return (
     <span className={`px-2 py-0.5 rounded text-xs font-semibold ${cfg.cls}`}>{cfg.label}</span>
   );
