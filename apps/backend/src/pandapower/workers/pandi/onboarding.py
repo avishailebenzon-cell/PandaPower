@@ -8,6 +8,62 @@ from uuid import UUID
 logger = logging.getLogger(__name__)
 
 
+async def _send_intake_message(client: dict, text: str, supabase: Any) -> None:
+    """Send an intake question/greeting via Green API and persist it as an
+    outbound pandi_messages row.
+
+    Mirrors conversation_handler.handle_client_message: send over Green API,
+    then store the outbound message against the client's open conversation so
+    the chat screen shows what Pandi said.
+    """
+    client_id = client.get("id")
+    chat_id = client.get("whatsapp_chat_id")
+    if not chat_id:
+        logger.error(f"No whatsapp_chat_id for client {client_id} — cannot send intake message")
+        return
+
+    from pandapower.integrations.green_api import get_green_api_client
+
+    green_api = await get_green_api_client("pandi")
+    if not green_api:
+        logger.error("Could not initialize Green API client for intake send")
+        return
+
+    try:
+        send_result = await green_api.send_message(chat_id=chat_id, message=text)
+    finally:
+        await green_api.close()
+    if not send_result.get("success"):
+        logger.error(f"Failed to send intake message to client {client_id}: {send_result.get('error')}")
+        return
+
+    # Find (or create) the open conversation to attach the outbound message to.
+    conv_result = await supabase.table("pandi_conversations").select("id").eq(
+        "pandi_client_id", client_id
+    ).eq("status", "open").execute()
+
+    if conv_result.data:
+        conversation_id = conv_result.data[0]["id"]
+    else:
+        conv_create = await supabase.table("pandi_conversations").insert({
+            "pandi_client_id": client_id,
+            "status": "open",
+            "started_at": datetime.utcnow().isoformat(),
+            "last_activity_at": datetime.utcnow().isoformat()
+        }).execute()
+        conversation_id = conv_create.data[0]["id"] if conv_create.data else None
+
+    if conversation_id:
+        await supabase.table("pandi_messages").insert({
+            "conversation_id": conversation_id,
+            "pandi_client_id": client_id,
+            "direction": "outbound",
+            "message_type": "text",
+            "text": text,
+            "sent_at": datetime.utcnow().isoformat()
+        }).execute()
+
+
 async def continue_intake_flow(
     client_id: str,
     user_response: Optional[str],
@@ -55,8 +111,8 @@ async def continue_intake_flow(
 
         # First message: send greeting
         if is_first:
-            # TODO: Queue outbound message via Green API
             logger.info(f"Sending greeting to client {client_id}")
+            await _send_intake_message(client, greeting, supabase)
             return {
                 "status": "intake_started",
                 "client_id": client_id,
@@ -88,8 +144,8 @@ async def continue_intake_flow(
             "updated_at": datetime.utcnow().isoformat()
         }).eq("id", client_id).execute()
 
-        # TODO: Queue next question via Green API
         logger.info(f"Intake step {step + 1} for client {client_id}")
+        await _send_intake_message(client, next_q, supabase)
 
         return {
             "status": "intake_in_progress",
