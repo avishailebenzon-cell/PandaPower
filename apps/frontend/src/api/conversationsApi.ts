@@ -74,6 +74,8 @@ export interface ConversationsApi {
   get: (id: string) => Promise<ConversationDetail>;
   send: (id: string, text: string) => Promise<SendResult>;
   pause: (id: string, paused: boolean) => Promise<{ auto_reply_paused: boolean }>;
+  /** Operator-initiated close (closed=true) or reopen (closed=false). */
+  close: (id: string, closed: boolean) => Promise<{ status: string; auto_reply_paused: boolean }>;
   generate: (id: string) => Promise<SendResult>;
 }
 
@@ -107,6 +109,15 @@ export function makeConversationsApi(basePath: string): ConversationsApi {
         body: JSON.stringify({ paused }),
       });
       if (!res.ok) throw new Error("Failed to update pause state");
+      return res.json();
+    },
+    async close(id, closed) {
+      const res = await fetch(url(`/conversations/${id}/close`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ closed }),
+      });
+      if (!res.ok) throw new Error("Failed to update conversation status");
       return res.json();
     },
     async generate(id) {

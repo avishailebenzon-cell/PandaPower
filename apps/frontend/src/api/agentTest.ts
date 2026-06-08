@@ -11,6 +11,8 @@ export interface CreateTestMatchPayload {
   phone: string;
   contact_name: string;
   job_title: string;
+  /** The real candidate presented to the client (Elad bypass-Tal flow). */
+  candidate_name?: string;
   organization_name?: string;
   job_location?: string;
   job_security_clearance?: string;
@@ -26,6 +28,40 @@ export interface CreateTestMatchResult {
   recruiter: string;
   state: string;
   queue_path: string;
+}
+
+/** A real Carmit-approved match the operator can hand to Elad for a test. */
+export interface ApprovedMatchItem {
+  match_id: string;
+  candidate_name: string;
+  candidate_clearance?: string | null;
+  job_title: string;
+  organization_name?: string | null;
+  job_location?: string | null;
+  job_security_clearance?: string | null;
+  job_description?: string | null;
+  job_qualifications?: string | null;
+  match_score: number; // 0-100
+  match_reasoning?: string | null;
+  current_state: string;
+}
+
+export async function listApprovedMatches(
+  limit = 50
+): Promise<ApprovedMatchItem[]> {
+  const res = await fetch(
+    `${API_BASE}/admin/agent-test/approved-matches?limit=${limit}`
+  );
+  if (!res.ok) {
+    let detail = "Failed to load approved matches";
+    try {
+      detail = (await res.json()).detail || detail;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail);
+  }
+  return res.json();
 }
 
 export async function createTestMatch(

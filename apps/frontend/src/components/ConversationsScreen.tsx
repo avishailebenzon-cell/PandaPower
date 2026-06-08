@@ -13,7 +13,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Send, Loader2, ArrowRight, Pause, Play, Sparkles } from "lucide-react";
+import { Send, Loader2, ArrowRight, Pause, Play, Sparkles, X, RotateCcw } from "lucide-react";
 import type {
   ConversationsApi,
   ChatMessage,
@@ -67,8 +67,10 @@ export const ConversationsScreen: React.FC<ConversationsScreenProps> = ({
   const [contactName, setContactName] = useState<string>("");
   const [jobTitle, setJobTitle] = useState<string>("");
   const [paused, setPaused] = useState<boolean>(false);
+  const [status, setStatus] = useState<string>("active");
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const isClosed = status === "closed";
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const refreshConversations = async () => {
@@ -99,6 +101,7 @@ export const ConversationsScreen: React.FC<ConversationsScreenProps> = ({
           .then((detail) => {
             setMessages(detail.messages);
             setPaused(detail.auto_reply_paused);
+            setStatus(detail.status);
           })
           .catch(() => {});
       }
@@ -114,6 +117,7 @@ export const ConversationsScreen: React.FC<ConversationsScreenProps> = ({
     setContactName(detail.candidate_name);
     setJobTitle(detail.job_title);
     setPaused(detail.auto_reply_paused);
+    setStatus(detail.status);
   };
 
   const handleSend = async () => {
@@ -154,6 +158,32 @@ export const ConversationsScreen: React.FC<ConversationsScreenProps> = ({
       refreshConversations();
     } catch (e) {
       setPaused(!next); // revert on failure
+    }
+  };
+
+  const toggleClose = async () => {
+    if (!activeId) return;
+    const next = !isClosed; // true = close, false = reopen
+    if (next) {
+      const ok = window.confirm(
+        `לסגור את השיחה עם ${contactName || "המועמד"}?\n` +
+          `${agentName} תפסיק להגיב אוטומטית בשיחה זו. תוכל לפתוח אותה מחדש בכל עת.`
+      );
+      if (!ok) return;
+    }
+    const prevStatus = status;
+    const prevPaused = paused;
+    setStatus(next ? "closed" : "active");
+    if (next) setPaused(true);
+    else setPaused(false);
+    try {
+      const res = await api.close(activeId, next);
+      setStatus(res.status);
+      setPaused(res.auto_reply_paused);
+      refreshConversations();
+    } catch (e) {
+      setStatus(prevStatus); // revert on failure
+      setPaused(prevPaused);
     }
   };
 
@@ -249,7 +279,11 @@ export const ConversationsScreen: React.FC<ConversationsScreenProps> = ({
                   <div>
                   <div className="text-white font-semibold flex items-center gap-2">
                     {contactName}
-                    {paused ? (
+                    {isClosed ? (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-gray-600 text-gray-100">
+                        סגורה
+                      </span>
+                    ) : paused ? (
                       <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-amber-700/70 text-amber-100">
                         מושהה
                       </span>
@@ -269,15 +303,16 @@ export const ConversationsScreen: React.FC<ConversationsScreenProps> = ({
                 <div className="flex items-center gap-2">
                   <button
                     onClick={triggerAgent}
-                    disabled={sending || paused}
-                    title={paused ? `${agentName} ${pausedAdj}` : `בקש מ${agentName} לענות עכשיו`}
+                    disabled={sending || paused || isClosed}
+                    title={isClosed ? "השיחה סגורה" : paused ? `${agentName} ${pausedAdj}` : `בקש מ${agentName} לענות עכשיו`}
                     className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm bg-teal-700 text-white hover:bg-teal-600 disabled:opacity-40"
                   >
                     <Sparkles className="w-4 h-4" /> תגובת {agentName}
                   </button>
                   <button
                     onClick={togglePause}
-                    className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm transition ${
+                    disabled={isClosed}
+                    className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm transition disabled:opacity-40 ${
                       paused
                         ? "bg-amber-600 text-white hover:bg-amber-500"
                         : "bg-gray-700 text-gray-200 hover:bg-gray-600"
@@ -293,14 +328,37 @@ export const ConversationsScreen: React.FC<ConversationsScreenProps> = ({
                       </>
                     )}
                   </button>
+                  <button
+                    onClick={toggleClose}
+                    title={isClosed ? "פתח מחדש את השיחה" : "סגור את השיחה"}
+                    className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm transition ${
+                      isClosed
+                        ? "bg-green-700 text-white hover:bg-green-600"
+                        : "bg-gray-700 text-gray-200 hover:bg-red-700 hover:text-white"
+                    }`}
+                  >
+                    {isClosed ? (
+                      <>
+                        <RotateCcw className="w-4 h-4" /> פתח מחדש
+                      </>
+                    ) : (
+                      <>
+                        <X className="w-4 h-4" /> סגור שיחה
+                      </>
+                    )}
+                  </button>
                 </div>
               </div>
 
-              {paused && (
+              {isClosed ? (
+                <div className="bg-gray-800/70 text-gray-300 text-xs px-4 py-2 border-b border-gray-700">
+                  השיחה נסגרה ידנית — {agentName} לא תגיב כאן יותר. לחצ/י "פתח מחדש" כדי להמשיך את השיחה.
+                </div>
+              ) : paused ? (
                 <div className="bg-amber-900/40 text-amber-200 text-xs px-4 py-2 border-b border-amber-800">
                   {agentName} {pausedAdj} זמנית — ההודעות שתכתוב יישלחו בשמ{isF ? "ה" : "ו"}. הפעל/י כדי {resumeVerb} את השיחה אוטומטית.
                 </div>
-              )}
+              ) : null}
 
               <div className="flex-1 overflow-y-auto p-4 space-y-3">
                 {messages.map((m, i) => {
@@ -343,13 +401,13 @@ export const ConversationsScreen: React.FC<ConversationsScreenProps> = ({
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleSend()}
-                  placeholder={`כתוב הודעה בשם ${agentName}...`}
-                  disabled={sending}
-                  className="flex-1 bg-gray-800 text-white rounded-lg px-4 py-2 outline-none focus:ring-2 focus:ring-teal-600"
+                  placeholder={isClosed ? "השיחה סגורה — פתח מחדש כדי לכתוב" : `כתוב הודעה בשם ${agentName}...`}
+                  disabled={sending || isClosed}
+                  className="flex-1 bg-gray-800 text-white rounded-lg px-4 py-2 outline-none focus:ring-2 focus:ring-teal-600 disabled:opacity-50"
                 />
                 <button
                   onClick={handleSend}
-                  disabled={sending || !input.trim()}
+                  disabled={sending || !input.trim() || isClosed}
                   className="p-2 rounded-lg bg-teal-600 hover:bg-teal-700 text-white disabled:opacity-50"
                 >
                   <Send className="w-5 h-5" />

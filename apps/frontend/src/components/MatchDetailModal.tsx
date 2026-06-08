@@ -169,7 +169,7 @@ export function MatchDetailModal({ match, onClose }: Props) {
           {/* Free-text reasoning */}
           {match.matchReasoning && (
             <section>
-              <h3 className="text-sm font-semibold text-gray-300 mb-2">🧠 הסבר ה-AI</h3>
+              <h3 className="text-sm font-semibold text-gray-300 mb-2">🧠 סיכום התאמת המועמד</h3>
               <p className="bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm text-gray-200 whitespace-pre-wrap leading-relaxed">
                 {match.matchReasoning}
               </p>

@@ -241,7 +241,15 @@ export function RecruiterMatchesPanel({
           isOpen={showActionMenu === m.id}
           onToggle={() => setShowActionMenu(showActionMenu === m.id ? null : m.id)}
           onActivate={() => actionMutation.mutate({ matchId: m.id, action: "activate" })}
-          onReject={() => actionMutation.mutate({ matchId: m.id, action: "reject" })}
+          onReject={() => {
+            if (
+              window.confirm(
+                `האם אתה בטוח שברצונך למחוק את ההתאמה של ${m.candidateName}?\nפעולה זו אינה ניתנת לביטול.`
+              )
+            ) {
+              actionMutation.mutate({ matchId: m.id, action: "reject" });
+            }
+          }}
           onConversation={() => {
             setSelectedMatchId(m.id);
             setShowConversationModal(true);

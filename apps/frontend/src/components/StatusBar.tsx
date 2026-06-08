@@ -144,13 +144,18 @@ export const StatusBar: React.FC = () => {
       </div>
 
       <style>{`
+        /* RTL marquee: the pinned WhatsApp badge sits at the RIGHT edge and the
+         * tracks flow to its left. Animating toward +100% makes the leading
+         * track slide off behind the badge (right) while the second identical
+         * track fills in seamlessly from the left — no growing gap next to the
+         * badge. (Animating to -100% opens an ever-widening empty gap in RTL.) */
         @keyframes marquee {
           from { transform: translateX(0); }
-          to { transform: translateX(-100%); }
+          to { transform: translateX(100%); }
         }
 
         .animate-marquee {
-          animation: marquee 40s linear infinite;
+          animation: marquee 90s linear infinite;
           will-change: transform;
         }
 

@@ -600,13 +600,22 @@ async def handle_create_client(
             settings.PIPEDRIVE_API_DOMAIN or "https://api.pipedrive.com",
         )
 
+        # Create the person in Pipedrive with contact status = "לקוח פוטנציאלי"
+        # (option id 33). The hash + option id are the real PandaTech workspace
+        # values, kept canonical in workers.pipedrive_sync.
+        from pandapower.workers.pipedrive_sync import CONTACT_STATUS_FIELD
+
+        CONTACT_STATUS_POTENTIAL_CLIENT = 33  # לקוח פוטנציאלי
+
+        # Note: company_name / role are NOT person fields in Pipedrive — company
+        # belongs on the organization and role has no dedicated person field —
+        # so they are passed only to the admin notification below, not here.
         pd_person = await pipedrive_client.create_person(
             name=full_name,
             email=email,
             phone=phone,
             custom_fields={
-                "f9d9b8c7": company_name,  # Adjust field hash as needed
-                "a1b2c3d4": role,  # Adjust field hash as needed
+                CONTACT_STATUS_FIELD: CONTACT_STATUS_POTENTIAL_CLIENT,
             },
         )
 
@@ -623,7 +632,7 @@ async def handle_create_client(
             "full_name": full_name,
             "email": email,
             "phone": phone,
-            "contact_status": "new_prospect",  # Mark as new prospect
+            "contact_status": "potential_client",  # לקוח פוטנציאלי (canonical)
             "professional_domain": None,  # Will be updated later
             "pipedrive_last_synced_at": "now()",
         }).execute()

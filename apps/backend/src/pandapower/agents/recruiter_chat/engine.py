@@ -92,15 +92,23 @@ class RecruiterChatEngine:
         if self.recruiter == "elad":
             cue = (
                 "זוהי תחילת פנייה יזומה אל הלקוח לגבי המועמד והמשרה שבהקשר. "
-                "כתוב הודעת וואטסאפ ראשונה קצרה: הצג את עצמך כאלעד מפנדה-טק, ציין "
-                "שיש לך מועמד שעשוי להתאים למשרה הרלוונטית, ושאל אם מעניין אותו לשמוע פרטים. "
+                "כתוב הודעת וואטסאפ ראשונה קצרה: הצג את עצמך כאלעד מפנדה-טק, חברת הנדסה "
+                "בתחום הביטחון וההייטק, ציין שיש לך מועמד שעשוי להתאים למשרה הרלוונטית, "
+                "ושאל אם מעניין אותו לשמוע פרטים. "
+                "נסח בנימה עניינית ומדודה, בלי הגזמות בהבטחות. "
                 "כתוב אך ורק את ההודעה עצמה, בלי הסברים."
             )
         else:
             cue = (
                 "זוהי תחילת פנייה יזומה אל המועמד לגבי המשרה שבהקשר. "
-                "כתבי הודעת וואטסאפ ראשונה קצרה: הציגי את עצמך כטל מפנדה-טק, הזכירי את "
-                "המשרה הרלוונטית בקצרה, ושאלי אם זה מעניין אותו. "
+                "כתבי הודעת וואטסאפ ראשונה קצרה: הציגי את עצמך כטל מפנדה-טק, חברת הנדסה "
+                "בתחום הביטחון. הסבירי שקיבלת את קורות החיים שלו מתוך המאגר של החברה — "
+                "כלומר הוא שלח אלינו קורות חיים מתישהו בעבר, ולכן את פונה אליו — "
+                "ושנראה לך שהוא יכול להתאים למשרה הרלוונטית, הזכירי את המשרה בקצרה, "
+                "ושאלי אם זה נשמע רלוונטי. "
+                "אל תכתבי שראית 'פרופיל' שלו (אין פרופיל — רק קורות חיים מהמאגר), "
+                "ואל תגזימי בהבטחות ('מתאים מעולה' וכד') — נסחי בנימה עניינית ומדודה. "
+                "פני אל המועמד במין הדקדוקי הנכון לפי שמו. "
                 "כתבי אך ורק את ההודעה עצמה, בלי הסברים."
             )
 
@@ -249,7 +257,13 @@ class RecruiterChatEngine:
                 return meta.get(meta_key)
             return src.get(src_key)
 
-        name = field("contact_name", cand, "name")
+        # The candidate being presented. For Elad's bypass-Tal test flow the
+        # counterpart is the client, so the candidate is carried separately in
+        # candidate_name; fall back to contact_name (Tal's counterpart IS the
+        # candidate) and then the joined candidate row.
+        name = (meta.get("candidate_name") if is_test else None) or field(
+            "contact_name", cand, "name"
+        )
         cand_clear = field("candidate_clearance", cand, "clearance_level")
         title = field("job_title", job, "job_title")
         org = field("organization_name", job, "organization_name")

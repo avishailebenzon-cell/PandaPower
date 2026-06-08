@@ -35,6 +35,11 @@ class CreateTestMatchRequest(BaseModel):
     phone: str = Field(..., description="Test destination phone (candidate for Tal, client for Elad)")
     contact_name: str = Field(..., min_length=1, max_length=120)
     job_title: str = Field(..., min_length=1, max_length=200)
+    # For the Elad "bypass-Tal" flow: the real candidate being presented to the
+    # client. Tal's counterpart IS the candidate, so she leaves this empty and
+    # the candidate is taken from contact_name. Elad's counterpart is the client,
+    # so the candidate is a separate person carried here.
+    candidate_name: Optional[str] = Field(None, max_length=120)
     organization_name: Optional[str] = Field(None, max_length=200)
     job_location: Optional[str] = Field(None, max_length=200)
     job_security_clearance: Optional[str] = Field(None, max_length=80)
@@ -76,6 +81,7 @@ async def create_test_match(
     state = STATE_BY_RECRUITER[body.recruiter]
     test_meta = {
         "contact_name": body.contact_name,
+        "candidate_name": body.candidate_name,
         "job_title": body.job_title,
         "organization_name": body.organization_name,
         "job_location": body.job_location,
@@ -122,3 +128,83 @@ async def create_test_match(
         state=state,
         queue_path=queue_path,
     )
+
+
+# States that represent a match Carmit has already cleared. For the Elad test
+# flow we let the operator pick one of these and hand it straight to Elad,
+# bypassing Tal (we pretend Tal approved it too) — so they can test Elad's
+# client-facing conversation against a real candidate+job from the pool.
+APPROVED_SOURCE_STATES = ("carmit_approved", "tal_approved", "sent_to_tal", "tal_conversation")
+
+
+class ApprovedMatchItem(BaseModel):
+    match_id: str
+    candidate_name: str
+    candidate_clearance: Optional[str] = None
+    job_title: str
+    organization_name: Optional[str] = None
+    job_location: Optional[str] = None
+    job_security_clearance: Optional[str] = None
+    job_description: Optional[str] = None
+    job_qualifications: Optional[str] = None
+    match_score: int = 0  # 0-100
+    match_reasoning: Optional[str] = None
+    current_state: str
+
+
+@router.get("/approved-matches", response_model=list[ApprovedMatchItem])
+async def list_approved_matches(
+    limit: int = 50,
+    supabase=Depends(get_supabase_client),
+) -> list[ApprovedMatchItem]:
+    """Real matches Carmit already approved — the pool Elad can test against.
+
+    The operator picks one here, attaches a dummy client phone, and we seed a
+    test row for Elad from this match's real candidate + job details.
+    """
+    limit = max(1, min(limit, 100))
+    try:
+        res = await supabase.table("matches").select(
+            "id, current_state, match_score, match_reasoning, "
+            "candidates(name, clearance_level), "
+            "jobs(job_title, job_description, job_qualifications, "
+            "job_location, job_security_clearance, organization_name)"
+        ).in_("current_state", list(APPROVED_SOURCE_STATES)).eq(
+            "is_valid", True
+        ).order("created_at", desc=True).limit(limit).execute()
+    except Exception as e:
+        logger.error(f"Failed to list approved matches: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="שליפת ההתאמות שכרמית אישרה נכשלה")
+
+    items: list[ApprovedMatchItem] = []
+    for row in res.data or []:
+        # Skip test rows — only real Carmit-approved matches make sense to seed from.
+        cand = row.get("candidates") or {}
+        job = row.get("jobs") or {}
+        if not isinstance(cand, dict) or not isinstance(job, dict):
+            continue
+        name = cand.get("name")
+        title = job.get("job_title")
+        if not name or not title:
+            continue
+        try:
+            score = int(round(float(row.get("match_score") or 0) * 100))
+        except Exception:
+            score = 0
+        items.append(
+            ApprovedMatchItem(
+                match_id=str(row["id"]),
+                candidate_name=name,
+                candidate_clearance=cand.get("clearance_level"),
+                job_title=title,
+                organization_name=job.get("organization_name"),
+                job_location=job.get("job_location"),
+                job_security_clearance=job.get("job_security_clearance"),
+                job_description=job.get("job_description"),
+                job_qualifications=job.get("job_qualifications"),
+                match_score=score,
+                match_reasoning=row.get("match_reasoning"),
+                current_state=row.get("current_state", "unknown"),
+            )
+        )
+    return items

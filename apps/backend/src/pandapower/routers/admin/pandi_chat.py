@@ -74,6 +74,16 @@ class PauseResponse(BaseModel):
     auto_reply_paused: bool
 
 
+class CloseRequest(BaseModel):
+    # True = close the conversation (operator-initiated end). False = reopen it.
+    closed: bool = True
+
+
+class CloseResponse(BaseModel):
+    status: str
+    auto_reply_paused: bool
+
+
 def _client_name(client: dict) -> str:
     if not isinstance(client, dict):
         return "לקוח"
@@ -278,6 +288,45 @@ async def set_pandi_pause(
     except Exception as e:
         logger.error(f"Pandi set_pause failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to update pause state")
+
+
+@router.post("/conversations/{conversation_id}/close", response_model=CloseResponse)
+async def set_pandi_close(
+    conversation_id: UUID, request: CloseRequest,
+    supabase=Depends(get_supabase_client),
+):
+    """Operator-initiated close (or reopen) of a Pandi conversation.
+
+    Closing is always manual — the system never closes a thread on its own just
+    because a client is slow to reply. Closing also pauses Pandi's auto-reply so
+    she won't keep messaging a finished conversation; reopening reactivates it."""
+    try:
+        if request.closed:
+            update = {
+                "status": "closed",
+                "auto_reply_paused": True,
+                "last_activity_at": datetime.utcnow().isoformat(),
+            }
+        else:
+            update = {
+                "status": "open",
+                "auto_reply_paused": False,
+                "last_activity_at": datetime.utcnow().isoformat(),
+            }
+        res = await supabase.table("pandi_conversations").update(update).eq(
+            "id", str(conversation_id)
+        ).execute()
+        if not res.data:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return CloseResponse(
+            status=update["status"],
+            auto_reply_paused=update["auto_reply_paused"],
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Pandi set_close failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to update conversation status")
 
 
 @router.post("/conversations/{conversation_id}/generate", response_model=SendMessageResponse)

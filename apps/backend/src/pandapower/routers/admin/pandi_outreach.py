@@ -287,8 +287,21 @@ async def send_campaign(
     request: dict,
     supabase=Depends(get_supabase_client)
 ) -> dict:
-    """Send campaign: queue all pending messages"""
-    try:
+    """Send campaign: queue all pending messages.
+
+    DISABLED: Pandi is an inbound-only agent — she responds to clients who
+    reach out and never initiates outreach. Outbound campaigns belong to Elad.
+    This endpoint is intentionally blocked.
+    """
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            "פנדי היא סוכנת נכנסת (inbound) בלבד ואינה יוזמת פנייה ללקוחות. "
+            "קמפיינים יוצאים מתבצעים דרך אלעד (Elad)."
+        ),
+    )
+
+    try:  # pragma: no cover - unreachable, kept for easy re-enable
         confirm = request.get("confirm", False)
         if not confirm:
             raise HTTPException(status_code=400, detail="confirm must be true")

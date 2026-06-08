@@ -9,10 +9,15 @@
  * identically to a real one.
  */
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { FlaskConical, ArrowRight, CheckCircle2, Loader2 } from "lucide-react";
-import { createTestMatch, type CreateTestMatchResult } from "@/api/agentTest";
+import { FlaskConical, ArrowRight, CheckCircle2, Loader2, ListChecks, Pencil } from "lucide-react";
+import {
+  createTestMatch,
+  listApprovedMatches,
+  type CreateTestMatchResult,
+  type ApprovedMatchItem,
+} from "@/api/agentTest";
 
 export interface AgentTestPanelProps {
   recruiter: "tal" | "elad";
@@ -20,6 +25,8 @@ export interface AgentTestPanelProps {
   /** the simulated counterpart noun: "מועמד" (Tal) / "לקוח" (Elad) */
   counterpart: string;
   backTo: string;
+  /** Elad: allow seeding the test from a real Carmit-approved match. */
+  allowExistingMatch?: boolean;
 }
 
 export const AgentTestPanel: React.FC<AgentTestPanelProps> = ({
@@ -27,6 +34,7 @@ export const AgentTestPanel: React.FC<AgentTestPanelProps> = ({
   agentName,
   counterpart,
   backTo,
+  allowExistingMatch = false,
 }) => {
   const navigate = useNavigate();
   const [phone, setPhone] = useState("");
@@ -35,6 +43,7 @@ export const AgentTestPanel: React.FC<AgentTestPanelProps> = ({
   const [orgName, setOrgName] = useState("");
   const [location, setLocation] = useState("");
   const [clearance, setClearance] = useState("");
+  const [candidateClearance, setCandidateClearance] = useState("");
   const [description, setDescription] = useState("");
   const [qualifications, setQualifications] = useState("");
   const [reasoning, setReasoning] = useState("");
@@ -43,7 +52,43 @@ export const AgentTestPanel: React.FC<AgentTestPanelProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<CreateTestMatchResult | null>(null);
 
-  const canSubmit = phone.trim() && contactName.trim() && jobTitle.trim() && !submitting;
+  // "existing" = seed from a real Carmit-approved match (Elad bypass-Tal flow).
+  const [mode, setMode] = useState<"manual" | "existing">("manual");
+  const [approved, setApproved] = useState<ApprovedMatchItem[]>([]);
+  const [loadingApproved, setLoadingApproved] = useState(false);
+  const [selectedMatchId, setSelectedMatchId] = useState<string>("");
+  const [candidateName, setCandidateName] = useState("");
+
+  useEffect(() => {
+    if (mode !== "existing" || approved.length || loadingApproved) return;
+    setLoadingApproved(true);
+    listApprovedMatches(50)
+      .then(setApproved)
+      .catch((e) => setError(e?.message || "שליפת ההתאמות נכשלה"))
+      .finally(() => setLoadingApproved(false));
+  }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const applyApprovedMatch = (m: ApprovedMatchItem) => {
+    setSelectedMatchId(m.match_id);
+    setCandidateName(m.candidate_name);
+    setJobTitle(m.job_title);
+    setOrgName(m.organization_name || "");
+    setLocation(m.job_location || "");
+    setClearance(m.job_security_clearance || "");
+    setCandidateClearance(m.candidate_clearance || "");
+    setDescription(m.job_description || "");
+    setQualifications(m.job_qualifications || "");
+    setReasoning(m.match_reasoning || "");
+    setScore(m.match_score || 90);
+  };
+
+  const isExisting = mode === "existing";
+  const canSubmit =
+    phone.trim() &&
+    contactName.trim() &&
+    jobTitle.trim() &&
+    (!isExisting || selectedMatchId) &&
+    !submitting;
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -55,9 +100,11 @@ export const AgentTestPanel: React.FC<AgentTestPanelProps> = ({
         phone: phone.trim(),
         contact_name: contactName.trim(),
         job_title: jobTitle.trim(),
+        candidate_name: candidateName.trim() || undefined,
         organization_name: orgName.trim() || undefined,
         job_location: location.trim() || undefined,
         job_security_clearance: clearance.trim() || undefined,
+        candidate_clearance: candidateClearance.trim() || undefined,
         job_description: description.trim() || undefined,
         job_qualifications: qualifications.trim() || undefined,
         match_score: score,
@@ -156,6 +203,82 @@ export const AgentTestPanel: React.FC<AgentTestPanelProps> = ({
               {error}
             </div>
           )}
+
+          {allowExistingMatch && (
+            <div className="flex gap-2 rounded-lg bg-gray-800/60 p-1 w-fit">
+              <button
+                onClick={() => {
+                  setMode("existing");
+                  setError(null);
+                }}
+                className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm transition ${
+                  isExisting ? "bg-teal-600 text-white" : "text-gray-300 hover:bg-gray-700"
+                }`}
+              >
+                <ListChecks className="w-4 h-4" /> בחר התאמה שכרמית אישרה
+              </button>
+              <button
+                onClick={() => {
+                  setMode("manual");
+                  setSelectedMatchId("");
+                  setError(null);
+                }}
+                className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm transition ${
+                  !isExisting ? "bg-teal-600 text-white" : "text-gray-300 hover:bg-gray-700"
+                }`}
+              >
+                <Pencil className="w-4 h-4" /> הזנה ידנית
+              </button>
+            </div>
+          )}
+
+          {isExisting && (
+            <div className="space-y-3">
+              <label className="block">
+                <span className="text-sm text-gray-300">
+                  התאמה קיימת (מתוך התאמות שכרמית אישרה) <span className="text-red-400">*</span>
+                </span>
+                <select
+                  value={selectedMatchId}
+                  onChange={(e) => {
+                    const m = approved.find((x) => x.match_id === e.target.value);
+                    if (m) applyApprovedMatch(m);
+                    else setSelectedMatchId("");
+                  }}
+                  className="mt-1 w-full bg-gray-800 text-white rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-teal-600"
+                >
+                  <option value="">
+                    {loadingApproved
+                      ? "טוען התאמות…"
+                      : approved.length
+                      ? "— בחר התאמה —"
+                      : "אין התאמות מאושרות במאגר"}
+                  </option>
+                  {approved.map((m) => (
+                    <option key={m.match_id} value={m.match_id}>
+                      {m.candidate_name} ← {m.job_title}
+                      {m.organization_name ? ` (${m.organization_name})` : ""} · {m.match_score}%
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              {selectedMatchId && (
+                <div className="rounded-lg border border-gray-700 bg-gray-800/40 p-4 text-sm text-gray-200 space-y-1">
+                  <div>👤 מועמד: <b>{candidateName}</b>{candidateClearance ? ` · סיווג ${candidateClearance}` : ""}</div>
+                  <div>💼 משרה: <b>{jobTitle}</b>{orgName ? ` · ${orgName}` : ""}</div>
+                  {location && <div>📍 מיקום: {location}</div>}
+                  {clearance && <div>🔒 סיווג נדרש: {clearance}</div>}
+                  <div>📊 ציון התאמה: {score}%</div>
+                  {reasoning && <div className="text-gray-400 pt-1">📝 {reasoning}</div>}
+                  <p className="text-xs text-amber-300/80 pt-2">
+                    עוקפים את שלב טל ומניחים שההתאמה כבר אושרה — אלעד יציג את המועמד ללקוח הבדיקה.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {field(`טלפון ${counterpart} לבדיקה`, phone, setPhone, {
               required: true,
@@ -165,25 +288,27 @@ export const AgentTestPanel: React.FC<AgentTestPanelProps> = ({
               required: true,
               placeholder: counterpart === "לקוח" ? "איש קשר אצל הלקוח" : "שם המועמד",
             })}
-            {field("כותרת המשרה", jobTitle, setJobTitle, { required: true })}
-            {field("שם הארגון/לקוח", orgName, setOrgName)}
-            {field("מיקום", location, setLocation)}
-            {field("סיווג ביטחוני נדרש", clearance, setClearance)}
+            {!isExisting && field("כותרת המשרה", jobTitle, setJobTitle, { required: true })}
+            {!isExisting && field("שם הארגון/לקוח", orgName, setOrgName)}
+            {!isExisting && field("מיקום", location, setLocation)}
+            {!isExisting && field("סיווג ביטחוני נדרש", clearance, setClearance)}
           </div>
-          {field("תיאור המשרה", description, setDescription, { textarea: true })}
-          {field("דרישות התפקיד", qualifications, setQualifications, { textarea: true })}
-          {field("נימוק ההתאמה (אופציונלי)", reasoning, setReasoning, { textarea: true })}
-          <label className="block">
-            <span className="text-sm text-gray-300">ציון התאמה: {score}%</span>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              value={score}
-              onChange={(e) => setScore(Number(e.target.value))}
-              className="mt-1 w-full"
-            />
-          </label>
+          {!isExisting && field("תיאור המשרה", description, setDescription, { textarea: true })}
+          {!isExisting && field("דרישות התפקיד", qualifications, setQualifications, { textarea: true })}
+          {!isExisting && field("נימוק ההתאמה (אופציונלי)", reasoning, setReasoning, { textarea: true })}
+          {!isExisting && (
+            <label className="block">
+              <span className="text-sm text-gray-300">ציון התאמה: {score}%</span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={score}
+                onChange={(e) => setScore(Number(e.target.value))}
+                className="mt-1 w-full"
+              />
+            </label>
+          )}
 
           <button
             onClick={handleSubmit}
