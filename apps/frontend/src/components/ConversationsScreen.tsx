@@ -21,6 +21,16 @@ import type {
 } from "@/api/conversationsApi";
 import { deliveryReasonText } from "@/api/conversationsApi";
 
+// A conversation is "live" when its last message is recent (mirrors the bottom
+// status-bar logic), so the green dot reflects real activity rather than just a
+// never-closed 'active' status.
+const LIVE_WINDOW_MS = 15 * 60 * 1000;
+const isLive = (lastMessageAt?: string | null): boolean => {
+  if (!lastMessageAt) return false;
+  const ts = Date.parse(lastMessageAt);
+  return !Number.isNaN(ts) && Date.now() - ts <= LIVE_WINDOW_MS;
+};
+
 export interface ConversationsScreenProps {
   api: ConversationsApi;
   /** e.g. "👩‍💼 שיחות של טל" */
@@ -200,7 +210,7 @@ export const ConversationsScreen: React.FC<ConversationsScreenProps> = ({
                   <span className="truncate">{c.candidate_name}</span>
                   {c.auto_reply_paused ? (
                     <Pause className="w-3 h-3 text-amber-400 shrink-0" />
-                  ) : (c.status === "active" || c.status === "open") ? (
+                  ) : isLive(c.last_message_at) ? (
                     <span className="relative flex h-2 w-2 shrink-0" title="שיחה פעילה">
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
                       <span className="relative inline-flex h-2 w-2 rounded-full bg-green-400" />

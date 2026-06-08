@@ -1,7 +1,14 @@
 /**
  * Polls the three WhatsApp agents' conversation lists and reports how many
- * conversations are currently *active* (open and not paused) — used to show a
- * blinking "live conversations" indicator in the bottom status bar.
+ * conversations are *live right now* — used for the blinking "live
+ * conversations" indicator in the bottom status bar.
+ *
+ * "Live" means there was a real message exchanged recently (within
+ * ACTIVE_WINDOW_MS) and the agent isn't paused. We deliberately do NOT count by
+ * the conversation's status field: conversations are never marked "closed", so
+ * a status-based count would only ever grow and never reflect reality (e.g. a
+ * conversation that ended, or whose match was deleted, would linger forever).
+ * Recency-based counting self-corrects — quiet conversations simply drop off.
  */
 
 import { useEffect, useState } from "react";
@@ -19,8 +26,16 @@ export interface ActiveConversationsState {
   pandi: number;
 }
 
-const isActive = (c: ConversationSummary): boolean =>
-  !c.auto_reply_paused && (c.status === "active" || c.status === "open");
+// A conversation counts as "live" if its last message is this recent.
+const ACTIVE_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+
+const isActive = (c: ConversationSummary): boolean => {
+  if (c.auto_reply_paused) return false;
+  if (!c.last_message_at) return false;
+  const ts = Date.parse(c.last_message_at);
+  if (Number.isNaN(ts)) return false;
+  return Date.now() - ts <= ACTIVE_WINDOW_MS;
+};
 
 const EMPTY: ActiveConversationsState = { total: 0, tal: 0, elad: 0, pandi: 0 };
 
