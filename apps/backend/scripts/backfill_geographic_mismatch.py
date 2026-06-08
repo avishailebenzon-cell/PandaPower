@@ -33,6 +33,25 @@ from pandapower.integrations.claude_api import AnthropicClient
 
 DRY_RUN = "--dry-run" in sys.argv
 VALID_ONLY = "--valid-only" in sys.argv
+# --visible-only: restrict to matches in states that actually appear in the
+# Carmit/Tal/Elad/agent tables. Skips evaluated_but_rejected (<70 score) which
+# is never shown, so the red badge is only computed where it can be seen.
+VISIBLE_ONLY = "--visible-only" in sys.argv
+
+VISIBLE_STATES = [
+    "found",
+    "carmit_approved",
+    "carmit_rejected",
+    "sent_to_tal",
+    "tal_conversation",
+    "tal_approved",
+    "tal_rejected",
+    "sent_to_elad",
+    "elad_conversation",
+    "elad_approved",
+    "hired",
+    "placement_failed",
+]
 
 GEO_SYSTEM = (
     "You are a recruitment geography assistant for the Israeli job market. "
@@ -81,11 +100,13 @@ async def main():
     offset = 0
     while True:
         q = sb.table("matches").select(
-            "id, is_valid, geographic_mismatch, "
+            "id, is_valid, current_state, geographic_mismatch, "
             "candidates(location), jobs(job_location)"
         )
         if VALID_ONLY:
             q = q.eq("is_valid", True)
+        if VISIBLE_ONLY:
+            q = q.in_("current_state", VISIBLE_STATES)
         r = await q.range(offset, offset + 999).execute()
         batch = r.data or []
         rows.extend(batch)

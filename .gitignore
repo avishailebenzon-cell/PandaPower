@@ -16,3 +16,6 @@ dist
 *.pyc
 .coverage
 htmlcov
+
+# Runtime artifact from scheduled-tasks skill
+.claude/scheduled_tasks.lock

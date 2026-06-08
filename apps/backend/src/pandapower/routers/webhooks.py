@@ -100,11 +100,33 @@ def _normalise_green_api_payload(payload: dict) -> dict:
     message_data = payload.get("messageData") or {}
 
     text: Optional[str] = None
+    selected_button_id: Optional[str] = None
     msg_type = message_data.get("typeMessage") or "text"
     if msg_type == "textMessage":
         text = (message_data.get("textMessageData") or {}).get("textMessage")
     elif msg_type == "extendedTextMessage":
         text = (message_data.get("extendedTextMessageData") or {}).get("text")
+    elif msg_type in ("buttonsResponseMessage", "templateButtonReplyMessage", "listResponseMessage"):
+        # Interactive reply (e.g. Elad's CV yes/no buttons). Green API exposes the
+        # tapped button under one of these blocks; surface both the visible text
+        # (so it's logged like any reply) and the stable button id.
+        block = (
+            message_data.get("buttonsResponseMessage")
+            or message_data.get("templateButtonReplyMessage")
+            or message_data.get("listResponseMessage")
+            or {}
+        )
+        selected_button_id = (
+            block.get("selectedButtonId")
+            or block.get("buttonId")
+            or block.get("selectedRowId")
+        )
+        text = (
+            block.get("selectedButtonText")
+            or block.get("buttonText")
+            or block.get("title")
+            or selected_button_id
+        )
 
     # File attachments (CVs sent by candidates to Pandius). Green API puts these
     # under fileMessageData for documentMessage / imageMessage events.
@@ -125,6 +147,7 @@ def _normalise_green_api_payload(payload: dict) -> dict:
         "from_phone": phone_utils.chat_id_to_phone(sender_data.get("chatId")) or None,
         "sender_name": sender_data.get("senderName"),
         "text": text,
+        "selected_button_id": selected_button_id,
         "message_type": msg_type,
         "download_url": download_url,
         "filename": filename,
