@@ -82,6 +82,16 @@ class PauseResponse(BaseModel):
     auto_reply_paused: bool
 
 
+class CloseRequest(BaseModel):
+    # True = close the conversation (operator-initiated end). False = reopen it.
+    closed: bool = True
+
+
+class CloseResponse(BaseModel):
+    status: str
+    auto_reply_paused: bool
+
+
 async def _test_meta_for_match(supabase, match_id) -> dict:
     """Self-contained test display fields for a match, or {} (schema-defensive)."""
     if not match_id:
@@ -240,6 +250,47 @@ def make_recruiter_chat_router(recruiter: str) -> APIRouter:
         except Exception as e:
             logger.error(f"{recruiter} set_pause failed: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="Failed to update pause state")
+
+    @router.post("/conversations/{conversation_id}/close", response_model=CloseResponse)
+    async def set_close(
+        conversation_id: UUID, request: CloseRequest,
+        supabase=Depends(get_supabase_client),
+    ):
+        """Operator-initiated close (or reopen) of a conversation.
+
+        Closing is a deliberate, manual end — the system NEVER closes a thread on
+        its own just because a candidate is slow to reply. Closing also pauses the
+        AI auto-reply so the agent won't keep messaging a finished conversation;
+        reopening clears the pause and reactivates the thread."""
+        try:
+            if request.closed:
+                update = {
+                    "status": "closed",
+                    "ended_at": datetime.utcnow().isoformat(),
+                    "auto_reply_paused": True,
+                    "updated_at": datetime.utcnow().isoformat(),
+                }
+            else:
+                update = {
+                    "status": "active",
+                    "ended_at": None,
+                    "auto_reply_paused": False,
+                    "updated_at": datetime.utcnow().isoformat(),
+                }
+            res = await supabase.table("recruiter_conversations").update(update).eq(
+                "id", str(conversation_id)
+            ).eq("recruiter", recruiter).execute()
+            if not res.data:
+                raise HTTPException(status_code=404, detail="Conversation not found")
+            return CloseResponse(
+                status=update["status"],
+                auto_reply_paused=update["auto_reply_paused"],
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"{recruiter} set_close failed: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Failed to update conversation status")
 
     @router.post("/conversations/{conversation_id}/generate", response_model=SendMessageResponse)
     async def generate_reply(conversation_id: UUID, supabase=Depends(get_supabase_client)):
