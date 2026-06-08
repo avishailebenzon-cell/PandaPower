@@ -55,6 +55,7 @@ class MatchInfo(BaseModel):
     candidate_name: str
     job_title: str
     company: str
+    pipedrive_deal_id: Optional[int] = None  # 4-digit Pipedrive job number
     match_score: float  # 0-1
     status: str  # e.g., "sent_to_tal", "tal_conversation", etc.
     state: str  # e.g., "sent_to_tal", "tal_approved", etc.
@@ -63,6 +64,8 @@ class MatchInfo(BaseModel):
     candidate_id: str
     job_id: str
     days_in_stage: int
+    geographic_mismatch: bool = False
+    geographic_mismatch_reason: Optional[str] = None
 
 
 class MatchDetailInfo(BaseModel):
@@ -84,6 +87,10 @@ class MatchDetailInfo(BaseModel):
     candidate_clearance: Optional[str] = None
     required_clearance: Optional[str] = None
     clearance_match: str = "unknown"
+    # Geographic fit — flagged separately from the score (the candidate may
+    # relocate). Surfaced as a bold red badge in every match table.
+    geographic_mismatch: bool = False
+    geographic_mismatch_reason: Optional[str] = None
     # What Carmit (the quality gate) concluded about this match — her decision,
     # reasoning, and per-gate breakdown. Surfaced so Tal has the full picture
     # before reaching out to the candidate.
@@ -98,12 +105,15 @@ class CandidateMatchInfo(BaseModel):
     job_id: str
     job_title: str
     organization_name: Optional[str] = None
+    pipedrive_deal_id: Optional[int] = None  # 4-digit Pipedrive job number
     match_score: float  # 0-1
     current_state: str
     matched_by_agent_code: str
     match_reasoning: Optional[str] = None
     created_at: str
     evaluated_score_raw: Optional[int] = None
+    geographic_mismatch: bool = False
+    geographic_mismatch_reason: Optional[str] = None
 
 
 class AllCandidateMatchesResponse(BaseModel):
@@ -273,7 +283,8 @@ async def get_recruiter_matches(
         # note we filter by is_valid so Phase-4 invalidations don't show up.
         query = supabase.table("matches").select(
             "id, candidate_id, job_id, current_state, match_score, created_at, updated_at, "
-            "candidates(name), jobs(job_title)"
+            "geographic_mismatch, geographic_mismatch_reason, "
+            "candidates(name), jobs(job_title, organization_name, pipedrive_deal_id)"
         ).in_("current_state", states).eq("is_valid", True).order("created_at", desc=True)
 
         # Get total count (separate query, awaited)
@@ -328,7 +339,12 @@ async def get_recruiter_matches(
                     candidate_name=cand_name,
                     # DB column is job_title, NOT title (matches the rest of the codebase).
                     job_title=job_title,
-                    company=test_meta.get("organization_name", "") or "",
+                    # Prefer the real job's organization; fall back to a test
+                    # match's self-contained org name.
+                    company=(job.get("organization_name") if isinstance(job, dict) else None)
+                    or test_meta.get("organization_name", "")
+                    or "",
+                    pipedrive_deal_id=(job.get("pipedrive_deal_id") if isinstance(job, dict) else None),
                     match_score=row.get("match_score", 0.0),
                     status=row.get("current_state", "unknown"),
                     state=row.get("current_state", "unknown"),
@@ -337,6 +353,8 @@ async def get_recruiter_matches(
                     candidate_id=row.get("candidate_id") or "",
                     job_id=row.get("job_id") or "",
                     days_in_stage=days_in_stage,
+                    geographic_mismatch=bool(row.get("geographic_mismatch")),
+                    geographic_mismatch_reason=row.get("geographic_mismatch_reason"),
                 )
                 matches.append(match_info)
 
@@ -616,6 +634,7 @@ async def get_match_detail(
         result = await supabase.table("matches").select(
             "id, candidate_id, job_id, current_state, match_score, match_reasoning, "
             "carmit_review_notes, carmit_blocked_reason, "
+            "geographic_mismatch, geographic_mismatch_reason, "
             "candidates(id,name,email,phone,clearance_level), "
             "jobs(id,job_title,job_security_clearance)"
         ).eq("id", match_id).execute()
@@ -723,6 +742,8 @@ async def get_match_detail(
             candidate_clearance=candidate_clearance,
             required_clearance=required_clearance,
             clearance_match=clearance_match,
+            geographic_mismatch=bool(row.get("geographic_mismatch")),
+            geographic_mismatch_reason=row.get("geographic_mismatch_reason"),
             carmit_review=carmit_review,
         )
 
@@ -832,7 +853,8 @@ async def get_all_candidate_matches(
         query = supabase.table("matches").select(
             "id, candidate_id, job_id, current_state, match_score, "
             "matched_by_agent_code, match_reasoning, created_at, evaluated_score_raw, "
-            "candidates(name), jobs(job_title, organization_name)"
+            "geographic_mismatch, geographic_mismatch_reason, "
+            "candidates(name), jobs(job_title, organization_name, pipedrive_deal_id)"
         ).eq("is_valid", True)
 
         # Optional job filter
@@ -873,12 +895,15 @@ async def get_all_candidate_matches(
                     job_id=row["job_id"],
                     job_title=job.get("job_title", "Unknown") if isinstance(job, dict) else "Unknown",
                     organization_name=job.get("organization_name") if isinstance(job, dict) else None,
+                    pipedrive_deal_id=job.get("pipedrive_deal_id") if isinstance(job, dict) else None,
                     match_score=row.get("match_score", 0.0),
                     current_state=row.get("current_state", "unknown"),
                     matched_by_agent_code=row.get("matched_by_agent_code", "unknown"),
                     match_reasoning=row.get("match_reasoning"),
                     created_at=row["created_at"],
-                    evaluated_score_raw=row.get("evaluated_score_raw")
+                    evaluated_score_raw=row.get("evaluated_score_raw"),
+                    geographic_mismatch=bool(row.get("geographic_mismatch")),
+                    geographic_mismatch_reason=row.get("geographic_mismatch_reason"),
                 ))
 
         # Get list of all jobs for filter dropdown

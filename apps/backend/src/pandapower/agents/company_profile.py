@@ -40,3 +40,42 @@ FACILITY_FACTS = """--- מענה על ארגונים/מפעלים ספציפיי
 - "פרויקט בדרום" — נוכל לענות על כך בפגישה פרונטלית; מדובר בעבודה באזור יבנה.
 לכל ארגון אחר שאינו ברשימה — אפשר לציין שניתן יהיה לפרט בפגישה פרונטלית, ושהמועמד
 מוזמן גם לבדוק באינטרנט לגבי הארגון הספציפי. בכל מקרה — חשוב להדגיש שהעבודה היא בפנדה-טק."""
+
+
+# Operators can append extra, live-editable company knowledge through the admin
+# UI (System Settings → "פרופיל החברה"). It is stored in system_settings under
+# this key as a plain-text string and appended to the shared block at runtime,
+# so updates take effect without a redeploy. The hardcoded blocks above are the
+# read-only baseline; this is the editable layer on top.
+COMPANY_PROFILE_EXTRA_KEY = "company_profile.extra"
+
+
+def render_company_block(extra: str = "") -> str:
+    """Return the full shared company block: baseline profile + facility facts,
+    plus any operator-added content. Pass the value loaded from settings as
+    ``extra`` (empty string when there is none)."""
+    block = f"{COMPANY_PROFILE}\n\n{FACILITY_FACTS}"
+    extra = (extra or "").strip()
+    if extra:
+        block += "\n\n--- מידע נוסף על החברה (נוסף ע\"י הצוות) ---\n" + extra
+    return block
+
+
+async def load_company_extra(supabase) -> str:
+    """Load the operator-added company content from system_settings.
+
+    Never raises — returns "" if the key is missing or on any error, so the
+    agents keep working with the baseline block."""
+    try:
+        res = await supabase.table("system_settings").select(
+            "setting_value"
+        ).eq("setting_key", COMPANY_PROFILE_EXTRA_KEY).limit(1).execute()
+        if res.data:
+            val = res.data[0].get("setting_value")
+            # Tolerate both the plain-text convention and a {"value": ...} blob.
+            if isinstance(val, dict):
+                return str(val.get("value") or "")
+            return str(val or "")
+    except Exception:
+        pass
+    return ""

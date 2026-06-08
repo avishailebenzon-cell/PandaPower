@@ -704,6 +704,8 @@ async def get_carmit_decisions(
 
             candidate_name = "Unknown"
             job_title = "Unknown"
+            company_name = None
+            pipedrive_deal_id = None
             gate_results = {}
             reasoning = ""
 
@@ -722,10 +724,12 @@ async def get_carmit_decisions(
             try:
                 if job_id:
                     job_response = await supabase.table("jobs").select(
-                        "job_title"
+                        "job_title, organization_name, pipedrive_deal_id"
                     ).eq("id", job_id).execute()
                     if job_response.data:
                         job_title = job_response.data[0].get("job_title", "Unknown")
+                        company_name = job_response.data[0].get("organization_name")
+                        pipedrive_deal_id = job_response.data[0].get("pipedrive_deal_id")
             except Exception as e:
                 logger.warning(f"Failed to fetch job {job_id}: {str(e)}")
 
@@ -782,6 +786,8 @@ async def get_carmit_decisions(
                 "candidate_name": candidate_name,
                 "job_id": job_id,
                 "job_title": job_title,
+                "company_name": company_name,
+                "pipedrive_deal_id": pipedrive_deal_id,
                 "decision": "approved" if "approved" in decision_made else "rejected",
                 "match_score": match_score,
                 "gate_results": {k: v.dict() for k, v in gate_results.items()},
@@ -972,7 +978,8 @@ async def get_agent_matches(
                 "candidates(id,name,email,phone,location,clearance_level,"
                 "years_of_experience,key_skills,top_education,experiences,"
                 "detected_language,recommendation_score), "
-                "jobs(id,job_title,job_security_clearance,job_description)"
+                "jobs(id,job_title,job_security_clearance,job_description,"
+                "organization_name,pipedrive_deal_id)"
             )
             .eq("is_valid", True)
             .gte("match_score", min_score)
@@ -1091,6 +1098,10 @@ async def get_agent_matches(
                 "candidate_recommendation_score": cand.get("recommendation_score"),
                 "job_id": str(row.get("job_id") or ""),
                 "job_title": job.get("job_title") or "ללא תפקיד",
+                # Client/organization name + Pipedrive deal number (4-digit) so
+                # every Carmit table can always show full job title + client + job #.
+                "company_name": job.get("organization_name"),
+                "pipedrive_deal_id": job.get("pipedrive_deal_id"),
                 "job_description": job.get("job_description"),
                 "required_clearance": req_clearance,
                 "clearance_match": _compute_clearance_match(cand_clearance, req_clearance),

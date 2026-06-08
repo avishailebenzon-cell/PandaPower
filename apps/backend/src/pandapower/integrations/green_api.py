@@ -110,6 +110,39 @@ class GreenAPIClient:
             logger.error(f"Green API request failed: {e}")
             return {"success": False, "error": str(e)}
 
+    async def send_buttons(
+        self, chat_id: str, body: str, buttons: list[dict], footer: str = ""
+    ) -> dict:
+        """Send an interactive button message via WhatsApp (Green API sendButtons).
+
+        ``buttons`` is a list of {"buttonId": str, "buttonText": str}. Not every
+        WhatsApp/Green-API account supports interactive buttons; callers must
+        treat a falsy ``success`` as "buttons unavailable" and fall back to a
+        plain numbered-text prompt so the flow never stalls.
+        """
+        normalized = normalize_chat_id(chat_id)
+        if not normalized:
+            logger.error(f"Green API send_buttons aborted: invalid recipient '{chat_id}'")
+            return {"success": False, "error": f"invalid phone/chatId: {chat_id}"}
+        chat_id = normalized
+
+        session = await self._get_session()
+        url = f"{self.base_url}/sendButtons/{self.token}"
+        payload = {"chatId": chat_id, "message": body, "buttons": buttons}
+        if footer:
+            payload["footer"] = footer
+
+        try:
+            async with session.post(url, json=payload) as response:
+                data = await response.json()
+                if response.status == 200 and data.get("idMessage"):
+                    return {"success": True, "messageId": data.get("idMessage")}
+                logger.warning(f"Green API send_buttons failed ({response.status}): {data}")
+                return {"success": False, "error": data.get("message", "buttons_unavailable")}
+        except Exception as e:
+            logger.error(f"Green API send_buttons request failed: {e}")
+            return {"success": False, "error": str(e)}
+
     async def send_file(self, chat_id: str, url_file: str, filename: str = "") -> dict:
         """Send a file via WhatsApp.
 
@@ -187,7 +220,7 @@ class GreenAPIClient:
 
 
 async def get_green_api_client(
-    agent_code: Literal["tal", "elad", "pandi"]
+    agent_code: Literal["tal", "elad", "pandi", "pandius"]
 ) -> Optional[GreenAPIClient]:
     """Factory function to get Green API client for specific agent.
 

@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
 
-SUPPORTED_AGENTS = {"tal", "elad", "pandi"}
+SUPPORTED_AGENTS = {"tal", "elad", "pandi", "pandius"}
 
 
 async def _get_webhook_secret(supabase, agent_code: str) -> str:
@@ -100,11 +100,45 @@ def _normalise_green_api_payload(payload: dict) -> dict:
     message_data = payload.get("messageData") or {}
 
     text: Optional[str] = None
+    selected_button_id: Optional[str] = None
     msg_type = message_data.get("typeMessage") or "text"
     if msg_type == "textMessage":
         text = (message_data.get("textMessageData") or {}).get("textMessage")
     elif msg_type == "extendedTextMessage":
         text = (message_data.get("extendedTextMessageData") or {}).get("text")
+    elif msg_type in ("buttonsResponseMessage", "templateButtonReplyMessage", "listResponseMessage"):
+        # Interactive reply (e.g. Elad's CV yes/no buttons). Green API exposes the
+        # tapped button under one of these blocks; surface both the visible text
+        # (so it's logged like any reply) and the stable button id.
+        block = (
+            message_data.get("buttonsResponseMessage")
+            or message_data.get("templateButtonReplyMessage")
+            or message_data.get("listResponseMessage")
+            or {}
+        )
+        selected_button_id = (
+            block.get("selectedButtonId")
+            or block.get("buttonId")
+            or block.get("selectedRowId")
+        )
+        text = (
+            block.get("selectedButtonText")
+            or block.get("buttonText")
+            or block.get("title")
+            or selected_button_id
+        )
+
+    # File attachments (CVs sent by candidates to Pandius). Green API puts these
+    # under fileMessageData for documentMessage / imageMessage events.
+    download_url: Optional[str] = None
+    filename: Optional[str] = None
+    mime_type: Optional[str] = None
+    if msg_type in ("documentMessage", "imageMessage"):
+        file_data = message_data.get("fileMessageData") or {}
+        download_url = file_data.get("downloadUrl")
+        filename = file_data.get("fileName")
+        mime_type = file_data.get("mimeType")
+        text = text or file_data.get("caption")
 
     return {
         "event_type": event_type,
@@ -113,7 +147,11 @@ def _normalise_green_api_payload(payload: dict) -> dict:
         "from_phone": phone_utils.chat_id_to_phone(sender_data.get("chatId")) or None,
         "sender_name": sender_data.get("senderName"),
         "text": text,
+        "selected_button_id": selected_button_id,
         "message_type": msg_type,
+        "download_url": download_url,
+        "filename": filename,
+        "mime_type": mime_type,
         "timestamp": payload.get("timestamp"),
     }
 
@@ -248,6 +286,24 @@ async def _handle_recruiter_inbound(recruiter: str, parsed: dict) -> None:
 
         engine = RecruiterChatEngine(recruiter)
         await engine.record_inbound(UUID(conv_id), parsed["text"])
+
+        # Elad: if we're awaiting the client's CV decision, this inbound may be
+        # the explicit yes/no (button tap or text). Handle it directly — and skip
+        # the normal auto-reply so we don't talk over the deterministic flow.
+        if recruiter == "elad":
+            try:
+                from pandapower.agents.recruiter_chat import elad_flow
+                conv = await engine._load_conversation(UUID(conv_id), supabase)
+                if conv and not conv.get("auto_reply_paused"):
+                    consumed = await elad_flow.handle_cv_decision_if_awaiting(
+                        engine, UUID(conv_id), conv,
+                        parsed.get("text"), parsed.get("selected_button_id"),
+                    )
+                    if consumed:
+                        return
+            except Exception as e:
+                logger.warning(f"elad: CV-decision handling failed: {e}")
+
         # Debounced auto-reply: if the candidate fires several messages in quick
         # succession, only the last triggers a single consolidated reply (the
         # engine itself also skips if the conversation is paused).
@@ -309,13 +365,23 @@ async def receive_whatsapp_webhook(
         except Exception as e:
             logger.error(f"Failed to spawn {agent_code} inbound handler: {e}", exc_info=True)
 
-    # Enqueue Celery task to process the message (Session 34)
+    # Pandi: process the inbound message in-process (same pattern as Tal/Elad).
+    #
+    # IMPORTANT: this used to enqueue a Celery task (process_pandi_incoming_message
+    # .delay(...)). But the separate Celery worker was RETIRED in Session 36 — in
+    # production nothing consumes the Redis queue, so enqueued Pandi messages sat
+    # there forever and Pandi never replied. (It "worked" locally only because dev
+    # runs Celery in task_always_eager mode.) We now run the async handler directly
+    # in a background task so we still return 200 immediately and Green API never
+    # retries, exactly like the Tal/Elad path above.
     if agent_code == "pandi" and parsed.get("event_type") == "incomingMessageReceived" and parsed.get("text"):
         try:
-            from pandapower.workers.pandi.message_handler import process_pandi_incoming_message
+            from pandapower.workers.pandi.message_handler import (
+                _process_pandi_incoming_message_async,
+            )
 
-            # Convert parsed fields back to Green API format for message_handler
-            celery_payload = {
+            # Convert parsed fields back to Green API format for the handler.
+            pandi_payload = {
                 "messages": [{
                     "id": parsed.get("green_api_message_id"),
                     "from": parsed.get("from_chat_id"),
@@ -324,11 +390,42 @@ async def receive_whatsapp_webhook(
                 }]
             }
 
-            # Enqueue async task
-            task = process_pandi_incoming_message.delay(celery_payload)
-            logger.info(f"Enqueued Celery task {task.id} for Pandi message processing")
+            asyncio.create_task(_process_pandi_incoming_message_async(pandi_payload))
+            logger.info("Spawned in-process Pandi message handler")
         except Exception as e:
-            logger.error(f"Failed to enqueue Pandi message task: {e}", exc_info=True)
+            logger.error(f"Failed to spawn Pandi message handler: {e}", exc_info=True)
+
+    # Pandius (candidate-facing, inbound-only): handle text AND CV file uploads.
+    # Run in-process for the same reason as Pandi (Celery worker retired). The
+    # file branch carries the Green API downloadUrl so the handler can ingest the
+    # CV into the normal scan pipeline.
+    if agent_code == "pandius" and parsed.get("event_type") == "incomingMessageReceived":
+        is_file = (
+            parsed.get("message_type") in ("documentMessage", "imageMessage")
+            and parsed.get("download_url")
+        )
+        if parsed.get("text") or is_file:
+            try:
+                from pandapower.workers.pandius.message_handler import (
+                    _process_pandius_incoming_message_async,
+                )
+
+                pandius_payload = {
+                    "messages": [{
+                        "id": parsed.get("green_api_message_id"),
+                        "from": parsed.get("from_chat_id"),
+                        "text": parsed.get("text") or "",
+                        "message_type": "document" if is_file else "text",
+                        "download_url": parsed.get("download_url"),
+                        "filename": parsed.get("filename"),
+                        "mime_type": parsed.get("mime_type"),
+                        "timestamp": parsed.get("timestamp", int(datetime.now().timestamp())),
+                    }]
+                }
+                asyncio.create_task(_process_pandius_incoming_message_async(pandius_payload))
+                logger.info("Spawned in-process Pandius message handler")
+            except Exception as e:
+                logger.error(f"Failed to spawn Pandius message handler: {e}", exc_info=True)
 
     return {"status": "ok", "agent": agent_code, "event": parsed.get("event_type")}
 

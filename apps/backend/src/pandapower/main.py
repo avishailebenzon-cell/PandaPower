@@ -7,7 +7,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from pandapower.core import configure_logging, settings
 from pandapower.core.supabase import close_supabase, init_supabase
 from pandapower.routers import health_router, webhooks
-from pandapower.routers.admin import email_ingest, setup, cv_parse, cv_upload, candidate_management, candidate_recommendations, match_flow, skill_management, security_classification, agent_matching, carmit, pipedrive, pipedrive_config, pipedrive_data, pipedrive_sync, analytics, pandi, pandi_referrals, recruitment_departments, recruiter, alerts as admin_alerts, health as admin_health, whatsapp_agents, system_settings, elad_outreach, pandi_outreach, telegram_config, convertapi_config, usage as admin_usage, dana, recruiter_chat, pandi_chat, agent_test
+from pandapower.routers.admin import email_ingest, setup, cv_parse, cv_upload, candidate_management, candidate_recommendations, match_flow, skill_management, security_classification, agent_matching, carmit, pipedrive, pipedrive_config, pipedrive_data, pipedrive_sync, analytics, pandi, pandi_referrals, recruitment_departments, recruiter, alerts as admin_alerts, health as admin_health, whatsapp_agents, system_settings, elad_outreach, pandi_outreach, telegram_config, convertapi_config, usage as admin_usage, dana, recruiter_chat, pandi_chat, pandius, pandius_chat, agent_test, company_profile_config
 # Note: agent_matching temporarily excluded due to missing celery tasks
 # Note: match_history temporarily excluded due to import issues
 from pandapower.routers import user
@@ -86,6 +86,7 @@ app.include_router(admin_health.router)
 app.include_router(admin_alerts.router)
 app.include_router(whatsapp_agents.router)
 app.include_router(system_settings.router)
+app.include_router(company_profile_config.router)
 app.include_router(elad_outreach.router)
 app.include_router(pandi_outreach.router)
 app.include_router(telegram_config.router)
@@ -95,6 +96,8 @@ app.include_router(dana.router)
 app.include_router(recruiter_chat.tal_router)
 app.include_router(recruiter_chat.elad_router)
 app.include_router(pandi_chat.router)
+app.include_router(pandius.router)
+app.include_router(pandius_chat.router)
 app.include_router(agent_test.router)
 # app.include_router(match_history.router)  # Temporarily excluded
 

@@ -113,7 +113,7 @@ class ConversationEngine:
 
                 notifier = NotificationService()
                 await notifier.notify_inappropriate_content(
-                    client_name=conversation.get("pandi_client", {}).get("phone", "לקוח לא ידוע"),
+                    client_name=str(pandi_client_id),
                     content_preview=incoming_text[:100],
                 )
             except Exception as e:
@@ -152,10 +152,20 @@ class ConversationEngine:
 
         # 6. Call LLM with tools
         tools_list = get_pandi_tools()
+        # Map our storage directions to Anthropic chat roles. inbound (from the
+        # client) → "user"; outbound (Pandi) → "assistant". Using the raw
+        # "inbound"/"outbound" strings here is an invalid-role API error.
         messages = [
-            {"role": msg["direction"], "content": msg["text"]}
+            {
+                "role": "user" if msg["direction"] == "inbound" else "assistant",
+                "content": msg["text"] or "",
+            }
             for msg in recent_messages
+            if (msg.get("text") or "").strip()
         ]
+        # The first turn must be a user turn for the Anthropic API.
+        while messages and messages[0]["role"] == "assistant":
+            messages.pop(0)
         # Add current user message
         messages.append({"role": "user", "content": incoming_text})
 
@@ -237,8 +247,9 @@ class ConversationEngine:
         result = await supabase.rpc(
             "check_quota",
             {"p_client_id": str(pandi_client_id)},
-        )
-        return result[0] if result else {"state": "ok", "messages_used": 0}
+        ).execute()
+        data = getattr(result, "data", None) or []
+        return data[0] if data else {"state": "ok", "messages_used": 0}
 
     async def _check_inappropriate(self, text: str) -> bool:
         """Fast inappropriate content check using Haiku."""
@@ -271,7 +282,7 @@ Respond with only: YES or NO"""
             "text": text,
             "inappropriate_flag": True,
             "flag_reason": reason,
-        })
+        }).execute()
 
     async def _notify_admin_inappropriate(
         self, pandi_client_id: UUID, text: str
@@ -294,7 +305,7 @@ Respond with only: YES or NO"""
         await supabase.rpc(
             "increment_quota_usage",
             {"p_client_id": str(pandi_client_id), "p_count": count},
-        )
+        ).execute()
 
     async def _load_conversation(self, conversation_id: UUID, supabase=None) -> dict:
         """Load conversation record."""
@@ -302,8 +313,8 @@ Respond with only: YES or NO"""
             supabase = await self._get_supabase()
         result = await supabase.table("pandi_conversations").select(
             "*"
-        ).eq("id", str(conversation_id)).single()
-        return result
+        ).eq("id", str(conversation_id)).single().execute()
+        return result.data or {}
 
     async def _load_recent_messages(
         self, conversation_id: UUID, limit: int = 30, supabase=None
@@ -317,8 +328,9 @@ Respond with only: YES or NO"""
             .eq("conversation_id", str(conversation_id))
             .order("sent_at", desc=False)
             .limit(limit)
+            .execute()
         )
-        return result
+        return result.data or []
 
     async def _save_message(
         self,
@@ -344,7 +356,7 @@ Respond with only: YES or NO"""
             "llm_model": llm_model,
             "llm_input_tokens": llm_input_tokens,
             "llm_output_tokens": llm_output_tokens,
-        })
+        }).execute()
 
     async def _get_message_count(self, conversation_id: UUID, supabase=None) -> int:
         """Get total message count in conversation."""
@@ -354,8 +366,9 @@ Respond with only: YES or NO"""
             await supabase.table("pandi_messages")
             .select("id", count="exact")
             .eq("conversation_id", str(conversation_id))
+            .execute()
         )
-        return result.count if result else 0
+        return getattr(result, "count", 0) or 0
 
     async def _generate_summary(self, conversation_id: UUID, supabase=None) -> str:
         """Generate LLM summary of conversation."""
@@ -391,7 +404,7 @@ Focus on: what the client is looking for (job type, requirements, preferences)."
             supabase = await self._get_supabase()
         await supabase.table("pandi_conversations").update(
             {"summary": summary}
-        ).eq("id", str(conversation_id))
+        ).eq("id", str(conversation_id)).execute()
 
     async def _enhance_job_context(
         self,
@@ -508,7 +521,15 @@ Focus on: what the client is looking for (job type, requirements, preferences)."
         context_guidance = self._generate_context_guidance(job_context)
 
         # Get system prompt with context guidance (Session 31)
-        system_prompt = get_system_prompt("1.0", context_guidance=context_guidance)
+        from pandapower.agents.company_profile import load_company_extra
+        try:
+            supabase = await self._get_supabase()
+            company_extra = await load_company_extra(supabase)
+        except Exception:
+            company_extra = ""
+        system_prompt = get_system_prompt(
+            "1.0", context_guidance=context_guidance, company_extra=company_extra
+        )
 
         response = self.anthropic.messages.create(
             model=model,

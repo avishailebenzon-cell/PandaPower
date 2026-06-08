@@ -45,7 +45,7 @@ async def _process_pandi_incoming_message_async(payload: dict) -> dict[str, Any]
             return {"status": "failed", "reason": "No sender phone"}
 
         # Check for duplicate message (idempotency)
-        existing = supabase.table("pandi_messages").select("id").eq(
+        existing = await supabase.table("pandi_messages").select("id").eq(
             "green_api_message_id", green_api_message_id
         ).execute()
 
@@ -54,7 +54,7 @@ async def _process_pandi_incoming_message_async(payload: dict) -> dict[str, Any]
             return {"status": "skipped", "reason": "Duplicate message"}
 
         # Look up pandi_client by phone
-        client_result = supabase.table("pandi_clients").select("*").eq(
+        client_result = await supabase.table("pandi_clients").select("*").eq(
             "phone", phone
         ).execute()
 
@@ -65,13 +65,13 @@ async def _process_pandi_incoming_message_async(payload: dict) -> dict[str, Any]
             logger.info(f"Incoming message from existing client {client_id}")
 
             # Update last_message_at
-            supabase.table("pandi_clients").update({
+            await supabase.table("pandi_clients").update({
                 "last_message_at": datetime.utcnow().isoformat(),
                 "updated_at": datetime.utcnow().isoformat()
             }).eq("id", client_id).execute()
 
             # Get active conversation for this client
-            conv_result = supabase.table("pandi_conversations").select("*").eq(
+            conv_result = await supabase.table("pandi_conversations").select("*").eq(
                 "pandi_client_id", client_id
             ).eq("status", "open").execute()
 
@@ -80,7 +80,7 @@ async def _process_pandi_incoming_message_async(payload: dict) -> dict[str, Any]
 
             # Create conversation if needed
             if not conversation_id:
-                conv_create = supabase.table("pandi_conversations").insert({
+                conv_create = await supabase.table("pandi_conversations").insert({
                     "pandi_client_id": client_id,
                     "status": "open",
                     "started_at": datetime.utcnow().isoformat(),
@@ -89,7 +89,7 @@ async def _process_pandi_incoming_message_async(payload: dict) -> dict[str, Any]
                 conversation_id = conv_create.data[0]["id"] if conv_create.data else None
 
             # Save incoming message
-            supabase.table("pandi_messages").insert({
+            await supabase.table("pandi_messages").insert({
                 "conversation_id": conversation_id,
                 "pandi_client_id": client_id,
                 "direction": "inbound",
@@ -149,7 +149,7 @@ async def _process_pandi_incoming_message_async(payload: dict) -> dict[str, Any]
                 logger.info(f"Auto-identified as client {client_id}")
 
                 # Create conversation
-                conv_create = supabase.table("pandi_conversations").insert({
+                conv_create = await supabase.table("pandi_conversations").insert({
                     "pandi_client_id": client_id,
                     "status": "open",
                     "started_at": datetime.utcnow().isoformat(),
@@ -158,7 +158,7 @@ async def _process_pandi_incoming_message_async(payload: dict) -> dict[str, Any]
                 conversation_id = conv_create.data[0]["id"] if conv_create.data else None
 
                 # Save message
-                supabase.table("pandi_messages").insert({
+                await supabase.table("pandi_messages").insert({
                     "conversation_id": conversation_id,
                     "pandi_client_id": client_id,
                     "direction": "inbound",
@@ -190,7 +190,7 @@ async def _process_pandi_incoming_message_async(payload: dict) -> dict[str, Any]
                 logger.info(f"Starting intake for unknown phone: {phone}")
 
                 # Create pandi_client with intake_status=in_progress
-                client_create = supabase.table("pandi_clients").insert({
+                client_create = await supabase.table("pandi_clients").insert({
                     "phone": phone,
                     "whatsapp_chat_id": f"{phone.replace('+', '')}@c.us",
                     "intake_status": "in_progress",
@@ -205,7 +205,7 @@ async def _process_pandi_incoming_message_async(payload: dict) -> dict[str, Any]
                 client_id = client_create.data[0]["id"]
 
                 # Create conversation
-                conv_create = supabase.table("pandi_conversations").insert({
+                conv_create = await supabase.table("pandi_conversations").insert({
                     "pandi_client_id": client_id,
                     "status": "open",
                     "started_at": datetime.utcnow().isoformat(),
@@ -214,7 +214,7 @@ async def _process_pandi_incoming_message_async(payload: dict) -> dict[str, Any]
                 conversation_id = conv_create.data[0]["id"] if conv_create.data else None
 
                 # Save message
-                supabase.table("pandi_messages").insert({
+                await supabase.table("pandi_messages").insert({
                     "conversation_id": conversation_id,
                     "pandi_client_id": client_id,
                     "direction": "inbound",

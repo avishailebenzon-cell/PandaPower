@@ -26,6 +26,7 @@ import { AnalyticsDashboard } from '@/pages/admin/AnalyticsDashboard'
 import { SystemHealthPage } from '@/pages/admin/SystemHealthPage'
 import { TelegramBotPage } from '@/pages/admin/TelegramBotPage'
 import { ConvertApiPage } from '@/pages/admin/ConvertApiPage'
+import { CompanyProfilePage } from '@/pages/admin/CompanyProfilePage'
 import { UsageDashboard } from '@/pages/admin/UsageDashboard'
 import { ReingestPage } from '@/pages/admin/ReingestPage'
 import WhatsAppAgentsSettingsPage from '@/pages/admin/WhatsAppAgentsSettingsPage'
@@ -51,6 +52,8 @@ import { TalPage } from '@/pages/admin/TalPage'
 import { TalConversationsPage } from '@/pages/admin/TalConversationsPage'
 import { EladConversationsPage } from '@/pages/admin/EladConversationsPage'
 import { PandiConversationsPage } from '@/pages/admin/PandiConversationsPage'
+import { PandiusClientRequestPage } from '@/pages/admin/PandiusClientRequestPage'
+import { PandiusConversationsPage } from '@/pages/admin/PandiusConversationsPage'
 import { TalTestPage } from '@/pages/admin/TalTestPage'
 import { EladTestPage } from '@/pages/admin/EladTestPage'
 import { MatchFlowDashboard } from '@/pages/admin/MatchFlowDashboard'
@@ -91,6 +94,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             <Route path="/admin/usage" element={<ProtectedRoute><UsageDashboard /></ProtectedRoute>} />
             <Route path="/admin/telegram-bot" element={<ProtectedRoute><TelegramBotPage /></ProtectedRoute>} />
             <Route path="/admin/convertapi" element={<ProtectedRoute><ConvertApiPage /></ProtectedRoute>} />
+            <Route path="/admin/company-profile" element={<ProtectedRoute><CompanyProfilePage /></ProtectedRoute>} />
             <Route path="/admin/reingest" element={<ProtectedRoute><ReingestPage /></ProtectedRoute>} />
             <Route path="/admin/match-flow" element={<ProtectedRoute><MatchFlowDashboard /></ProtectedRoute>} />
             <Route path="/admin/whatsapp-agents" element={<ProtectedRoute><WhatsAppAgentsSettingsPage /></ProtectedRoute>} />
@@ -131,6 +135,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             <Route path="/admin/pandi-conversations" element={<ProtectedRoute><PandiClientRequestPage /></ProtectedRoute>} />
             <Route path="/recruiting/pandi" element={<ProtectedRoute><PandiClientRequestPage /></ProtectedRoute>} />
             <Route path="/recruiting/pandi/conversations" element={<ProtectedRoute><PandiConversationsPage /></ProtectedRoute>} />
+            <Route path="/recruiting/pandius" element={<ProtectedRoute><PandiusClientRequestPage /></ProtectedRoute>} />
+            <Route path="/admin/pandius-conversations" element={<ProtectedRoute><PandiusClientRequestPage /></ProtectedRoute>} />
+            <Route path="/recruiting/pandius/conversations" element={<ProtectedRoute><PandiusConversationsPage /></ProtectedRoute>} />
 
             {/* Dana (AI sales agent — new-job-deal intake) */}
             <Route path="/recruiting/dana" element={<ProtectedRoute><DanaPage /></ProtectedRoute>} />

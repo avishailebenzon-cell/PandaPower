@@ -33,7 +33,7 @@ async def continue_intake_flow(
     """
     try:
         # Get current client
-        client_result = supabase.table("pandi_clients").select("*").eq(
+        client_result = await supabase.table("pandi_clients").select("*").eq(
             "id", client_id
         ).execute()
 
@@ -83,7 +83,7 @@ async def continue_intake_flow(
             return {"status": "failed", "reason": "Intake step mismatch"}
 
         # Update client with collected data
-        supabase.table("pandi_clients").update({
+        await supabase.table("pandi_clients").update({
             "intake_collected_data": intake_data,
             "updated_at": datetime.utcnow().isoformat()
         }).eq("id", client_id).execute()
@@ -128,7 +128,7 @@ async def complete_intake(
             "created_at": datetime.utcnow().isoformat()
         }
 
-        contact_result = supabase.table("contacts").insert(contact_data).execute()
+        contact_result = await supabase.table("contacts").insert(contact_data).execute()
         if not contact_result.data:
             logger.error(f"Failed to create contact for intake {client_id}")
             return {"status": "failed", "reason": "Contact creation failed"}
@@ -137,14 +137,14 @@ async def complete_intake(
 
         # Create Organization if not exists
         org_name = intake_data.get("company", "Unknown")
-        org_result = supabase.table("organizations").select("id").eq(
+        org_result = await supabase.table("organizations").select("id").eq(
             "name", org_name
         ).execute()
 
         if org_result.data:
             org_id = org_result.data[0]["id"]
         else:
-            org_create = supabase.table("organizations").insert({
+            org_create = await supabase.table("organizations").insert({
                 "name": org_name,
                 "org_type": "prospect",
                 "created_at": datetime.utcnow().isoformat()
@@ -153,12 +153,12 @@ async def complete_intake(
 
         # Update contact with organization
         if org_id:
-            supabase.table("contacts").update({
+            await supabase.table("contacts").update({
                 "organization_id": org_id
             }).eq("id", contact_id).execute()
 
         # Update pandi_client
-        supabase.table("pandi_clients").update({
+        await supabase.table("pandi_clients").update({
             "contact_id": contact_id,
             "intake_status": "completed",
             "identified_at": datetime.utcnow().isoformat(),
@@ -172,7 +172,7 @@ async def complete_intake(
         await initialize_quota(client_id, supabase)
 
         # Create conversation for this client
-        conv_create = supabase.table("pandi_conversations").insert({
+        conv_create = await supabase.table("pandi_conversations").insert({
             "pandi_client_id": client_id,
             "status": "open",
             "started_at": datetime.utcnow().isoformat(),
@@ -182,7 +182,7 @@ async def complete_intake(
         conversation_id = conv_create.data[0]["id"] if conv_create.data else None
 
         # Get client details for greeting
-        client_result = supabase.table("pandi_clients").select(
+        client_result = await supabase.table("pandi_clients").select(
             "phone, whatsapp_chat_id"
         ).eq("id", client_id).execute()
 
@@ -202,7 +202,7 @@ async def complete_intake(
 
                 # Save the greeting as outbound message
                 if conversation_id and send_result.get("success"):
-                    supabase.table("pandi_messages").insert({
+                    await supabase.table("pandi_messages").insert({
                         "conversation_id": conversation_id,
                         "pandi_client_id": client_id,
                         "direction": "outbound",

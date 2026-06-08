@@ -56,8 +56,10 @@ class DanaConversationEngine:
         while messages and messages[0]["role"] == "assistant":
             messages.pop(0)
 
+        from pandapower.agents.company_profile import load_company_extra
+        company_extra = await load_company_extra(supabase)
         job_context = await self._load_job_context(conversation_id, supabase)
-        system_prompt = get_system_prompt(self._context_guidance(job_context))
+        system_prompt = get_system_prompt(self._context_guidance(job_context), company_extra)
         tools = get_dana_tools()
 
         reply_text = ""
@@ -98,7 +100,7 @@ class DanaConversationEngine:
                     # Refresh guidance after context-changing tools.
                     if tu.name in ("update_job_context", "create_deal"):
                         job_context = await self._load_job_context(conversation_id, supabase)
-                        system_prompt = get_system_prompt(self._context_guidance(job_context))
+                        system_prompt = get_system_prompt(self._context_guidance(job_context), company_extra)
                 messages.append({"role": "user", "content": tool_results})
             else:
                 logger.warning("dana_tool_loop_exhausted", conversation_id=str(conversation_id))
