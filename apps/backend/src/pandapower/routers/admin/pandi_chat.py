@@ -92,17 +92,43 @@ def _job_title(conv: dict) -> str:
     return ""
 
 
+async def _fetch_client(supabase, client_id) -> dict:
+    """Fetch a pandi_client row defensively (prod schema is narrower than the
+    migration, so we select '*' and never name columns)."""
+    if not client_id:
+        return {}
+    try:
+        res = await supabase.table("pandi_clients").select("*").eq(
+            "id", str(client_id)
+        ).limit(1).execute()
+        return res.data[0] if res.data else {}
+    except Exception:
+        return {}
+
+
+async def _list_conversations_rows(supabase, limit: int) -> list:
+    """Select conversations with a tolerant ordering fallback ('*' so missing
+    columns can't 500 us, and last_activity_at may not exist in prod)."""
+    for order_col in ("last_activity_at", "started_at", None):
+        try:
+            q = supabase.table("pandi_conversations").select("*").limit(limit)
+            if order_col:
+                q = q.order(order_col, desc=True)
+            res = await q.execute()
+            return res.data or []
+        except Exception:
+            continue
+    return []
+
+
 @router.get("/conversations", response_model=List[ConversationSummary])
 async def list_pandi_conversations(limit: int = 100, supabase=Depends(get_supabase_client)):
     try:
-        res = await supabase.table("pandi_conversations").select(
-            "id, status, auto_reply_paused, started_at, last_activity_at, job_context, "
-            "pandi_clients(phone, intake_collected_data)"
-        ).order("last_activity_at", desc=True).limit(limit).execute()
+        rows = await _list_conversations_rows(supabase, limit)
 
         out: List[ConversationSummary] = []
-        for conv in res.data or []:
-            client = conv.get("pandi_clients") or {}
+        for conv in rows:
+            client = await _fetch_client(supabase, conv.get("pandi_client_id"))
             last_text, last_at = None, None
             try:
                 msg_res = await supabase.table("pandi_messages").select(
@@ -135,20 +161,17 @@ async def list_pandi_conversations(limit: int = 100, supabase=Depends(get_supaba
 @router.get("/conversations/{conversation_id}", response_model=ConversationDetail)
 async def get_pandi_conversation(conversation_id: UUID, supabase=Depends(get_supabase_client)):
     try:
-        res = await supabase.table("pandi_conversations").select(
-            "id, status, auto_reply_paused, job_context, "
-            "pandi_clients(phone, intake_collected_data)"
-        ).eq("id", str(conversation_id)).limit(1).execute()
+        res = await supabase.table("pandi_conversations").select("*").eq(
+            "id", str(conversation_id)
+        ).limit(1).execute()
         if not res.data:
             raise HTTPException(status_code=404, detail="Conversation not found")
         conv = res.data[0]
-        client = conv.get("pandi_clients") or {}
+        client = await _fetch_client(supabase, conv.get("pandi_client_id"))
 
-        msg_res = await supabase.table("pandi_messages").select(
-            "id, direction, text, sent_at"
-        ).eq("conversation_id", str(conversation_id)).order(
-            "sent_at", desc=False
-        ).execute()
+        msg_res = await supabase.table("pandi_messages").select("*").eq(
+            "conversation_id", str(conversation_id)
+        ).order("sent_at", desc=False).execute()
         messages = [
             ChatMessage(
                 id=m["id"],
@@ -175,10 +198,14 @@ async def get_pandi_conversation(conversation_id: UUID, supabase=Depends(get_sup
 
 
 async def _load_conv_client(conversation_id: UUID, supabase) -> Optional[dict]:
-    res = await supabase.table("pandi_conversations").select(
-        "id, pandi_client_id, pandi_clients(whatsapp_chat_id, phone)"
-    ).eq("id", str(conversation_id)).limit(1).execute()
-    return res.data[0] if res.data else None
+    res = await supabase.table("pandi_conversations").select("*").eq(
+        "id", str(conversation_id)
+    ).limit(1).execute()
+    if not res.data:
+        return None
+    conv = res.data[0]
+    conv["pandi_clients"] = await _fetch_client(supabase, conv.get("pandi_client_id"))
+    return conv
 
 
 @router.post("/conversations/{conversation_id}/send", response_model=SendMessageResponse)
