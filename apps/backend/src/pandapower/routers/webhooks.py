@@ -236,6 +236,7 @@ async def _handle_recruiter_inbound(recruiter: str, parsed: dict) -> None:
     the conversation isn't paused."""
     from uuid import UUID
     from pandapower.agents.recruiter_chat.engine import RecruiterChatEngine
+    from pandapower.agents.recruiter_chat.debounce import schedule_reply
 
     try:
         supabase = await get_supabase_client()
@@ -247,8 +248,10 @@ async def _handle_recruiter_inbound(recruiter: str, parsed: dict) -> None:
 
         engine = RecruiterChatEngine(recruiter)
         await engine.record_inbound(UUID(conv_id), parsed["text"])
-        # Auto-reply (the engine itself skips if the conversation is paused).
-        await engine.generate_reply(UUID(conv_id))
+        # Debounced auto-reply: if the candidate fires several messages in quick
+        # succession, only the last triggers a single consolidated reply (the
+        # engine itself also skips if the conversation is paused).
+        schedule_reply(recruiter, conv_id)
     except Exception as e:
         logger.error(f"{recruiter} inbound handling failed: {e}", exc_info=True)
 
