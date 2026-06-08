@@ -78,6 +78,22 @@ class PauseResponse(BaseModel):
     auto_reply_paused: bool
 
 
+async def _test_meta_for_match(supabase, match_id) -> dict:
+    """Self-contained test display fields for a match, or {} (schema-defensive)."""
+    if not match_id:
+        return {}
+    try:
+        res = await supabase.table("matches").select("is_test, test_meta").eq(
+            "id", str(match_id)
+        ).limit(1).execute()
+        row = res.data[0] if res.data else {}
+        if row.get("is_test") and isinstance(row.get("test_meta"), dict):
+            return row["test_meta"]
+    except Exception:
+        pass
+    return {}
+
+
 def make_recruiter_chat_router(recruiter: str) -> APIRouter:
     """Build the conversations API for one recruiter ('tal' or 'elad')."""
     router = APIRouter(prefix=f"/admin/{recruiter}", tags=["admin", recruiter, "chat"])
@@ -109,11 +125,18 @@ def make_recruiter_chat_router(recruiter: str) -> APIRouter:
                 except Exception:
                     pass
 
+                cand_name = (cand.get("name") if isinstance(cand, dict) else None)
+                job_title = (job.get("job_title") if isinstance(job, dict) else None)
+                if not cand_name or not job_title:
+                    tm = await _test_meta_for_match(supabase, conv.get("match_id"))
+                    cand_name = cand_name or tm.get("contact_name") or "מועמד"
+                    job_title = job_title or tm.get("job_title") or ""
+
                 out.append(ConversationSummary(
                     id=conv["id"],
                     match_id=conv.get("match_id"),
-                    candidate_name=cand.get("name") or "מועמד" if isinstance(cand, dict) else "מועמד",
-                    job_title=job.get("job_title") or "" if isinstance(job, dict) else "",
+                    candidate_name=cand_name,
+                    job_title=job_title,
                     status=conv.get("status") or "active",
                     auto_reply_paused=bool(conv.get("auto_reply_paused")),
                     last_message=last_text,
@@ -154,11 +177,18 @@ def make_recruiter_chat_router(recruiter: str) -> APIRouter:
                 )
                 for m in (msg_res.data or [])
             ]
+            cand_name = (cand.get("name") if isinstance(cand, dict) else None)
+            job_title = (job.get("job_title") if isinstance(job, dict) else None)
+            if not cand_name or not job_title:
+                tm = await _test_meta_for_match(supabase, conv.get("match_id"))
+                cand_name = cand_name or tm.get("contact_name") or "מועמד"
+                job_title = job_title or tm.get("job_title") or ""
+
             return ConversationDetail(
                 id=conv["id"],
                 match_id=conv.get("match_id"),
-                candidate_name=cand.get("name") or "מועמד" if isinstance(cand, dict) else "מועמד",
-                job_title=job.get("job_title") or "" if isinstance(job, dict) else "",
+                candidate_name=cand_name,
+                job_title=job_title,
                 status=conv.get("status") or "active",
                 auto_reply_paused=bool(conv.get("auto_reply_paused")),
                 messages=messages,

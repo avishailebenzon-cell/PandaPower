@@ -51,6 +51,8 @@ import { TalPage } from '@/pages/admin/TalPage'
 import { TalConversationsPage } from '@/pages/admin/TalConversationsPage'
 import { EladConversationsPage } from '@/pages/admin/EladConversationsPage'
 import { PandiConversationsPage } from '@/pages/admin/PandiConversationsPage'
+import { TalTestPage } from '@/pages/admin/TalTestPage'
+import { EladTestPage } from '@/pages/admin/EladTestPage'
 import { MatchFlowDashboard } from '@/pages/admin/MatchFlowDashboard'
 
 // Other Pages
@@ -105,8 +107,10 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             {/* Recruiters */}
             <Route path="/recruiting/tal" element={<ProtectedRoute><TalPage /></ProtectedRoute>} />
             <Route path="/recruiting/tal/conversations" element={<ProtectedRoute><TalConversationsPage /></ProtectedRoute>} />
+            <Route path="/recruiting/tal/test" element={<ProtectedRoute><TalTestPage /></ProtectedRoute>} />
             <Route path="/recruiting/elad" element={<ProtectedRoute><EladPageNew /></ProtectedRoute>} />
             <Route path="/recruiting/elad/conversations" element={<ProtectedRoute><EladConversationsPage /></ProtectedRoute>} />
+            <Route path="/recruiting/elad/test" element={<ProtectedRoute><EladTestPage /></ProtectedRoute>} />
             <Route path="/recruiting/elad/outreach" element={<ProtectedRoute><EladOutreachPage /></ProtectedRoute>} />
             <Route path="/recruiting/pandi/outreach" element={<ProtectedRoute><PandiOutreachPage /></ProtectedRoute>} />
 

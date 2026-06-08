@@ -285,11 +285,28 @@ async def get_recruiter_matches(
         # Get paginated results
         result = await query.range(offset, offset + limit - 1).execute()
 
+        # For any test matches on this page, pull their self-contained display
+        # fields (contact name + job title live on the match, not on joined
+        # candidate/job rows). Schema-defensive: a no-op before migration 015.
+        test_map: dict = {}
+        try:
+            page_ids = [r["id"] for r in (result.data or [])]
+            if page_ids:
+                t = await supabase.table("matches").select(
+                    "id, is_test, test_phone, test_meta"
+                ).in_("id", page_ids).eq("is_test", True).execute()
+                for tr in (t.data or []):
+                    test_map[tr["id"]] = tr
+        except Exception:
+            test_map = {}
+
         matches = []
         if result.data:
             for row in result.data:
                 candidate = row.get("candidates") or {}
                 job = row.get("jobs") or {}
+                test = test_map.get(row["id"]) or {}
+                test_meta = (test.get("test_meta") or {}) if isinstance(test, dict) else {}
 
                 # Calculate days in stage (defensive against missing/invalid timestamps)
                 try:
@@ -298,22 +315,27 @@ async def get_recruiter_matches(
                 except Exception:
                     days_in_stage = 0
 
+                cand_name = candidate.get("name") if isinstance(candidate, dict) else None
+                job_title = job.get("job_title") if isinstance(job, dict) else None
+                # Fall back to the test row's self-contained fields.
+                if not cand_name:
+                    cand_name = test_meta.get("contact_name") or "Unknown"
+                if not job_title:
+                    job_title = test_meta.get("job_title") or "Unknown"
+
                 match_info = MatchInfo(
                     id=row["id"],
-                    candidate_name=candidate.get("name", "Unknown") if isinstance(candidate, dict) else "Unknown",
+                    candidate_name=cand_name,
                     # DB column is job_title, NOT title (matches the rest of the codebase).
-                    job_title=job.get("job_title", "Unknown") if isinstance(job, dict) else "Unknown",
-                    # Organization name isn't joinable in production schema (see
-                    # recruitment_departments.py for the same caveat); leave blank
-                    # rather than ship fake data.
-                    company="",
+                    job_title=job_title,
+                    company=test_meta.get("organization_name", "") or "",
                     match_score=row.get("match_score", 0.0),
                     status=row.get("current_state", "unknown"),
                     state=row.get("current_state", "unknown"),
                     created_at=row["created_at"],
                     last_activity=row.get("updated_at"),
-                    candidate_id=row["candidate_id"],
-                    job_id=row["job_id"],
+                    candidate_id=row.get("candidate_id") or "",
+                    job_id=row.get("job_id") or "",
                     days_in_stage=days_in_stage,
                 )
                 matches.append(match_info)
@@ -363,6 +385,45 @@ async def _record_candidate_decline(supabase, candidate_id, job_id) -> None:
             f"Failed to record decline for candidate={candidate_id} "
             f"job={job_id}: {e}"
         )
+
+
+async def _seed_test_phone_if_any(supabase, match_id, conversation_id) -> None:
+    """If this match is a test match, copy its test_phone onto the conversation
+    so the agent's WhatsApp messages reach the test number. Best-effort and
+    schema-defensive (the test columns may not exist pre-migration)."""
+    try:
+        res = await supabase.table("matches").select(
+            "is_test, test_phone"
+        ).eq("id", match_id).limit(1).execute()
+        row = res.data[0] if res.data else {}
+        if row.get("is_test") and row.get("test_phone"):
+            import re
+            digits = re.sub(r"\D", "", str(row["test_phone"]))
+            if digits:
+                await supabase.table("recruiter_conversations").update(
+                    {"candidate_phone": digits}
+                ).eq("id", conversation_id).execute()
+    except Exception as e:
+        logger.warning(f"Could not seed test phone for match {match_id}: {e}")
+
+
+async def _trigger_agent_opening(recruiter: str, conversation_id) -> None:
+    """Fire the agent's opening outreach message in the background so the action
+    endpoint returns immediately. Never raises."""
+    import asyncio
+    from uuid import UUID
+    from pandapower.agents.recruiter_chat.engine import RecruiterChatEngine
+
+    async def _run():
+        try:
+            await RecruiterChatEngine(recruiter).generate_opening(UUID(str(conversation_id)))
+        except Exception as e:
+            logger.error(f"{recruiter} opening message failed: {e}", exc_info=True)
+
+    try:
+        asyncio.create_task(_run())
+    except Exception as e:
+        logger.error(f"Could not schedule {recruiter} opening: {e}")
 
 
 @router.post("/{match_id}/action", response_model=MatchActionResponse)
@@ -434,21 +495,35 @@ async def perform_match_action(
                 supabase, match.get("candidate_id"), match.get("job_id")
             )
 
-        # Create conversation record if moving to conversation state
+        # Create conversation record if moving to conversation state, then have
+        # the agent INITIATE contact (send the opening WhatsApp message) — this
+        # is the real "Tal/Elad reaches out" behaviour, identical for real and
+        # test matches.
         if body.action == ActionType.ACTIVATE and old_state != new_state:
             # Check if conversation already exists
             conv_result = await supabase.table("recruiter_conversations").select("id").eq(
                 "match_id", match_id
             ).eq("recruiter", recruiter).execute()
 
-            if not conv_result.data:
-                # Create new conversation
-                await supabase.table("recruiter_conversations").insert({
+            conversation_id = None
+            if conv_result.data:
+                conversation_id = conv_result.data[0]["id"]
+            else:
+                created = await supabase.table("recruiter_conversations").insert({
                     "match_id": match_id,
                     "recruiter": recruiter,
                     "status": "active",
                     "notes": body.notes or ""
                 }).execute()
+                if created.data:
+                    conversation_id = created.data[0]["id"]
+
+            if conversation_id:
+                # For test matches, copy the destination phone onto the
+                # conversation so the agent messages the test number.
+                await _seed_test_phone_if_any(supabase, match_id, conversation_id)
+                # Have the agent send its opening outreach message.
+                await _trigger_agent_opening(recruiter, conversation_id)
 
         return MatchActionResponse(
             success=True,

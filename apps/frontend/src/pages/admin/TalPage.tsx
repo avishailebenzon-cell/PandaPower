@@ -7,7 +7,7 @@
  */
 
 import { useNavigate } from "react-router-dom";
-import { MessageCircle } from "lucide-react";
+import { MessageCircle, FlaskConical } from "lucide-react";
 import { RecruiterMatchesPanel } from "@/components/RecruiterMatchesPanel";
 
 export const TalPage = () => {
@@ -23,12 +23,20 @@ export const TalPage = () => {
             סינון ראשוני של מועמדים בוואטסאפ. טל מנהלת שיחות וואטסאפ עם מועמדים בחלק הראשון של תהליך הגיוס לאחר הנחיה של מנהל הגיוס כרמית.
           </p>
         </div>
-        <button
-          onClick={() => navigate("/recruiting/tal/conversations")}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-teal-600 text-white hover:bg-teal-700 transition shrink-0"
-        >
-          <MessageCircle className="w-4 h-4" /> שיחות
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={() => navigate("/recruiting/tal/test")}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-600 text-white hover:bg-amber-500 transition"
+          >
+            <FlaskConical className="w-4 h-4" /> שיחת בדיקה
+          </button>
+          <button
+            onClick={() => navigate("/recruiting/tal/conversations")}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-teal-600 text-white hover:bg-teal-700 transition"
+          >
+            <MessageCircle className="w-4 h-4" /> שיחות
+          </button>
+        </div>
       </div>
 
       <RecruiterMatchesPanel recruiter="tal" />

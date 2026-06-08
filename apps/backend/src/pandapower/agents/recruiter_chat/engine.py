@@ -61,6 +61,67 @@ class RecruiterChatEngine:
         supabase = await self._get_supabase()
         await self._save_message(conversation_id, "inbound", text, supabase, author="candidate")
 
+    async def generate_opening(self, conversation_id: UUID) -> dict:
+        """Send the agent's first, *initiated* outreach message for a freshly
+        activated conversation (the "Tal/Elad initiates contact" behaviour).
+
+        No-op if the conversation already has messages or is paused. Builds the
+        opening from the match context and delivers it over WhatsApp."""
+        supabase = await self._get_supabase()
+
+        conv = await self._load_conversation(conversation_id, supabase)
+        if not conv:
+            return {"text": "", "skipped": True}
+        if conv.get("auto_reply_paused"):
+            return {"text": "", "skipped": True}
+
+        # Only initiate once — never duplicate the opening.
+        history = await self._load_recent_messages(conversation_id, supabase)
+        if history:
+            return {"text": "", "skipped": True}
+
+        match_context = await self._build_match_context(conv.get("match_id"), supabase)
+        addendum = await self._load_behavior_addendum(supabase)
+        system_prompt = get_system_prompt(self.recruiter, match_context, addendum)
+
+        if self.recruiter == "elad":
+            cue = (
+                "זוהי תחילת פנייה יזומה אל הלקוח לגבי המועמד והמשרה שבהקשר. "
+                "כתוב הודעת וואטסאפ ראשונה קצרה: הצג את עצמך כאלעד מפנדה-טק, ציין "
+                "שיש לך מועמד שעשוי להתאים למשרה הרלוונטית, ושאל אם מעניין אותו לשמוע פרטים. "
+                "כתוב אך ורק את ההודעה עצמה, בלי הסברים."
+            )
+        else:
+            cue = (
+                "זוהי תחילת פנייה יזומה אל המועמד לגבי המשרה שבהקשר. "
+                "כתבי הודעת וואטסאפ ראשונה קצרה: הציגי את עצמך כטל מפנדה-טק, הזכירי את "
+                "המשרה הרלוונטית בקצרה, ושאלי אם זה מעניין אותו. "
+                "כתבי אך ורק את ההודעה עצמה, בלי הסברים."
+            )
+
+        try:
+            response = self.anthropic.messages.create(
+                model=MODEL,
+                max_tokens=MAX_TOKENS,
+                system=system_prompt,
+                messages=[{"role": "user", "content": cue}],
+            )
+            await self._record_usage(response)
+            text_blocks = [
+                b.text for b in response.content if getattr(b, "type", "") == "text"
+            ]
+            reply_text = "\n".join(text_blocks).strip()
+        except Exception as e:
+            logger.error(f"{self.recruiter} opening generation failed: {e}", exc_info=True)
+            return {"text": "", "skipped": True, "error": True}
+
+        if not reply_text:
+            return {"text": "", "skipped": True}
+
+        await self._save_message(conversation_id, "outbound", reply_text, supabase, author="agent")
+        await self._send_whatsapp(conversation_id, reply_text, supabase)
+        return {"text": reply_text, "skipped": False}
+
     async def generate_reply(self, conversation_id: UUID) -> dict:
         """Produce the agent's next reply from history + match context, persist
         it (author='agent'), and deliver it over WhatsApp.
@@ -129,9 +190,48 @@ class RecruiterChatEngine:
         ).eq("id", str(conversation_id)).limit(1).execute()
         return res.data[0] if res.data else None
 
+    async def _load_test_fields(self, match_id, supabase) -> dict:
+        """Read the self-contained test columns off a match, defensively.
+
+        Returns {} if the columns aren't present (pre-migration) or on any error,
+        so test support never breaks the normal flow."""
+        if not match_id:
+            return {}
+        try:
+            res = await supabase.table("matches").select(
+                "is_test, test_phone, test_meta"
+            ).eq("id", str(match_id)).limit(1).execute()
+            return res.data[0] if res.data else {}
+        except Exception:
+            return {}
+
     async def _build_match_context(self, match_id, supabase) -> str:
         if not match_id:
             return ""
+        # Test matches are self-contained — build the context from test_meta.
+        test = await self._load_test_fields(match_id, supabase)
+        if test.get("is_test"):
+            meta = test.get("test_meta") or {}
+            if isinstance(meta, dict):
+                lines = []
+                if meta.get("contact_name"):
+                    lines.append(f"מועמד: {meta['contact_name']}")
+                if meta.get("candidate_clearance"):
+                    lines.append(f"סיווג המועמד: {meta['candidate_clearance']}")
+                if meta.get("job_title"):
+                    lines.append(f"משרה: {meta['job_title']}")
+                if meta.get("organization_name"):
+                    lines.append(f"ארגון/לקוח: {meta['organization_name']}")
+                if meta.get("job_location"):
+                    lines.append(f"מיקום: {meta['job_location']}")
+                if meta.get("job_security_clearance"):
+                    lines.append(f"סיווג נדרש: {meta['job_security_clearance']}")
+                if meta.get("job_description"):
+                    lines.append(f"תיאור המשרה: {str(meta['job_description'])[:600]}")
+                if meta.get("job_qualifications"):
+                    lines.append(f"דרישות: {str(meta['job_qualifications'])[:600]}")
+                if lines:
+                    return "\n".join(lines)
         try:
             res = await supabase.table("matches").select(
                 "id, match_score, match_reasoning, carmit_review_notes, "
@@ -227,6 +327,11 @@ class RecruiterChatEngine:
         if not conv:
             return None
         phone = normalize_phone(conv.get("candidate_phone"))
+        # Test matches carry their destination phone on the match itself.
+        if not phone and conv.get("match_id"):
+            test = await self._load_test_fields(conv.get("match_id"), supabase)
+            if test.get("is_test"):
+                phone = normalize_phone(test.get("test_phone"))
         if not phone and self.recruiter == "tal" and conv.get("match_id"):
             try:
                 res = await supabase.table("matches").select(
