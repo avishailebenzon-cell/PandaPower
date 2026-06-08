@@ -574,6 +574,22 @@ async def handle_create_client(
     try:
         supabase = await get_supabase_client()
 
+        # Use the client's REAL phone from pandi_clients, never the phone the LLM
+        # passed in — the model often invents a placeholder (e.g. +972500000000)
+        # because it doesn't actually know the WhatsApp number. The stored phone
+        # is the authentic sender number captured from the webhook.
+        try:
+            _pc = await supabase.table("pandi_clients").select(
+                "phone, whatsapp_chat_id"
+            ).eq("id", str(pandi_client_id)).limit(1).execute()
+            real_phone = (_pc.data[0].get("phone") if _pc.data else None) or ""
+            if real_phone:
+                if not real_phone.startswith("+"):
+                    real_phone = "+" + real_phone.lstrip("+")
+                phone = real_phone
+        except Exception as _e:
+            logger.warning(f"could not load real phone for client {pandi_client_id}: {_e}")
+
         # 1. Check if contact already exists (double-check)
         _exist_res = await supabase.table("contacts").select(
             "id"
