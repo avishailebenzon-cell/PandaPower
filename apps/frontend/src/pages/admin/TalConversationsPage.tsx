@@ -12,6 +12,7 @@ export const TalConversationsPage: React.FC = () => (
     backTo="/recruiting/tal"
     contactsLabel="מועמדים"
     agentName="טל"
+    agentGender="f"
   />
 );
 

@@ -12,6 +12,7 @@ export const PandiConversationsPage: React.FC = () => (
     backTo="/recruiting/pandi"
     contactsLabel="לקוחות"
     agentName="פנדי"
+    agentGender="f"
   />
 );
 

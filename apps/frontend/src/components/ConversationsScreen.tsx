@@ -32,6 +32,8 @@ export interface ConversationsScreenProps {
   contactsLabel: string;
   /** agent name for the composer placeholder + pause button, e.g. "טל" */
   agentName: string;
+  /** grammatical gender of the agent — drives Hebrew agreement ("f" = נקבה). */
+  agentGender: "f" | "m";
 }
 
 export const ConversationsScreen: React.FC<ConversationsScreenProps> = ({
@@ -41,8 +43,13 @@ export const ConversationsScreen: React.FC<ConversationsScreenProps> = ({
   backTo,
   contactsLabel,
   agentName,
+  agentGender,
 }) => {
   const navigate = useNavigate();
+  // Hebrew gender agreement for the agent's own state/actions.
+  const isF = agentGender === "f";
+  const pausedAdj = isF ? "מושבתת" : "מושבת"; // "X is paused"
+  const resumeVerb = isF ? "שתמשיך" : "שימשיך"; // "...so X continues"
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -194,7 +201,7 @@ export const ConversationsScreen: React.FC<ConversationsScreenProps> = ({
                   <button
                     onClick={triggerAgent}
                     disabled={sending || paused}
-                    title={paused ? `${agentName} מושבת/ת` : `בקש מ${agentName} לענות עכשיו`}
+                    title={paused ? `${agentName} ${pausedAdj}` : `בקש מ${agentName} לענות עכשיו`}
                     className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm bg-teal-700 text-white hover:bg-teal-600 disabled:opacity-40"
                   >
                     <Sparkles className="w-4 h-4" /> תגובת {agentName}
@@ -222,7 +229,7 @@ export const ConversationsScreen: React.FC<ConversationsScreenProps> = ({
 
               {paused && (
                 <div className="bg-amber-900/40 text-amber-200 text-xs px-4 py-2 border-b border-amber-800">
-                  {agentName} מושבת/ת זמנית — ההודעות שתכתוב יישלחו בשמה. הפעל/י כדי שתמשיך את השיחה אוטומטית.
+                  {agentName} {pausedAdj} זמנית — ההודעות שתכתוב יישלחו בשמ{isF ? "ה" : "ו"}. הפעל/י כדי {resumeVerb} את השיחה אוטומטית.
                 </div>
               )}
 

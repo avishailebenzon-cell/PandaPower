@@ -489,7 +489,7 @@ class NotificationService:
 בואו ניצור עם הלקוח קשר כדי להכיר אותו טוב יותר ולהציע משרות.
 
 ---
-פנדה-טק סוכן בינה מלאכותית
+פנדי, סוכנת הבינה המלאכותית של פנדה-טק
                     """.strip()
 
                     resend_result = await resend.send_email(

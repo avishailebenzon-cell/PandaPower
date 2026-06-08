@@ -62,7 +62,7 @@ async function fetchSystemStatus(): Promise<SystemStatus[]> {
 
         statuses.push({
           id: 'tal',
-          name: 'טל - סוכן ראשוני',
+          name: 'טל - סוכנת ראשונית',
           status:
             (res.in_conversation_tal || 0) > 0 || res.tal_current
               ? 'processing'
@@ -151,7 +151,7 @@ export function useSystemStatus() {
     },
     {
       id: 'tal',
-      name: 'טל - סוכן ראשוני',
+      name: 'טל - סוכנת ראשונית',
       status: 'idle',
       detail: 'טוען...',
     },
