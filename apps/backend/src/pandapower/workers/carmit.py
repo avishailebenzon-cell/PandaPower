@@ -484,26 +484,46 @@ Return ONLY valid JSON (no markdown, no extra text):
             {passed: bool, reason: str}
         """
         try:
-            candidate_clearance = candidate.get("clearance_level") or "none"
+            raw_candidate_clearance = candidate.get("clearance_level")
             job_required_clearance = job.get("job_security_clearance") or "none"
 
             # Rank via the canonical Hebrew-aware ranker (רמה 1 = highest).
             # Falls back to the local dict for any value it can't parse.
             from pandapower.routers.admin.recruitment_departments import _clearance_rank
-            candidate_level = _clearance_rank(candidate_clearance)
             required_level = _clearance_rank(job_required_clearance)
-            if candidate_level is None:
-                candidate_level = self.clearance_levels.get(str(candidate_clearance).lower(), 0)
             if required_level is None:
                 required_level = self.clearance_levels.get(str(job_required_clearance).lower(), 0)
+
+            # If the job has no real clearance requirement, everyone passes.
+            if required_level == 0:
+                return {"passed": True, "reason": "No clearance required for this role"}
+
+            # UNKNOWN candidate clearance (null / empty) is NOT proof of an
+            # insufficient clearance — CV extraction frequently fails to capture
+            # it. Auto-rejecting these silently killed otherwise-strong matches.
+            # Defer to a human: pass the gate so the match reaches Tal, who can
+            # ask the candidate to confirm their actual clearance.
+            cand_str = str(raw_candidate_clearance).strip() if raw_candidate_clearance is not None else ""
+            if not cand_str:
+                return {
+                    "passed": True,
+                    "reason": (
+                        f"Candidate clearance unknown; job requires "
+                        f"{job_required_clearance} — deferring to human review (Tal)."
+                    ),
+                }
+
+            candidate_level = _clearance_rank(cand_str)
+            if candidate_level is None:
+                candidate_level = self.clearance_levels.get(cand_str.lower(), 0)
 
             if candidate_level < required_level:
                 return {
                     "passed": False,
-                    "reason": f"Insufficient clearance: candidate {candidate_clearance} < required {job_required_clearance}",
+                    "reason": f"Insufficient clearance: candidate {cand_str} < required {job_required_clearance}",
                 }
 
-            return {"passed": True, "reason": f"Clearance match: {candidate_clearance} >= {job_required_clearance}"}
+            return {"passed": True, "reason": f"Clearance match: {cand_str} >= {job_required_clearance}"}
 
         except Exception as e:
             logger.error(f"Clearance gate check failed: {str(e)}")
