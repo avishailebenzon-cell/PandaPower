@@ -66,6 +66,30 @@ class RecruiterChatEngine:
         supabase = await self._get_supabase()
         await self._save_message(conversation_id, "inbound", text, supabase, author="candidate")
 
+    async def _prepend_disclosure_if_first(
+        self, conversation_id: UUID, text: str, supabase
+    ) -> str:
+        """Prepend the one-time AI disclosure if this conversation has no prior
+        outbound message yet. Guarantees the disclosure appears exactly once —
+        on the agent's first message to the user — regardless of whether that
+        first message is an initiated opening or a reply. Fail-open: on any error
+        the original text is returned unchanged (never block the reply)."""
+        try:
+            res = (
+                await supabase.table("recruiter_messages")
+                .select("id", count="exact")
+                .eq("conversation_id", str(conversation_id))
+                .eq("direction", "outbound")
+                .limit(1)
+                .execute()
+            )
+            if (getattr(res, "count", 0) or 0) == 0:
+                from pandapower.agents.company_profile import prepend_disclosure
+                return prepend_disclosure(self.recruiter, text)
+        except Exception as e:
+            logger.warning(f"{self.recruiter} disclosure check failed: {e}")
+        return text
+
     async def generate_opening(self, conversation_id: UUID) -> dict:
         """Send the agent's first, *initiated* outreach message for a freshly
         activated conversation (the "Tal/Elad initiates contact" behaviour).
@@ -133,6 +157,7 @@ class RecruiterChatEngine:
         if not reply_text:
             return {"text": "", "skipped": True}
 
+        reply_text = await self._prepend_disclosure_if_first(conversation_id, reply_text, supabase)
         await self._save_message(conversation_id, "outbound", reply_text, supabase, author="agent")
         delivery = await self._send_whatsapp(conversation_id, reply_text, supabase)
 
@@ -205,6 +230,7 @@ class RecruiterChatEngine:
         if not reply_text:
             return {"text": "", "skipped": True}
 
+        reply_text = await self._prepend_disclosure_if_first(conversation_id, reply_text, supabase)
         await self._save_message(conversation_id, "outbound", reply_text, supabase, author="agent")
         delivery = await self._send_whatsapp(conversation_id, reply_text, supabase)
 

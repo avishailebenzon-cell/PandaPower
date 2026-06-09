@@ -220,6 +220,12 @@ class ConversationEngine:
         # 8. Send response to client
 
         if response_text:
+            # גילוי נאות — prepend the one-time AI disclosure on the very first
+            # outbound message of the conversation (once per user, first message
+            # only). Deterministic so the model can never drop or repeat it.
+            response_text = await self._prepend_disclosure_if_first(
+                conversation_id, response_text, supabase
+            )
             # Save outgoing message to DB
             await self._save_message(
                 conversation_id=conversation_id,
@@ -426,6 +432,29 @@ Respond with only: YES or NO"""
             "llm_input_tokens": llm_input_tokens,
             "llm_output_tokens": llm_output_tokens,
         }).execute()
+
+    async def _prepend_disclosure_if_first(
+        self, conversation_id: UUID, text: str, supabase=None
+    ) -> str:
+        """Prepend the one-time AI disclosure if no outbound message exists yet
+        in this conversation. Fail-open — never blocks the reply."""
+        if supabase is None:
+            supabase = await self._get_supabase()
+        try:
+            res = (
+                await supabase.table("pandi_messages")
+                .select("id", count="exact")
+                .eq("conversation_id", str(conversation_id))
+                .eq("direction", "outbound")
+                .limit(1)
+                .execute()
+            )
+            if (getattr(res, "count", 0) or 0) == 0:
+                from pandapower.agents.company_profile import prepend_disclosure
+                return prepend_disclosure("pandi", text)
+        except Exception as e:
+            logger.warning("pandi_disclosure_check_failed", error=str(e))
+        return text
 
     async def _get_message_count(self, conversation_id: UUID, supabase=None) -> int:
         """Get total message count in conversation."""

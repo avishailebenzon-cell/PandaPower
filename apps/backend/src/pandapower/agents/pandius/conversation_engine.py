@@ -98,6 +98,11 @@ class PandiusConversationEngine:
                     response_text = (response_text + "\n\n" + result["message"]).strip()
 
         if response_text:
+            # גילוי נאות — prepend the one-time AI disclosure on the first
+            # outbound message only (once per user). Deterministic in code.
+            response_text = await self._prepend_disclosure_if_first(
+                conversation_id, response_text, supabase
+            )
             await self._save_message(
                 conversation_id,
                 pandius_client_id,
@@ -152,6 +157,27 @@ class PandiusConversationEngine:
             "output_tokens": response.usage.output_tokens,
             "content": response.content,
         }
+
+    async def _prepend_disclosure_if_first(
+        self, conversation_id: UUID, text: str, supabase
+    ) -> str:
+        """Prepend the one-time AI disclosure if no outbound message exists yet
+        in this conversation. Fail-open — never blocks the reply."""
+        try:
+            res = (
+                await supabase.table("pandius_messages")
+                .select("id", count="exact")
+                .eq("conversation_id", str(conversation_id))
+                .eq("direction", "outbound")
+                .limit(1)
+                .execute()
+            )
+            if (getattr(res, "count", 0) or 0) == 0:
+                from pandapower.agents.company_profile import prepend_disclosure
+                return prepend_disclosure("pandius", text)
+        except Exception as e:
+            logger.warning("pandius_disclosure_check_failed", error=str(e))
+        return text
 
     async def _count_inbound(self, conversation_id: UUID, supabase) -> int:
         try:

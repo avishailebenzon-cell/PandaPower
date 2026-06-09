@@ -42,6 +42,37 @@ FACILITY_FACTS = """--- מענה על ארגונים/מפעלים ספציפיי
 מוזמן גם לבדוק באינטרנט לגבי הארגון הספציפי. בכל מקרה — חשוב להדגיש שהעבודה היא בפנדה-טק."""
 
 
+# --- גילוי נאות (AI disclosure) ----------------------------------------------
+# Legal/ethical transparency: every WhatsApp agent must identify itself as an AI
+# agent in its FIRST message to a given user, and only there (once per user — not
+# repeated on every turn). This is the single canonical disclosure line, prepended
+# deterministically in code to each agent's first outbound message, so it can never
+# be silently dropped by the model or repeated. Gender-correct Hebrew per agent.
+AI_DISCLOSURE = {
+    # Female voice
+    "tal": "🤖 גילוי נאות: אני טל, נציגה דיגיטלית מבוססת בינה מלאכותית (AI) של פנדה-טק.",
+    "pandi": "🤖 גילוי נאות: אני פנדי, נציגה דיגיטלית מבוססת בינה מלאכותית (AI) של פנדה-טק.",
+    # Male voice
+    "elad": "🤖 גילוי נאות: אני אלעד, נציג דיגיטלי מבוסס בינה מלאכותית (AI) של פנדה-טק.",
+    "pandius": "🤖 גילוי נאות: אני פנדיוס, נציג דיגיטלי מבוסס בינה מלאכותית (AI) של פנדה-טק.",
+}
+
+
+def ai_disclosure(agent: str) -> str:
+    """Return the one-time AI-disclosure line for an agent (empty if unknown)."""
+    return AI_DISCLOSURE.get((agent or "").lower().strip(), "")
+
+
+def prepend_disclosure(agent: str, text: str) -> str:
+    """Prefix ``text`` with the agent's AI-disclosure line. Caller is responsible
+    for invoking this ONLY on the agent's first outbound message to a user."""
+    line = ai_disclosure(agent)
+    text = (text or "").strip()
+    if not line:
+        return text
+    return f"{line}\n\n{text}" if text else line
+
+
 # Operators can append extra, live-editable company knowledge through the admin
 # UI (System Settings → "פרופיל החברה"). It is stored in system_settings under
 # this key as a plain-text string and appended to the shared block at runtime,
