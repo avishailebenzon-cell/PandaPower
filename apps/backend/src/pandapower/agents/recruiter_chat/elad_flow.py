@@ -426,30 +426,44 @@ async def handle_cv_decision_if_awaiting(engine, conversation_id: UUID, conv: di
 
 
 async def send_cv_file(engine, conversation_id: UUID, conv: dict) -> bool:
-    """Deliver the candidate's original CV file to the client over WhatsApp."""
+    """Deliver the candidate's CV to the client over WhatsApp — in Panda-Tech format.
+
+    We never forward the raw uploaded file. The client only ever receives the
+    branded "Panda-Tech format" CV, and only once a human has approved the
+    rendered document (``matches.formatted_cv_status = 'approved'``). If no
+    approved CV exists yet, we generate/stage one for review and return False so
+    the caller tells the client it's on the way — a human approval then triggers
+    the actual send. See :mod:`cv_formatter`.
+    """
     supabase = await engine._get_supabase()
     match_id = conv.get("match_id")
     try:
         m = await supabase.table("matches").select(
-            "candidate_id, candidates(name, cv_file_id)"
+            "candidate_id, iron_number, formatted_cv_path, formatted_cv_status, candidates(name)"
         ).eq("id", str(match_id)).limit(1).execute()
-        cand = (m.data[0].get("candidates") if m.data else None) or {}
-        cv_file_id = cand.get("cv_file_id")
+        row = m.data[0] if m.data else {}
+        cand = row.get("candidates") or {}
         cand_name = cand.get("name") or "candidate"
-        if not cv_file_id:
-            logger.warning(f"elad: no cv_file_id for match {match_id}")
-            return False
-        f = await supabase.table("cv_files").select(
-            "storage_path, original_filename, mime_type"
-        ).eq("id", cv_file_id).limit(1).execute()
-        if not f.data or not f.data[0].get("storage_path"):
-            logger.warning(f"elad: cv_files row/storage_path missing for {cv_file_id}")
-            return False
-        storage_path = f.data[0]["storage_path"]
-        filename = f.data[0].get("original_filename") or f"CV_{cand_name}.pdf"
+        cv_status = row.get("formatted_cv_status")
+        storage_path = row.get("formatted_cv_path")
+        iron = row.get("iron_number") or ""
     except Exception as e:
         logger.error(f"elad: CV lookup failed for match {match_id}: {e}")
         return False
+
+    # Gate: only an approved Panda-Tech CV may be sent to the client.
+    if cv_status != "approved" or not storage_path:
+        from pandapower.agents.recruiter_chat import cv_formatter
+        # Stage a CV for human review if none is pending yet (generated/approved).
+        if cv_status not in ("generated", "approved"):
+            try:
+                await cv_formatter.generate_formatted_cv(supabase, match_id)
+            except Exception as e:
+                logger.error(f"elad: could not stage formatted CV for {match_id}: {e}")
+        logger.info(f"elad: formatted CV not yet approved for match {match_id} — holding for review")
+        return False
+
+    filename = f"PandaTech_CV_{iron or cand_name}.pdf"
 
     try:
         from pandapower.integrations.supabase_storage import SupabaseStorageManager

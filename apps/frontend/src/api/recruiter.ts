@@ -168,6 +168,7 @@ export async function fetchRecruiterMatches(
 export type MatchAction =
   | "activate"
   | "reject"
+  | "delete"
   | "wait"
   | "hand_to_human"
   | "return_from_human"
@@ -223,6 +224,80 @@ export async function setMatchFavorite(
   }
 
   return response.json();
+}
+
+// ---------------------------------------------------------------------------
+// Panda-Tech formatted CV (human-in-the-loop before Elad sends it to a client)
+// ---------------------------------------------------------------------------
+export interface FormattedCvInfo {
+  matchId: string;
+  status: "generated" | "approved" | "rejected" | null;
+  path?: string | null;
+  previewUrl?: string | null;
+  generatedAt?: string | null;
+  approvedAt?: string | null;
+  approvedBy?: string | null;
+  rejectedReason?: string | null;
+  clientApproved: boolean;
+  error?: string | null;
+}
+
+function mapFormattedCv(d: any): FormattedCvInfo {
+  return {
+    matchId: d.matchId,
+    status: d.status ?? null,
+    path: d.path ?? null,
+    previewUrl: d.previewUrl ?? null,
+    generatedAt: d.generatedAt ?? null,
+    approvedAt: d.approvedAt ?? null,
+    approvedBy: d.approvedBy ?? null,
+    rejectedReason: d.rejectedReason ?? null,
+    clientApproved: Boolean(d.clientApproved),
+    error: d.error ?? null,
+  };
+}
+
+export async function fetchFormattedCv(matchId: string): Promise<FormattedCvInfo> {
+  const r = await fetch(`${API_BASE}/admin/recruiter/${matchId}/formatted-cv`);
+  if (!r.ok) throw new Error(`Failed to fetch formatted CV: ${r.statusText}`);
+  return mapFormattedCv(await r.json());
+}
+
+export async function generateFormattedCv(
+  matchId: string,
+  force = false
+): Promise<FormattedCvInfo> {
+  const r = await fetch(
+    `${API_BASE}/admin/recruiter/${matchId}/formatted-cv/generate?force=${force}`,
+    { method: "POST" }
+  );
+  if (!r.ok) throw new Error(`Failed to generate formatted CV: ${r.statusText}`);
+  return mapFormattedCv(await r.json());
+}
+
+export async function approveFormattedCv(matchId: string): Promise<FormattedCvInfo> {
+  const r = await fetch(
+    `${API_BASE}/admin/recruiter/${matchId}/formatted-cv/approve`,
+    { method: "POST" }
+  );
+  if (!r.ok) throw new Error(`Failed to approve formatted CV: ${r.statusText}`);
+  return mapFormattedCv(await r.json());
+}
+
+export async function rejectFormattedCv(
+  matchId: string,
+  reason?: string
+): Promise<FormattedCvInfo> {
+  const r = await fetch(
+    `${API_BASE}/admin/recruiter/${matchId}/formatted-cv/reject`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: reason || null }),
+    }
+  );
+  if (!r.ok) throw new Error(`Failed to reject formatted CV: ${r.statusText}`);
+  return mapFormattedCv(await r.json());
 }
 
 /**

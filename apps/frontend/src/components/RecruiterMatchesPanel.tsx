@@ -28,6 +28,10 @@ import {
   setMatchFavorite,
   fetchMatchConversation,
   fetchMatchDetail,
+  fetchFormattedCv,
+  generateFormattedCv,
+  approveFormattedCv,
+  rejectFormattedCv,
   type Match,
   type MatchAction,
 } from "@/api/recruiter";
@@ -72,6 +76,7 @@ const STATE_LABELS: Record<string, { label: string; cls: string; live?: boolean 
   placement_failed: { label: "כשלון השמה", cls: "bg-red-900 text-red-200" },
   company_employee_do_not_contact: { label: "🚫 עובד חברה - לא לפנות", cls: "bg-orange-900 text-orange-200" },
   company_client_do_not_contact: { label: "🚫 לקוח חברה - לא לפנות", cls: "bg-orange-900 text-orange-200" },
+  deleted: { label: "🗑️ נמחקה", cls: "bg-gray-800 text-gray-400" },
 };
 
 function StateBadge({ state }: { state: string }) {
@@ -121,6 +126,7 @@ export function RecruiterMatchesPanel({
   const [detailMatchId, setDetailMatchId] = useState<string | null>(null);
   const [candidateDetailId, setCandidateDetailId] = useState<string | null>(null);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [formattedCvMatch, setFormattedCvMatch] = useState<Match | null>(null);
 
   const queryClient = useQueryClient();
   const tabParam = `${recruiter}-${subTab}`; // tal-queue, elad-history, etc.
@@ -301,7 +307,7 @@ export function RecruiterMatchesPanel({
                 `האם אתה בטוח שברצונך למחוק את ההתאמה של ${m.candidateName}?\nפעולה זו אינה ניתנת לביטול.`
               )
             ) {
-              actionMutation.mutate({ matchId: m.id, action: "reject" });
+              actionMutation.mutate({ matchId: m.id, action: "delete" });
             }
           }}
           onMarkCompanyEmployee={() => {
@@ -331,6 +337,7 @@ export function RecruiterMatchesPanel({
             setShowConversationModal(true);
           }}
           onDetail={() => setDetailMatchId(m.id)}
+          onFormattedCv={() => setFormattedCvMatch(m)}
           isLoading={actionMutation.isPending}
         />
       </td>
@@ -537,8 +544,140 @@ export function RecruiterMatchesPanel({
               onClose={() => setCandidateDetailId(null)}
             />
           )}
+
+          {/* Panda-Tech CV review — generate / preview / approve before Elad
+              delivers it to the client. */}
+          {formattedCvMatch && (
+            <FormattedCvModal
+              match={formattedCvMatch}
+              onClose={() => setFormattedCvMatch(null)}
+            />
+          )}
         </>
       )}
+    </div>
+  );
+}
+
+// Panda-Tech formatted-CV review modal — the human-in-the-loop gate. The client
+// only ever receives a CV that a person has previewed and approved here.
+function FormattedCvModal({ match, onClose }: { match: Match; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const cvQuery = useQuery({
+    queryKey: ["formatted-cv", match.id],
+    queryFn: () => fetchFormattedCv(match.id),
+  });
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ["formatted-cv", match.id] });
+    queryClient.invalidateQueries({ queryKey: ["recruiter-matches"] });
+  };
+
+  const genMutation = useMutation({
+    mutationFn: (force: boolean) => generateFormattedCv(match.id, force),
+    onSuccess: invalidate,
+  });
+  const approveMutation = useMutation({
+    mutationFn: () => approveFormattedCv(match.id),
+    onSuccess: invalidate,
+  });
+  const rejectMutation = useMutation({
+    mutationFn: (reason?: string) => rejectFormattedCv(match.id, reason),
+    onSuccess: invalidate,
+  });
+
+  const cv = cvQuery.data;
+  const busy =
+    genMutation.isPending || approveMutation.isPending || rejectMutation.isPending;
+
+  const statusLabel: Record<string, string> = {
+    generated: "נוצר — ממתין לאישור",
+    approved: "אושר ✓",
+    rejected: "נדחה — דורש הפקה מחדש",
+  };
+
+  return (
+    <div dir="rtl" className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+      <div className="bg-gray-800 rounded-lg border border-gray-700 w-full max-w-4xl h-[88vh] flex flex-col">
+        <div className="border-b border-gray-700 p-4 flex justify-between items-center">
+          <button onClick={onClose} className="text-gray-400 hover:text-white text-2xl">×</button>
+          <h2 className="text-white font-semibold">קורות חיים בפורמט פנדה-טק — {match.candidateName}</h2>
+          <div className="text-sm">
+            {cv?.status ? (
+              <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
+                cv.status === "approved" ? "bg-emerald-900 text-emerald-200"
+                : cv.status === "rejected" ? "bg-red-900 text-red-200"
+                : "bg-yellow-900 text-yellow-200"
+              }`}>{statusLabel[cv.status] || cv.status}</span>
+            ) : (
+              <span className="px-2 py-0.5 rounded text-xs bg-gray-700 text-gray-300">טרם הופק</span>
+            )}
+          </div>
+        </div>
+
+        {cv?.clientApproved && cv?.status !== "approved" && (
+          <div className="bg-amber-900/40 border-b border-amber-700 text-amber-100 text-sm px-4 py-2">
+            ⏳ הלקוח כבר ביקש את קורות החיים — לאחר אישורכם כאן הם יישלחו אליו אוטומטית.
+          </div>
+        )}
+        {cv?.error && (
+          <div className="bg-red-900/40 border-b border-red-700 text-red-100 text-sm px-4 py-2">
+            {cv.error}
+          </div>
+        )}
+
+        <div className="flex-1 overflow-hidden bg-gray-900">
+          {cvQuery.isLoading ? (
+            <div className="h-full flex items-center justify-center text-gray-400">טוען…</div>
+          ) : cv?.previewUrl ? (
+            <iframe title="preview" src={cv.previewUrl} className="w-full h-full" />
+          ) : (
+            <div className="h-full flex flex-col items-center justify-center text-gray-400 gap-3">
+              <p>עדיין לא הופקו קורות חיים בפורמט פנדה-טק עבור מועמד זה.</p>
+              <button
+                onClick={() => genMutation.mutate(false)}
+                disabled={busy}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-sm disabled:opacity-50"
+              >
+                {genMutation.isPending ? "מפיק…" : "הפק קורות חיים"}
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="border-t border-gray-700 p-4 flex items-center gap-2 justify-between">
+          <div className="flex gap-2">
+            <button
+              onClick={() => genMutation.mutate(true)}
+              disabled={busy}
+              className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded text-sm disabled:opacity-50"
+            >
+              {genMutation.isPending ? "מפיק…" : "↻ הפק מחדש"}
+            </button>
+            <button
+              onClick={() => {
+                const reason = window.prompt("סיבת דחייה (לא חובה):") ?? undefined;
+                rejectMutation.mutate(reason);
+              }}
+              disabled={busy || !cv?.path}
+              className="px-3 py-2 bg-red-900 hover:bg-red-800 text-red-100 rounded text-sm disabled:opacity-50"
+            >
+              ✕ דחה
+            </button>
+          </div>
+          <button
+            onClick={() => approveMutation.mutate()}
+            disabled={busy || !cv?.path || cv?.status === "approved"}
+            className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded text-sm disabled:opacity-50"
+          >
+            {approveMutation.isPending
+              ? "מאשר…"
+              : cv?.clientApproved
+              ? "✓ אשר ושלח ללקוח"
+              : "✓ אשר קורות חיים"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -611,6 +750,7 @@ function MatchActionsMenu({
   onReturnFromHuman,
   onConversation,
   onDetail,
+  onFormattedCv,
   isLoading,
 }: {
   match: Match;
@@ -625,6 +765,7 @@ function MatchActionsMenu({
   onReturnFromHuman: () => void;
   onConversation: () => void;
   onDetail: () => void;
+  onFormattedCv: () => void;
   isLoading: boolean;
 }) {
   const isInQueue = recruiter === "carmit"
@@ -723,6 +864,18 @@ function MatchActionsMenu({
           >
             📄 פרטי ההתאמה
           </button>
+          {recruiter === "elad" && (
+            <button
+              onClick={() => {
+                onFormattedCv();
+                onToggle();
+              }}
+              disabled={isLoading}
+              className="block w-full text-right px-4 py-2 hover:bg-emerald-900 text-emerald-200 text-sm disabled:opacity-50 border-b border-gray-600 whitespace-nowrap"
+            >
+              🐼 קו״ח פנדה-טק (הפקה ואישור)
+            </button>
+          )}
           <button
             onClick={() => {
               onConversation();

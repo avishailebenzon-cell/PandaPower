@@ -17,6 +17,7 @@ class ActionType(str, Enum):
     """Match action types."""
     ACTIVATE = "activate"              # Move to conversation state
     REJECT = "reject"                  # Reject match
+    DELETE = "delete"                  # Permanently remove match (soft-delete, never re-created)
     WAIT = "wait"                      # Keep in queue (no change)
     HAND_TO_HUMAN = "hand_to_human"    # A human takes over the candidate contact
     RETURN_FROM_HUMAN = "return_from_human"  # Undo hand-off, back to the agent queue
@@ -29,6 +30,12 @@ class ActionType(str, Enum):
 # out to them (a person who already works for, or is a client of, the company).
 COMPANY_EMPLOYEE_STATE = "company_employee_do_not_contact"
 COMPANY_CLIENT_STATE = "company_client_do_not_contact"
+
+# Terminal state for a match the user explicitly deleted ("מחיקת התאמה").
+# CRITICAL: we never DELETE the row — the matching engine's dedup keys off any
+# existing (candidate_id, job_id) row regardless of state, so keeping a "deleted"
+# row is exactly what guarantees the same match is never re-created (no loop).
+DELETED_STATE = "deleted"
 DO_NOT_CONTACT_ACTIONS = {
     ActionType.MARK_COMPANY_EMPLOYEE: COMPANY_EMPLOYEE_STATE,
     ActionType.MARK_COMPANY_CLIENT: COMPANY_CLIENT_STATE,
@@ -547,6 +554,46 @@ async def perform_match_action(
                 timestamp=now,
             )
 
+        # DELETE ("מחיקת התאמה"): mark the match deleted from ANY stage (Tal /
+        # Elad / Carmit queue / found / conversation). We deliberately keep the
+        # row — it stays as a tombstone so the matching engine's (candidate, job)
+        # dedup never re-creates it, preventing an infinite delete/re-match loop.
+        if body.action == ActionType.DELETE:
+            now = datetime.utcnow().isoformat()
+            if old_state != DELETED_STATE:
+                update_result = await supabase.table("matches").update({
+                    "current_state": DELETED_STATE,
+                    "updated_at": now,
+                }).eq("id", match_id).execute()
+                if not update_result.data:
+                    raise HTTPException(status_code=500, detail="Failed to delete match")
+
+                # Record the decline on the candidate so Carmit's Gate 2
+                # (already_declined) won't re-present this job to them later.
+                await _record_candidate_decline(
+                    supabase, match.get("candidate_id"), match.get("job_id")
+                )
+
+                # Pause auto-reply on any open conversation for this match so no
+                # agent keeps messaging about a deleted match. Best-effort.
+                try:
+                    await supabase.table("recruiter_conversations").update({
+                        "auto_reply_paused": True,
+                    }).eq("match_id", match_id).execute()
+                except Exception as e:
+                    logger.warning(
+                        f"Could not pause conversations for deleted match {match_id}: {e}"
+                    )
+
+            return MatchActionResponse(
+                success=True,
+                matchId=match_id,
+                oldState=old_state,
+                newState=DELETED_STATE,
+                action=body.action.value,
+                timestamp=now,
+            )
+
         # Determine new state based on action
         # Detect which recruiter stage we're in. The "handed_to_human" state is
         # a per-recruiter holding state: the candidate/client is contacted by a
@@ -704,6 +751,188 @@ async def set_match_favorite(
     except Exception as e:
         logger.error(f"Error setting match favorite: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to set favorite")
+
+
+# ---------------------------------------------------------------------------
+# Panda-Tech formatted CV (human-in-the-loop before Elad sends it to a client)
+# ---------------------------------------------------------------------------
+class FormattedCvInfo(BaseModel):
+    matchId: str
+    status: Optional[str] = None  # generated | approved | rejected | None
+    path: Optional[str] = None
+    previewUrl: Optional[str] = None
+    generatedAt: Optional[str] = None
+    approvedAt: Optional[str] = None
+    approvedBy: Optional[str] = None
+    rejectedReason: Optional[str] = None
+    clientApproved: bool = False  # client already pressed "yes" in WhatsApp
+    error: Optional[str] = None
+
+
+class RejectFormattedCvRequest(BaseModel):
+    reason: Optional[str] = None
+
+
+async def _formatted_cv_preview_url(supabase, path: Optional[str]) -> Optional[str]:
+    if not path:
+        return None
+    try:
+        from pandapower.integrations.supabase_storage import SupabaseStorageManager
+        storage = SupabaseStorageManager(supabase)
+        return await storage.create_signed_url(path, expires_in_seconds=3600)
+    except Exception as e:
+        logger.warning(f"formatted-cv: signed URL failed for {path}: {e}")
+        return None
+
+
+async def _load_formatted_cv_row(supabase, match_id: str) -> dict:
+    res = await supabase.table("matches").select(
+        "id, elad_stage, elad_cv_decision, formatted_cv_path, formatted_cv_status, "
+        "formatted_cv_generated_at, formatted_cv_approved_at, formatted_cv_approved_by, "
+        "formatted_cv_rejected_reason"
+    ).eq("id", str(match_id)).limit(1).execute()
+    if not res.data:
+        raise HTTPException(status_code=404, detail="Match not found")
+    return res.data[0]
+
+
+@router.get("/{match_id}/formatted-cv", response_model=FormattedCvInfo)
+async def get_formatted_cv(
+    match_id: str,
+    supabase = Depends(get_supabase_client)
+) -> FormattedCvInfo:
+    """Return the current Panda-Tech CV review state + a short-lived preview URL."""
+    row = await _load_formatted_cv_row(supabase, match_id)
+    return FormattedCvInfo(
+        matchId=match_id,
+        status=row.get("formatted_cv_status"),
+        path=row.get("formatted_cv_path"),
+        previewUrl=await _formatted_cv_preview_url(supabase, row.get("formatted_cv_path")),
+        generatedAt=row.get("formatted_cv_generated_at"),
+        approvedAt=row.get("formatted_cv_approved_at"),
+        approvedBy=row.get("formatted_cv_approved_by"),
+        rejectedReason=row.get("formatted_cv_rejected_reason"),
+        clientApproved=row.get("elad_cv_decision") == "approved",
+    )
+
+
+@router.post("/{match_id}/formatted-cv/generate", response_model=FormattedCvInfo)
+async def generate_formatted_cv_endpoint(
+    match_id: str,
+    force: bool = Query(False, description="Regenerate even if one already exists"),
+    supabase = Depends(get_supabase_client)
+) -> FormattedCvInfo:
+    """(Re)render the Panda-Tech CV from extracted data and stage it for review."""
+    from pandapower.agents.recruiter_chat import cv_formatter
+    result = await cv_formatter.generate_formatted_cv(supabase, match_id, force=force)
+    row = await _load_formatted_cv_row(supabase, match_id)
+    return FormattedCvInfo(
+        matchId=match_id,
+        status=row.get("formatted_cv_status"),
+        path=row.get("formatted_cv_path"),
+        previewUrl=await _formatted_cv_preview_url(supabase, row.get("formatted_cv_path")),
+        generatedAt=row.get("formatted_cv_generated_at"),
+        clientApproved=row.get("elad_cv_decision") == "approved",
+        error=result.get("error"),
+    )
+
+
+@router.post("/{match_id}/formatted-cv/approve", response_model=FormattedCvInfo)
+async def approve_formatted_cv(
+    match_id: str,
+    supabase = Depends(get_supabase_client)
+) -> FormattedCvInfo:
+    """Approve the rendered CV. If the client already asked for it, send it now."""
+    row = await _load_formatted_cv_row(supabase, match_id)
+    if not row.get("formatted_cv_path"):
+        raise HTTPException(status_code=400, detail="No generated CV to approve")
+
+    now = datetime.utcnow().isoformat()
+    reviewer = "avishai.lebenzon@gmail.com"
+    await supabase.table("matches").update({
+        "formatted_cv_status": "approved",
+        "formatted_cv_approved_at": now,
+        "formatted_cv_approved_by": reviewer,
+        "formatted_cv_rejected_reason": None,
+    }).eq("id", str(match_id)).execute()
+
+    # If the client already pressed "receive full CV" and we were holding for
+    # this approval, deliver it now and advance the placement stage.
+    client_approved = row.get("elad_cv_decision") == "approved"
+    awaiting = row.get("elad_stage") == "awaiting_cv_decision"
+    sent = False
+    if client_approved and awaiting:
+        try:
+            sent = await _deliver_approved_cv(supabase, match_id)
+        except Exception as e:
+            logger.error(f"formatted-cv: delivery after approve failed for {match_id}: {e}")
+
+    refreshed = await _load_formatted_cv_row(supabase, match_id)
+    return FormattedCvInfo(
+        matchId=match_id,
+        status=refreshed.get("formatted_cv_status"),
+        path=refreshed.get("formatted_cv_path"),
+        previewUrl=await _formatted_cv_preview_url(supabase, refreshed.get("formatted_cv_path")),
+        approvedAt=refreshed.get("formatted_cv_approved_at"),
+        approvedBy=refreshed.get("formatted_cv_approved_by"),
+        clientApproved=client_approved,
+        error=None if (not client_approved or sent) else "approved, but automatic send failed",
+    )
+
+
+@router.post("/{match_id}/formatted-cv/reject", response_model=FormattedCvInfo)
+async def reject_formatted_cv(
+    match_id: str,
+    body: RejectFormattedCvRequest,
+    supabase = Depends(get_supabase_client)
+) -> FormattedCvInfo:
+    """Reject the rendered CV (with an optional note) so it can be regenerated."""
+    await _load_formatted_cv_row(supabase, match_id)
+    await supabase.table("matches").update({
+        "formatted_cv_status": "rejected",
+        "formatted_cv_rejected_reason": (body.reason or None),
+        "formatted_cv_approved_at": None,
+        "formatted_cv_approved_by": None,
+    }).eq("id", str(match_id)).execute()
+    row = await _load_formatted_cv_row(supabase, match_id)
+    return FormattedCvInfo(
+        matchId=match_id,
+        status=row.get("formatted_cv_status"),
+        path=row.get("formatted_cv_path"),
+        previewUrl=await _formatted_cv_preview_url(supabase, row.get("formatted_cv_path")),
+        rejectedReason=row.get("formatted_cv_rejected_reason"),
+        clientApproved=row.get("elad_cv_decision") == "approved",
+    )
+
+
+async def _deliver_approved_cv(supabase, match_id: str) -> bool:
+    """Send the approved Panda-Tech CV to the client over Elad's conversation,
+    then advance the placement stage to cv_sent. Returns True if delivered."""
+    conv_res = await supabase.table("recruiter_conversations").select(
+        "id, match_id"
+    ).eq("match_id", str(match_id)).eq("recruiter", "elad").order(
+        "started_at", desc=True
+    ).limit(1).execute()
+    if not conv_res.data:
+        logger.warning(f"formatted-cv: no elad conversation for match {match_id}")
+        return False
+    conversation_id = conv_res.data[0]["id"]
+
+    from pandapower.agents.recruiter_chat.engine import RecruiterChatEngine
+    from pandapower.agents.recruiter_chat import elad_flow
+    engine = RecruiterChatEngine("elad")
+    conv = {"match_id": match_id}
+    ok = await elad_flow.send_cv_file(engine, conversation_id, conv)
+    if ok:
+        await elad_flow._set_stage(
+            engine, match_id, elad_flow.STAGE_CV_SENT,
+            elad_cv_decision="approved",
+            elad_cv_sent_at=datetime.utcnow().isoformat(),
+        )
+        msg = "מצוין! שלחתי לכם כעת את קורות החיים המלאים 📄 אשמח לתאם את ההמשך מולכם."
+        await engine._save_message(conversation_id, "outbound", msg, supabase, author="agent")
+        await engine._send_whatsapp(conversation_id, msg, supabase)
+    return ok
 
 
 @router.get("/{match_id}/conversation", response_model=ConversationInfo)

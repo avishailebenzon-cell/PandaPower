@@ -125,6 +125,52 @@ class ConvertApiClient:
 
         raise RuntimeError(f"ConvertAPI conversion failed after {max_retries} attempts: {last_err}")
 
+    async def html_to_pdf(self, html: str, max_retries: int = 3) -> bytes:
+        """Render an HTML document to a PDF and return the raw PDF bytes.
+
+        Used to produce the branded "Panda-Tech format" CV from an HTML
+        template. ConvertAPI's html/to/pdf runs a Chromium engine, so RTL and
+        Hebrew web fonts render correctly with no local system libraries. Raises
+        on failure so the caller can fall back / surface the error.
+        """
+        client = await self._get_client()
+        url = f"{CONVERTAPI_BASE}/convert/html/to/pdf"
+        params = {"Secret": self.secret, "StoreFile": "false"}
+        files = {"File": ("cv.html", html.encode("utf-8"), "text/html")}
+
+        last_err: Optional[Exception] = None
+        for attempt in range(max_retries):
+            try:
+                resp = await client.post(url, params=params, files=files)
+                if resp.status_code >= 500:
+                    last_err = RuntimeError(f"ConvertAPI {resp.status_code}: {resp.text[:200]}")
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                if resp.status_code >= 400:
+                    raise RuntimeError(f"ConvertAPI {resp.status_code}: {resp.text[:300]}")
+
+                data = resp.json()
+                out_files = data.get("Files") or []
+                if not out_files:
+                    raise RuntimeError(f"ConvertAPI returned no files: {str(data)[:200]}")
+
+                file_data = out_files[0].get("FileData")
+                if file_data:
+                    return base64.b64decode(file_data)
+
+                file_url = out_files[0].get("Url")
+                if file_url:
+                    r2 = await client.get(file_url)
+                    return r2.content
+                raise RuntimeError("ConvertAPI response missing FileData/Url")
+
+            except httpx.TimeoutException as e:
+                last_err = e
+                await asyncio.sleep(2 ** attempt)
+                continue
+
+        raise RuntimeError(f"ConvertAPI html→pdf failed after {max_retries} attempts: {last_err}")
+
     async def get_user(self) -> dict:
         """Account info (used to validate the secret + report remaining credits)."""
         client = await self._get_client()
