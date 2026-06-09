@@ -1314,6 +1314,71 @@ async def _pipedrive_field_sync_async() -> dict[str, Any]:
         return {"status": "failed", "error": str(e)}
 
 
+async def _pandi_pipedrive_backfill_async() -> dict[str, Any]:
+    """Async: push Pandi-created contacts that have no Pipedrive person yet.
+
+    When Pandi registers a client while Pipedrive is rate-limited (429), the
+    contact is stored locally with pipedrive_person_id=NULL so the conversation
+    can continue. The regular sync is pull-only, so this stage pushes those
+    contacts up once the budget recovers. Fails fast (capped 429 handling) and
+    resumes on the next run if still throttled.
+    """
+    try:
+        if not settings.PIPEDRIVE_API_TOKEN:
+            return {"status": "skipped", "reason": "PIPEDRIVE_API_TOKEN not configured"}
+
+        from pandapower.workers.pipedrive_sync import CONTACT_STATUS_FIELD
+        CONTACT_STATUS_POTENTIAL_CLIENT = 33  # לקוח פוטנציאלי
+
+        supabase = await get_supabase_client()
+        res = await (
+            supabase.table("contacts")
+            .select("id, full_name, email, phone")
+            .is_("pipedrive_person_id", "null")
+            .eq("contact_status", "potential_client")
+            .limit(50)
+            .execute()
+        )
+        pending = res.data or []
+        if not pending:
+            return {"status": "success", "pushed": 0, "pending": 0}
+
+        client = PipedriveClient(
+            settings.PIPEDRIVE_API_TOKEN,
+            settings.PIPEDRIVE_API_DOMAIN or "https://api.pipedrive.com",
+        )
+        pushed = failed = 0
+        try:
+            for c in pending:
+                try:
+                    person = await client.create_person(
+                        name=c.get("full_name") or "Unknown",
+                        email=c.get("email"),
+                        phone=c.get("phone"),
+                        custom_fields={CONTACT_STATUS_FIELD: CONTACT_STATUS_POTENTIAL_CLIENT},
+                    )
+                    await supabase.table("contacts").update({
+                        "pipedrive_person_id": person.get("id"),
+                        "pipedrive_last_synced_at": datetime.utcnow().isoformat(),
+                    }).eq("id", c["id"]).execute()
+                    pushed += 1
+                except Exception as e:
+                    failed += 1
+                    # Budget still exhausted — stop; next run resumes.
+                    if "rate limited" in str(e).lower() or "429" in str(e):
+                        logger.info("Pandi→Pipedrive backfill: budget exhausted, stopping")
+                        break
+        finally:
+            await client.close()
+
+        return {"status": "success", "pushed": pushed, "failed": failed,
+                "pending": len(pending) - pushed}
+
+    except Exception as e:
+        logger.error(f"Pandi Pipedrive backfill async failed: {str(e)}", exc_info=True)
+        return {"status": "failed", "error": str(e)}
+
+
 async def _pipedrive_historical_import_async() -> dict[str, Any]:
     """Async: Import historical rejection data from Pipedrive."""
     try:

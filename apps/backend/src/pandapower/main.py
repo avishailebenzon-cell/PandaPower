@@ -216,6 +216,7 @@ async def _pipeline_scheduler_loop():
         _pipeline_watchdog_async,
         _pipedrive_field_sync_async,
         _pipedrive_historical_import_async,
+        _pandi_pipedrive_backfill_async,
         _notify_telegram_async,
         _telegram_daily_summary_async,
         _reingest_missed_scheduled_async,
@@ -247,6 +248,10 @@ async def _pipeline_scheduler_loop():
         "pipeline_watchdog":     (_pipeline_watchdog_async,        1800.0,   95.0),
         "pipedrive_field_sync":  (_pipedrive_field_sync_async,     3600.0,   110.0),
         "pipedrive_historical_import": (_pipedrive_historical_import_async, 14400.0, 125.0),
+        # Push Pandi-created contacts (pipedrive_person_id NULL) up to Pipedrive
+        # once the daily budget recovers. Runs hourly so backlog clears soon
+        # after a 429 window; each run fails fast if still throttled.
+        "pandi_pipedrive_backfill": (_pandi_pipedrive_backfill_async, 3600.0, 135.0),
         # Telegram (Carmit bot): notify match→Tal / hires, and a once-a-day digest.
         "notify_telegram":       (_notify_telegram_async,          120.0,    55.0),
         "telegram_daily_summary": (_telegram_daily_summary_async,  900.0,    140.0),
