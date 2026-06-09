@@ -13,7 +13,6 @@ import { env } from "@/lib/env";
 interface CandidateRow {
   id: string;
   name: string;
-  candidate_number: string | null;
   email: string | null;
   phone: string | null;
   location: string | null;
@@ -139,7 +138,6 @@ export function CandidatesDatabasePage() {
           <table className="w-full text-sm text-right">
             <thead>
               <tr className="bg-slate-800 text-slate-300 border-b border-slate-700">
-                <th className="py-3 px-3 font-semibold">מס'</th>
                 <th className="py-3 px-3 font-semibold">שם</th>
                 <th className="py-3 px-3 font-semibold">אימייל</th>
                 <th className="py-3 px-3 font-semibold">טלפון</th>
@@ -156,19 +154,19 @@ export function CandidatesDatabasePage() {
             <tbody>
               {isLoading ? (
                 <tr>
-                  <td colSpan={12} className="text-center py-10 text-slate-400">
+                  <td colSpan={11} className="text-center py-10 text-slate-400">
                     טוען מועמדים…
                   </td>
                 </tr>
               ) : isError ? (
                 <tr>
-                  <td colSpan={12} className="text-center py-10 text-red-400">
+                  <td colSpan={11} className="text-center py-10 text-red-400">
                     שגיאה בטעינת המועמדים. נסה לרענן.
                   </td>
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={12} className="text-center py-10 text-slate-400">
+                  <td colSpan={11} className="text-center py-10 text-slate-400">
                     לא נמצאו מועמדים{search ? ` עבור "${search}"` : ""}.
                   </td>
                 </tr>
@@ -183,9 +181,6 @@ export function CandidatesDatabasePage() {
                       onClick={() => setSelectedId(c.id)}
                       className="border-b border-slate-800 hover:bg-slate-800/60 cursor-pointer transition"
                     >
-                      <td className="py-2.5 px-3 font-mono text-xs text-indigo-400 whitespace-nowrap">
-                        {c.candidate_number || "—"}
-                      </td>
                       <td className="py-2.5 px-3 font-semibold text-white whitespace-nowrap">
                         {c.name || "—"}
                       </td>
@@ -331,9 +326,7 @@ function CandidateDetailModal({ id, onClose }: { id: string; onClose: () => void
           <div className="p-10 text-center text-slate-400">טוען פרטי מועמד…</div>
         ) : (
           <div className="p-5 space-y-5">
-            <Section title="פרטי קשר">
-              <Field label="מספר מועמד" value={c.candidate_number} />
-              <Field label="אימייל" value={c.email} ltr />
+            <Section title="פרטי קשר">              <Field label="אימייל" value={c.email} ltr />
               <Field label="טלפון" value={c.phone} ltr />
               <Field label="מיקום" value={c.location} />
               <Field label="שפה" value={c.detected_language?.toUpperCase()} />

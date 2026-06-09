@@ -170,7 +170,7 @@ async def candidates_database(
     """
     try:
         columns = (
-            "id, name, candidate_number, email, phone, location, "
+            "id, name, email, phone, location, "
             "clearance_level, key_skills, years_of_experience, "
             "detected_language, overall_confidence_score, "
             "skill_readiness_status, cv_file_id, "
