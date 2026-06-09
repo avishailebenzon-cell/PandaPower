@@ -133,44 +133,19 @@ export function ManualCVUploadPage() {
           {categories.length === 0 ? (
             <div className="text-gray-400">טוען קטגוריות...</div>
           ) : (
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-3 gap-3">
               {categories.map((cat: CandidateCategory) => (
-                <div
+                <button
                   key={cat.id}
                   onClick={() => setSelectedCategory(cat.id)}
-                  className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
+                  className={`px-4 py-3 rounded-lg border-2 cursor-pointer transition-all text-center font-semibold ${
                     selectedCategory === cat.id
-                      ? "border-indigo-500 bg-indigo-900/20"
-                      : "border-gray-700 bg-gray-700/30 hover:border-gray-600"
+                      ? "border-indigo-500 bg-indigo-900/30 text-white"
+                      : "border-gray-700 bg-gray-700/30 text-gray-200 hover:border-gray-600"
                   }`}
                 >
-                  <h3 className="font-semibold text-white mb-2">
-                    {cat.name}
-                    {cat.level && (
-                      <span className="ml-2 text-sm text-indigo-300">
-                        רמה {cat.level}
-                      </span>
-                    )}
-                  </h3>
-                  <p className="text-sm text-gray-400 mb-3">
-                    {cat.description}
-                  </p>
-                  <div className="flex flex-wrap gap-1">
-                    {cat.skills.slice(0, 3).map((skill, i) => (
-                      <span
-                        key={i}
-                        className="text-xs px-2 py-1 bg-gray-700 text-gray-300 rounded"
-                      >
-                        {skill}
-                      </span>
-                    ))}
-                    {cat.skills.length > 3 && (
-                      <span className="text-xs text-gray-500">
-                        +{cat.skills.length - 3} עוד
-                      </span>
-                    )}
-                  </div>
-                </div>
+                  {cat.name}
+                </button>
               ))}
             </div>
           )}
