@@ -156,9 +156,15 @@ def _parse_security_clearance(value: Any) -> Optional[str]:
     return SECURITY_CLEARANCE_MAPPING.get(option_id)
 
 
-async def sync_pipedrive_contacts() -> Dict[str, Any]:
+async def sync_pipedrive_contacts(since: Optional[datetime] = None) -> Dict[str, Any]:
     """
-    Sync all contacts from Pipedrive to PandaPower with proper categorization.
+    Sync contacts from Pipedrive to PandaPower with proper categorization.
+
+    Args:
+        since: if provided, only fetch persons/organizations changed since this
+            timestamp (delta sync via /v1/recents). If None, a full sync is done.
+            Upserts are idempotent, so delta only ever touches changed rows and
+            never disturbs existing data.
 
     Returns:
         Sync summary with counts
@@ -173,17 +179,20 @@ async def sync_pipedrive_contacts() -> Dict[str, Any]:
             api_domain=settings.PIPEDRIVE_API_DOMAIN
         )
 
-        # Fetch all persons from Pipedrive
-        logger.info("Starting Pipedrive contacts sync...")
+        # Fetch persons from Pipedrive
+        sync_mode = "delta" if since is not None else "full"
+        logger.info(f"Starting Pipedrive contacts sync ({sync_mode})...")
 
         # Build option mapping for professional_domain
         domain_options_map = await _build_domain_options_map(pipedrive)
 
-        # Sync organizations first (so contact->org relationships work)
-        await _sync_organizations(db, pipedrive)
+        # Sync organizations first (so contact->org relationships work).
+        # In delta mode a newly-created org appears in its own /recents feed,
+        # and orgs are synced before persons, so contact->org links stay valid.
+        await _sync_organizations(db, pipedrive, since=since)
 
-        persons = await pipedrive.get_all_persons()
-        logger.info(f"Fetched {len(persons)} persons from Pipedrive")
+        persons = await pipedrive.get_all_persons(since=since)
+        logger.info(f"Fetched {len(persons)} persons from Pipedrive ({sync_mode})")
 
         # Sync summary
         summary = {
@@ -332,16 +341,20 @@ def _extract_phone(person: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-async def _sync_organizations(db: Any, pipedrive: PipedriveClient) -> int:
+async def _sync_organizations(
+    db: Any, pipedrive: PipedriveClient, since: Optional[datetime] = None
+) -> int:
     """
-    Sync all organizations from Pipedrive into the organizations table.
+    Sync organizations from Pipedrive into the organizations table.
     Uses deterministic UUIDs based on pipedrive_org_id.
 
-    Returns the number of organizations synced.
+    If `since` is provided, only organizations changed since that timestamp are
+    fetched (delta). Returns the number of organizations synced.
     """
     try:
-        logger.info("Syncing organizations from Pipedrive...")
-        orgs = await pipedrive.get_all_organizations()
+        mode = "delta" if since is not None else "full"
+        logger.info(f"Syncing organizations from Pipedrive ({mode})...")
+        orgs = await pipedrive.get_all_organizations(since=since)
         logger.info(f"Got {len(orgs)} organizations from Pipedrive")
 
         synced = 0

@@ -20,9 +20,41 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# --- Delta sync tuning -------------------------------------------------------
+# Overlap buffer subtracted from last_sync_at when computing the delta cursor.
+# Guards against clock skew and records modified *during* the previous sync.
+# Upserts are idempotent, so re-processing a small overlap is harmless.
+DELTA_OVERLAP_MINUTES = 120
+# Every Nth successful run, fall back to a FULL sync as a self-healing
+# reconciliation pass (catches anything a delta feed might have missed).
+FULL_SYNC_EVERY = 24
+
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _compute_delta_cursor(schedule: Dict[str, Any]) -> Optional[datetime]:
+    """
+    Decide the delta cursor for this run.
+
+    Returns a datetime to fetch only changes since then (delta sync), or None to
+    request a FULL sync. We do a full sync when:
+      - there is no prior successful sync (last_sync_at missing), or
+      - the previous run did not complete cleanly (status != "completed"), or
+      - it is time for the periodic full reconciliation pass.
+
+    Otherwise we return last_sync_at minus an overlap buffer.
+    """
+    last_sync = _parse_ts(schedule.get("last_sync_at"))
+    last_status = schedule.get("last_sync_status")
+    sync_count = int(schedule.get("sync_count") or 0)
+
+    if last_sync is None or last_status != "completed":
+        return None  # full sync
+    if FULL_SYNC_EVERY > 0 and sync_count > 0 and sync_count % FULL_SYNC_EVERY == 0:
+        return None  # periodic full reconciliation
+    return last_sync - timedelta(minutes=DELTA_OVERLAP_MINUTES)
 
 
 def _parse_ts(value: Any) -> Optional[datetime]:
@@ -172,6 +204,11 @@ async def run_due_syncs() -> Dict[str, Any]:
         if not entity_type or not schedule_id:
             continue
 
+        # Compute the delta cursor from the schedule snapshot BEFORE we mark the
+        # run started (mark_schedule_started overwrites last_sync_at with now).
+        since = _compute_delta_cursor(schedule)
+        mode = "full" if since is None else "delta"
+
         await mark_schedule_started(db, schedule_id)
 
         success = False
@@ -179,21 +216,21 @@ async def run_due_syncs() -> Dict[str, Any]:
         try:
             if entity_type == "deals":
                 from pandapower.workers.pipedrive_deals_sync import sync_pipedrive_deals
-                await sync_pipedrive_deals()
+                await sync_pipedrive_deals(since=since)
             elif entity_type == "persons":
                 from pandapower.workers.pipedrive_sync import sync_pipedrive_contacts
-                await sync_pipedrive_contacts()
+                await sync_pipedrive_contacts(since=since)
             elif entity_type == "organizations":
                 # Organizations are synced as part of contacts sync (pipedrive_sync)
                 # because contact->org links require orgs to exist first.
                 from pandapower.workers.pipedrive_sync import sync_pipedrive_contacts
-                await sync_pipedrive_contacts()
+                await sync_pipedrive_contacts(since=since)
             else:
                 logger.warning(f"Unknown entity_type in schedule: {entity_type}")
                 continue
             success = True
-            triggered.append({"entity": entity_type, "status": "completed"})
-            logger.info(f"Scheduled sync completed: {entity_type}")
+            triggered.append({"entity": entity_type, "status": "completed", "mode": mode})
+            logger.info(f"Scheduled sync completed: {entity_type} ({mode})")
         except Exception as e:
             error_msg = str(e)
             triggered.append({"entity": entity_type, "status": "failed", "error": error_msg})

@@ -6,6 +6,7 @@ Handles authentication and API requests to Pipedrive CRM
 import httpx
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
 import structlog as _structlog
@@ -141,13 +142,82 @@ class PipedriveClient:
         }
         return await self._make_request_with_retry("GET", "/v1/persons", params=params)
 
-    async def get_all_persons(self) -> list:
+    async def get_recents_paginated(
+        self, since_timestamp: str, items: str, limit: int = 500, start: int = 0
+    ) -> Dict[str, Any]:
         """
-        Fetch all persons from Pipedrive, handling pagination
+        Fetch recently-changed entities (delta) via Pipedrive's /v1/recents endpoint.
+
+        Args:
+            since_timestamp: UTC timestamp, format "YYYY-MM-DD HH:MM:SS"
+            items: entity type filter ("person", "deal", "organization")
+            limit: page size (max 500)
+            start: pagination offset
+        """
+        params = {
+            "since_timestamp": since_timestamp,
+            "items": items,
+            "limit": min(limit, 500),
+            "start": start,
+        }
+        return await self._make_request_with_retry("GET", "/v1/recents", params=params)
+
+    async def _get_all_recent(self, items: str, since: datetime) -> list:
+        """
+        Fetch ALL entities of a given type changed since `since` (delta sync).
+
+        Returns objects in the SAME shape as the corresponding full-fetch method,
+        so downstream upsert logic is identical whether the data came from a full
+        or delta sync. /v1/recents wraps each object as {item, id, data, timestamp};
+        we unwrap and return the inner `data` objects.
+        """
+        if since.tzinfo is None:
+            since = since.replace(tzinfo=timezone.utc)
+        since_str = since.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+        all_items: list = []
+        start = 0
+        limit = 500
+
+        while True:
+            response = await self.get_recents_paginated(since_str, items, limit, start)
+
+            if not response.get("success"):
+                logger.warning(f"Pipedrive /recents error: {response.get('error')}")
+                break
+
+            data = response.get("data", []) or []
+            if not data:
+                break
+
+            for entry in data:
+                if isinstance(entry, dict):
+                    obj = entry.get("data")
+                    if isinstance(obj, dict):
+                        all_items.append(obj)
+
+            additional_data = response.get("additional_data", {})
+            if not additional_data.get("pagination", {}).get("more_items_in_collection"):
+                break
+
+            start = additional_data.get("pagination", {}).get("next_start", start + limit)
+
+        logger.info(f"Fetched {len(all_items)} recently-changed {items}(s) since {since_str}")
+        return all_items
+
+    async def get_all_persons(self, since: Optional[datetime] = None) -> list:
+        """
+        Fetch persons from Pipedrive, handling pagination.
+
+        If `since` is provided, only persons changed since that timestamp are
+        fetched via /v1/recents (delta sync). Otherwise a full fetch is done.
 
         Returns:
-            List of all persons
+            List of persons
         """
+        if since is not None:
+            return await self._get_all_recent("person", since)
+
         all_persons = []
         start = 0
         limit = 500
@@ -192,13 +262,19 @@ class PipedriveClient:
         }
         return await self._make_request_with_retry("GET", "/v1/deals", params=params)
 
-    async def get_all_deals(self) -> list:
+    async def get_all_deals(self, since: Optional[datetime] = None) -> list:
         """
-        Fetch all deals from Pipedrive, handling pagination
+        Fetch deals from Pipedrive, handling pagination.
+
+        If `since` is provided, only deals changed since that timestamp are
+        fetched via /v1/recents (delta sync). Otherwise a full fetch is done.
 
         Returns:
-            List of all deals
+            List of deals
         """
+        if since is not None:
+            return await self._get_all_recent("deal", since)
+
         all_deals = []
         start = 0
         limit = 500
@@ -243,13 +319,19 @@ class PipedriveClient:
         }
         return await self._make_request_with_retry("GET", "/v1/organizations", params=params)
 
-    async def get_all_organizations(self) -> list:
+    async def get_all_organizations(self, since: Optional[datetime] = None) -> list:
         """
-        Fetch all organizations from Pipedrive, handling pagination
+        Fetch organizations from Pipedrive, handling pagination.
+
+        If `since` is provided, only organizations changed since that timestamp
+        are fetched via /v1/recents (delta sync). Otherwise a full fetch is done.
 
         Returns:
-            List of all organizations
+            List of organizations
         """
+        if since is not None:
+            return await self._get_all_recent("organization", since)
+
         all_orgs = []
         start = 0
         limit = 500

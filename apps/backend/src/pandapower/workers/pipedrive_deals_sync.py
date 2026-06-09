@@ -216,9 +216,14 @@ def _extract_location(deal: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-async def sync_pipedrive_deals() -> Dict[str, Any]:
+async def sync_pipedrive_deals(since: Optional[datetime] = None) -> Dict[str, Any]:
     """
-    Sync all deals (job positions) from Pipedrive to PandaPower jobs table.
+    Sync deals (job positions) from Pipedrive to PandaPower jobs table.
+
+    Args:
+        since: if provided, only fetch deals changed since this timestamp
+            (delta sync via /v1/recents). If None, a full sync is done.
+            Upserts are idempotent, so delta never disturbs existing rows.
 
     Returns:
         Sync summary with counts
@@ -232,9 +237,10 @@ async def sync_pipedrive_deals() -> Dict[str, Any]:
             api_domain=settings.PIPEDRIVE_API_DOMAIN,
         )
 
-        logger.info("Starting Pipedrive deals sync...")
-        deals = await pipedrive.get_all_deals()
-        logger.info(f"Fetched {len(deals)} deals from Pipedrive")
+        sync_mode = "delta" if since is not None else "full"
+        logger.info(f"Starting Pipedrive deals sync ({sync_mode})...")
+        deals = await pipedrive.get_all_deals(since=since)
+        logger.info(f"Fetched {len(deals)} deals from Pipedrive ({sync_mode})")
 
         summary = {
             "total_fetched": len(deals),

@@ -149,6 +149,68 @@ async def list_candidates(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/database")
+async def candidates_database(
+    search: Optional[str] = None,
+    language: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    supabase=Depends(get_supabase_client),
+) -> dict:
+    """Full candidates database view with search, paging and total count.
+
+    Powers the admin "כל המועמדים" table. Returns the core columns for the
+    table plus a total count for pagination.
+
+    Args:
+        search: Free-text match against name / email / phone
+        language: Filter by detected language (e.g. 'he', 'en')
+        limit: Page size
+        offset: Pagination offset
+    """
+    try:
+        columns = (
+            "id, name, candidate_number, email, phone, location, "
+            "clearance_level, key_skills, years_of_experience, "
+            "detected_language, overall_confidence_score, "
+            "skill_readiness_status, cv_file_id, "
+            "source_email_from, created_at"
+        )
+
+        def _base():
+            q = supabase.table("candidates").select(columns, count="exact").is_(
+                "deleted_at", "null"
+            )
+            if language:
+                q = q.eq("detected_language", language)
+            if search:
+                term = search.strip().replace(",", " ")
+                q = q.or_(
+                    f"name.ilike.%{term}%,"
+                    f"email.ilike.%{term}%,"
+                    f"phone.ilike.%{term}%"
+                )
+            return q
+
+        response = (
+            _base()
+            .order("created_at", desc=True)
+            .range(offset, offset + limit - 1)
+            .execute()
+        )
+
+        return {
+            "data": response.data or [],
+            "total": response.count or 0,
+            "limit": limit,
+            "offset": offset,
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to load candidates database: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/{candidate_id}")
 async def get_candidate(
     candidate_id: str, supabase=Depends(get_supabase_client)

@@ -16,6 +16,7 @@ import { CVParsingPage } from '@/pages/admin/CVParsingPage'
 import { ManualCVUploadPage } from '@/pages/admin/ManualCVUploadPage'
 import { CVUploadStatusPage } from '@/pages/admin/CVUploadStatusPage'
 import { CandidateManagementPage } from '@/pages/admin/CandidateManagementPage'
+import { CandidatesDatabasePage } from '@/pages/admin/CandidatesDatabasePage'
 import JobMatchStatusDashboard from '@/pages/admin/JobMatchStatusDashboard'
 import { SkillManagementPage } from '@/pages/admin/SkillManagementPage'
 import { SecurityClassificationPage } from '@/pages/admin/SecurityClassificationPage'
@@ -84,6 +85,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             <Route path="/admin/cv-upload" element={<ProtectedRoute><ManualCVUploadPage /></ProtectedRoute>} />
             <Route path="/admin/cv-upload-status/:batchId" element={<ProtectedRoute><CVUploadStatusPage /></ProtectedRoute>} />
             <Route path="/admin/candidates" element={<ProtectedRoute><CandidateManagementPage /></ProtectedRoute>} />
+            <Route path="/admin/candidates-database" element={<ProtectedRoute><CandidatesDatabasePage /></ProtectedRoute>} />
             <Route path="/admin/job-match-status" element={<ProtectedRoute><JobMatchStatusDashboard /></ProtectedRoute>} />
             <Route path="/admin/skills" element={<ProtectedRoute><SkillManagementPage /></ProtectedRoute>} />
             <Route path="/admin/security" element={<ProtectedRoute><SecurityClassificationPage /></ProtectedRoute>} />

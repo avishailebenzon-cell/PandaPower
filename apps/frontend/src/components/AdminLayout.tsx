@@ -103,6 +103,11 @@ export function AdminLayout() {
               📊 ניהול צינור גיוס
             </div>
             <li>
+              <a href="/admin/candidates-database" className="block px-3 py-2 rounded text-slate-300 hover:bg-slate-800 transition">
+                📇 מאגר המועמדים
+              </a>
+            </li>
+            <li>
               <a href="/admin/email-intake" className="block px-3 py-2 rounded text-slate-300 hover:bg-slate-800 transition">
                 קליטת דוא"ל וקורות חיים
               </a>
