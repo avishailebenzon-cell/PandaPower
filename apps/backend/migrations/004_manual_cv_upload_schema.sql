@@ -23,6 +23,11 @@ ALTER TABLE cv_files ADD COLUMN IF NOT EXISTS category_id UUID REFERENCES candid
 -- Values: 'manual', 'email', 'api'
 ALTER TABLE cv_files ADD COLUMN IF NOT EXISTS upload_method TEXT DEFAULT 'email';
 
+-- Add batch_id column to cv_files table if it doesn't exist
+-- Groups files uploaded together in a single manual-upload batch
+ALTER TABLE cv_files ADD COLUMN IF NOT EXISTS batch_id UUID;
+CREATE INDEX IF NOT EXISTS idx_cv_files_batch_id ON cv_files(batch_id);
+
 -- Add category_id column to candidates table if it doesn't exist
 ALTER TABLE candidates ADD COLUMN IF NOT EXISTS category_id UUID REFERENCES candidate_categories(id) ON DELETE SET NULL;
 
