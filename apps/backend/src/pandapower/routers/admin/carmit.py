@@ -537,20 +537,34 @@ async def get_kpi_summary():
     try:
         supabase = await get_supabase_client()
 
-        # Get counts for valid matches only
+        # Pending = matches still awaiting Carmit's review.
         pending_response = await supabase.table("matches").select("count", count="exact").eq(
             "current_state", "found"
         ).eq("is_valid", True).execute()
-
-        approved_response = await supabase.table("matches").select("count", count="exact").eq(
-            "current_state", "carmit_approved"
-        ).eq("is_valid", True).execute()
-
-        rejected_response = await supabase.table("matches").select("count", count="exact").eq(
-            "current_state", "carmit_rejected"
-        ).eq("is_valid", True).execute()
-
         pending_count = pending_response.count or 0
+
+        # Approved/rejected must be derived from the match's CURRENT downstream
+        # state, not from current_state == "carmit_approved": an approved match
+        # immediately moves on (carmit_approved → sent_to_tal → ...) so it no
+        # longer sits in "carmit_approved". Counting that state therefore reported
+        # ~0 approvals and a permanent 0% rate. A REJECTED match, by contrast,
+        # stays put in "carmit_rejected". This mirrors the source-of-truth set
+        # used by the /decision-history endpoint below.
+        APPROVED_STATES = [
+            "carmit_approved", "sent_to_tal", "tal_conversation",
+            "tal_accepted", "tal_approved", "tal_rejected",
+            "sent_to_elad", "elad_conversation", "elad_approved",
+            "rejected_tal", "rejected_elad", "hired", "placement_failed",
+        ]
+
+        approved_response = await supabase.table("matches").select(
+            "count", count="exact"
+        ).in_("current_state", APPROVED_STATES).eq("is_valid", True).execute()
+
+        rejected_response = await supabase.table("matches").select(
+            "count", count="exact"
+        ).eq("current_state", "carmit_rejected").eq("is_valid", True).execute()
+
         approved_count = approved_response.count or 0
         rejected_count = rejected_response.count or 0
         total_matches = pending_count + approved_count + rejected_count
@@ -674,7 +688,7 @@ async def get_carmit_decisions(
         # Page of matches, newest decision first.
         matches_response = await (
             supabase.table("matches")
-            .select("id, candidate_id, job_id, match_score, current_state, updated_at, state_updated_at")
+            .select("id, candidate_id, job_id, match_score, current_state, updated_at, state_updated_at, carmit_blocked_reason")
             .eq("is_valid", True)
             .in_("current_state", current_states)
             .order("state_updated_at", desc=True)
@@ -701,7 +715,7 @@ async def get_carmit_decisions(
         try:
             history_response = await (
                 supabase.table("match_state_history")
-                .select("match_id, to_state, created_at, details")
+                .select("match_id, to_state, created_at, details, reasoning")
                 .in_("match_id", paginated_ids)
                 .in_("to_state", ["carmit_approved", "carmit_rejected"])
                 .order("created_at", desc=True)
@@ -771,10 +785,13 @@ async def get_carmit_decisions(
             except Exception as e:
                 logger.warning(f"Failed to fetch job {job_id}: {str(e)}")
 
-            # Extract gate results and reasoning from history entry details
+            # Extract gate results and reasoning. The rich per-gate breakdown
+            # lives in the JSONB `details` column — but production's schema does
+            # not have it, so in practice we fall back to the plain `reasoning`
+            # TEXT column (always written) and matches.carmit_blocked_reason.
             try:
-                details = history_entry.get("details", {})
-                raw_gate_results = details.get("gate_results", {})
+                details = history_entry.get("details") or {}
+                raw_gate_results = details.get("gate_results", {}) if isinstance(details, dict) else {}
                 for gate_name, gate_info in raw_gate_results.items():
                     if isinstance(gate_info, dict):
                         gate_results[gate_name] = GateResult(
@@ -786,7 +803,25 @@ async def get_carmit_decisions(
                             passed=bool(gate_info),
                             reason=""
                         )
-                reasoning = details.get("decision_reasoning", "")
+                # Reasoning: prefer JSONB, then the history TEXT column, then the
+                # reason persisted on the match row.
+                reasoning = (
+                    (details.get("decision_reasoning") if isinstance(details, dict) else "")
+                    or history_entry.get("reasoning")
+                    or match.get("carmit_blocked_reason")
+                    or ""
+                )
+                # If we have no structured gate_results (the common prod case),
+                # reconstruct the failed-gate list from the reasoning text so the
+                # UI still shows WHICH gates failed. Handles both the Hebrew
+                # ("נכשל במבחנים: a, b") and legacy English ("Failed gates: a, b")
+                # formats.
+                if not gate_results and reasoning:
+                    import re as _re
+                    m_txt = _re.search(r"(?:נכשל במבחנים|Failed gates)\s*:\s*(.+)", reasoning)
+                    if m_txt:
+                        for gname in [g.strip() for g in m_txt.group(1).split(",") if g.strip()]:
+                            gate_results[gname] = GateResult(passed=False, reason="")
             except Exception as e:
                 logger.warning(f"Failed to extract gate results: {str(e)}")
 
@@ -1076,18 +1111,20 @@ async def get_agent_matches(
             try:
                 hist_resp = await (
                     supabase.table("match_state_history")
-                    .select("match_id, to_state, created_at, details")
+                    .select("match_id, to_state, created_at, details, reasoning")
                     .in_("match_id", match_ids)
                     .in_("to_state", ["carmit_rejected", "carmit_approved"])
                     .order("created_at", desc=True)
                     .execute()
                 )
+                import re as _re
                 for h in hist_resp.data or []:
                     mid = str(h.get("match_id") or "")
                     if not mid or mid in carmit_decision_by_match:
                         continue  # keep most recent (rows are date-desc)
                     details = h.get("details") or {}
-                    raw_gates = details.get("gate_results") or {}
+                    raw_gates = details.get("gate_results") if isinstance(details, dict) else None
+                    raw_gates = raw_gates or {}
                     failed_gates = []
                     if isinstance(raw_gates, dict):
                         for gname, ginfo in raw_gates.items():
@@ -1096,9 +1133,20 @@ async def get_agent_matches(
                                     "gate": gname,
                                     "reason": ginfo.get("reason") or "",
                                 })
+                    # Prod has no `details` JSONB → derive from the reasoning text.
+                    reasoning = (
+                        (details.get("decision_reasoning") if isinstance(details, dict) else "")
+                        or h.get("reasoning")
+                        or ""
+                    )
+                    if not failed_gates and reasoning:
+                        m_txt = _re.search(r"(?:נכשל במבחנים|Failed gates)\s*:\s*(.+)", reasoning)
+                        if m_txt:
+                            for gname in [g.strip() for g in m_txt.group(1).split(",") if g.strip()]:
+                                failed_gates.append({"gate": gname, "reason": ""})
                     carmit_decision_by_match[mid] = {
                         "decision": "rejected" if "rejected" in (h.get("to_state") or "") else "approved",
-                        "reasoning": details.get("decision_reasoning") or "",
+                        "reasoning": reasoning,
                         "failed_gates": failed_gates,
                         "decided_at": h.get("created_at"),
                     }
