@@ -631,7 +631,7 @@ async def get_agent_stats(
         # Fetch agent logs from the past N days
         from_date = datetime.utcnow().timestamp() - (days * 86400)
 
-        response = (
+        response = await (
             supabase.table("agent_logs")
             .select("*")
             .eq("agent_code", agent_code)
@@ -648,7 +648,7 @@ async def get_agent_stats(
         total_tokens = sum([l.get("tokens_used", 0) for l in logs])
 
         # Get matches created
-        matches_response = (
+        matches_response = await (
             supabase.table("matches")
             .select("id")
             .eq("matched_by_agent_code", agent_code)

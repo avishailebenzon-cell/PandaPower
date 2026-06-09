@@ -9,20 +9,33 @@ import { useQuery } from '@tanstack/react-query';
 import { RECRUITMENT_AGENTS, RECRUITERS } from '@/data/agents';
 
 // CRITICAL: Get API base URL from environment - MUST use VITE_API_URL (not VITE_API_BASE)
+// On Vercel VITE_API_URL points straight at the Render backend, so endpoints are
+// addressed directly (NOT through the /api rewrite). The previous code hit
+// /api/agents/... and /api/department-matches, which don't exist on the backend
+// and 404'd — leaving every KPI on its zero fallback. These now use the same
+// real endpoints the department pages use.
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
-// Fetch real agent stats from API
-const fetchAgentStats = async (agentCode: string) => {
-  const response = await fetch(`${API_BASE}/api/agents/${agentCode}/stats`);
-  if (!response.ok) throw new Error('Failed to fetch agent stats');
+// Real per-department stats: totalMatches / inProgress / approved / rejected / approvalRate
+const fetchDepartmentStats = async (agentCode: string) => {
+  const response = await fetch(`${API_BASE}/admin/departments/${agentCode}/stats`);
+  if (!response.ok) throw new Error('Failed to fetch department stats');
   return response.json();
 };
 
-// Fetch matches for an agent to show current work
-const fetchAgentMatches = async (agentCode: string) => {
-  const response = await fetch(`${API_BASE}/api/department-matches?agent=${agentCode}&limit=10`);
-  if (!response.ok) throw new Error('Failed to fetch matches');
+// Real aggregate KPIs computed from the matches table (pending, active conversations, ...)
+const fetchKpiSummary = async () => {
+  const response = await fetch(`${API_BASE}/admin/analytics/kpi-summary?period=month`);
+  if (!response.ok) throw new Error('Failed to fetch KPI summary');
   return response.json();
+};
+
+// Real system summary: active jobs (status='open'), matches in progress, etc.
+const fetchSystemSummary = async () => {
+  const response = await fetch(`${API_BASE}/admin/agent-matching/system-status`);
+  if (!response.ok) throw new Error('Failed to fetch system status');
+  const data = await response.json();
+  return data.system_summary || {};
 };
 
 interface StatCard {
@@ -50,36 +63,49 @@ export const WorkDashboard: React.FC = () => {
   // the map is safe per React rules-of-hooks.
   const agentList = Object.values(RECRUITMENT_AGENTS);
 
-  // Fetch stats for all agents
+  // Fetch real per-department stats for every agent (same endpoint the
+  // department pages use). The list is stable so calling useQuery in a map is
+  // safe per rules-of-hooks.
   const agentStatsQueries = agentList.map((agent) => ({
     agent,
     ...useQuery({
-      queryKey: ['agent-stats', agent.code],
-      queryFn: () => fetchAgentStats(agent.code),
+      queryKey: ['department-stats', agent.code],
+      queryFn: () => fetchDepartmentStats(agent.code),
       refetchInterval: 15000, // Refresh every 15 seconds
       retry: 1,
     }),
   }));
 
-  // Compute aggregated stats from real data
+  // Aggregate KPIs come from the analytics + system-status endpoints, which
+  // compute them directly from the matches/jobs tables (real, not estimated).
+  const { data: kpi } = useQuery({
+    queryKey: ['work-kpi-summary'],
+    queryFn: fetchKpiSummary,
+    refetchInterval: 15000,
+    retry: 1,
+  });
+  const { data: systemSummary } = useQuery({
+    queryKey: ['work-system-summary'],
+    queryFn: fetchSystemSummary,
+    refetchInterval: 15000,
+    retry: 1,
+  });
+
+  // Map real per-department data for the agent cards.
   const allStatsData = agentStatsQueries.map((q) => ({
     code: q.agent.code,
     data: q.data,
-    successRate: q.data?.success_rate ? Math.round(q.data.success_rate * 100) : 0,
-    matchesCreated: q.data?.matches_created || 0,
+    successRate: q.data?.approvalRate != null ? Math.round(q.data.approvalRate) : 0,
+    matchesCreated: q.data?.totalMatches || 0,
   }));
 
-  const totalPendingMatches = allStatsData.reduce((sum, item) => sum + (item.matchesCreated || 0), 0);
-  const totalSuccessfulRuns = allStatsData.reduce((sum, item) => sum + (item.data?.successful_runs || 0), 0);
+  // Real aggregate values (fall back to 0 while loading — never to fabricated estimates).
+  const totalPendingMatches = kpi?.pending_matches ?? 0;
+  const totalConversations = kpi?.active_conversations ?? 0;
+  const activeJobs = systemSummary?.total_active_jobs ?? 0;
   const avgSuccessRate = allStatsData.length > 0
     ? Math.round(allStatsData.reduce((sum, item) => sum + (item.successRate || 0), 0) / allStatsData.length)
     : 0;
-
-  // Estimate active jobs based on matches (roughly 3-4 matches per active job)
-  const estimatedActiveJobs = Math.max(Math.ceil(totalPendingMatches / 3.5), 1);
-
-  // Use successful runs as a proxy for active conversations/interactions
-  const totalConversations = totalSuccessfulRuns;
 
   return (
     <div dir="rtl" className="min-h-screen bg-gray-900 p-8">
@@ -112,7 +138,7 @@ export const WorkDashboard: React.FC = () => {
           />
           <StatCard
             label="משרות פעילות"
-            value={estimatedActiveJobs}
+            value={activeJobs}
             unit="נמצאות בגיוס"
             color="from-amber-600 to-amber-800"
           />
@@ -161,19 +187,19 @@ export const WorkDashboard: React.FC = () => {
                     {/* Agent Stats - Real Data */}
                     <div className="space-y-2">
                       <div className="flex items-center justify-between text-sm">
-                        <span className="text-gray-400">התאמות שנוצרו</span>
+                        <span className="text-gray-400">סה"כ התאמות</span>
                         <span className="text-blue-400 font-semibold">
                           {isLoading ? '...' : stats.matchesCreated}
                         </span>
                       </div>
                       <div className="flex items-center justify-between text-sm">
-                        <span className="text-gray-400">הרצות בהצלחה</span>
+                        <span className="text-gray-400">אושרו</span>
                         <span className="text-purple-400 font-semibold">
-                          {isLoading ? '...' : statsItem?.data?.successful_runs || 0}
+                          {isLoading ? '...' : statsItem?.data?.approved || 0}
                         </span>
                       </div>
                       <div className="flex items-center justify-between text-sm">
-                        <span className="text-gray-400">שיעור הצלחה</span>
+                        <span className="text-gray-400">שיעור אישור</span>
                         <span className="text-green-400 font-semibold">
                           {isLoading ? '...' : `${stats.successRate}%`}
                         </span>

@@ -219,42 +219,36 @@ export const AnalyticsDashboard: React.FC = () => {
             value={kpiData?.total_hired || 0}
             metric="מועמדים"
             color="bg-green-900"
-            trend={{ value: 12, direction: "up" }}
           />
           <KPICard
             label="שיעור הצבה"
             value={`${((kpiData?.placement_rate || 0) * 100).toFixed(1)}%`}
             metric="מסך ההתאמות"
             color="bg-blue-900"
-            trend={{ value: 5, direction: "up" }}
           />
           <KPICard
             label="ממתינים"
             value={kpiData?.pending_matches || 0}
             metric="התאמות"
             color="bg-yellow-900"
-            trend={{ value: 8, direction: "down" }}
           />
           <KPICard
             label="ימים עד הצבה"
             value={kpiData?.avg_time_to_hire_days.toFixed(1) || "0"}
             metric="בממוצע"
             color="bg-purple-900"
-            trend={{ value: 3, direction: "down" }}
           />
           <KPICard
             label="שיחות פעילות"
             value={kpiData?.active_conversations || 0}
             metric="בתהליך"
             color="bg-cyan-900"
-            trend={{ value: 15, direction: "up" }}
           />
           <KPICard
             label="כישלו"
             value={kpiData?.failed_matches || 0}
             metric="התאמות"
             color="bg-red-900"
-            trend={{ value: 2, direction: "down" }}
           />
         </div>
 
