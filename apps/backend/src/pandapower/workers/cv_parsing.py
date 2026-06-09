@@ -16,6 +16,7 @@ from pandapower.core.supabase import get_supabase_client
 from pandapower.core.config import settings
 from pandapower.integrations.anthropic_client import AnthropicClient
 from pandapower.integrations.supabase_storage import SupabaseStorageManager
+from pandapower.workers.file_extractors import extract_text
 
 import structlog as _structlog
 logger = _structlog.get_logger(__name__)
@@ -132,6 +133,51 @@ def parse_manual_cv_upload(self, cv_file_id: str, category_id: str):
 
         logger.info(f"Parsing CV file: {cv_file['original_filename']}", cv_file_id=cv_file_id)
 
+        # ------------------------------------------------------------------
+        # Pre-scan duplicate guard — save scan credits.
+        # Before spending any ConvertAPI/Claude credits, check whether this
+        # exact CV (same content hash) was already scanned successfully and
+        # linked to a candidate. If so, this candidate is already in the DB:
+        # link to the existing candidate and skip extraction + parsing.
+        #
+        # Note: candidate identity (name/email) can only be known by reading
+        # the CV, so a pre-scan check can only key off the exact file content
+        # (file_hash). Same-person CVs that differ byte-for-byte are caught
+        # post-extraction by the email-based dedup below.
+        # ------------------------------------------------------------------
+        file_hash = cv_file.get("file_hash")
+        if file_hash:
+            dup_resp = (
+                await db.table("cv_files")
+                .select("id,candidate_id")
+                .eq("file_hash", file_hash)
+                .eq("parse_status", "success")
+                .neq("id", cv_file_id)
+                .not_.is_("candidate_id", "null")
+                .limit(1)
+                .execute()
+            )
+            if dup_resp.data:
+                existing_candidate_id = dup_resp.data[0]["candidate_id"]
+                logger.info(
+                    "Skipping scan — identical CV already scanned; linking to existing candidate",
+                    cv_file_id=cv_file_id,
+                    candidate_id=existing_candidate_id,
+                    duplicate_of=dup_resp.data[0]["id"],
+                )
+                await db.table("cv_files").update({
+                    "parse_status": "success",
+                    "parse_completed_at": datetime.utcnow().isoformat(),
+                    "candidate_id": existing_candidate_id,
+                    "parse_error": None,
+                    "extraction_method": "skipped_duplicate",
+                }).eq("id", cv_file_id).execute()
+                return {
+                    "cv_file_id": cv_file_id,
+                    "candidate_id": existing_candidate_id,
+                    "status": "skipped_duplicate",
+                }
+
         # Update status to parsing
         await db.table("cv_files").update({
             "parse_status": "parsing",
@@ -139,10 +185,19 @@ def parse_manual_cv_upload(self, cv_file_id: str, category_id: str):
         }).eq("id", cv_file_id).execute()
 
         # Resolve a readable local path (local /tmp fast-path, else download
-        # the durable Storage copy) and extract text from it.
+        # the durable Storage copy), then extract text through the shared
+        # orchestrator so manual uploads get ConvertAPI (managed OCR) too —
+        # same path as email-ingested CVs, with local extractors as fallback.
         file_path = await _ensure_local_file(db, cv_file)
-        raw_text = extract_text_from_file(file_path)
-        logger.info(f"Extracted {len(raw_text)} characters from CV", cv_file_id=cv_file_id)
+        with open(file_path, "rb") as _f:
+            file_content = _f.read()
+        raw_text, extraction_method = await extract_text(
+            cv_file["original_filename"], file_content
+        )
+        logger.info(
+            f"Extracted {len(raw_text)} characters from CV via {extraction_method}",
+            cv_file_id=cv_file_id,
+        )
 
         # Parse with Claude
         start_time = time.time()
@@ -239,6 +294,7 @@ def parse_manual_cv_upload(self, cv_file_id: str, category_id: str):
             "detected_language": extraction.get("detected_language"),
             "candidate_id": candidate_id,
             "extracted_fields": extraction.get("extracted_fields"),
+            "extraction_method": extraction_method,
         }).eq("id", cv_file_id).execute()
 
         logger.info(
