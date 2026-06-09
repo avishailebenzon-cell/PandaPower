@@ -28,6 +28,10 @@ ALTER TABLE cv_files ADD COLUMN IF NOT EXISTS upload_method TEXT DEFAULT 'email'
 ALTER TABLE cv_files ADD COLUMN IF NOT EXISTS batch_id UUID;
 CREATE INDEX IF NOT EXISTS idx_cv_files_batch_id ON cv_files(batch_id);
 
+-- Manual-upload-only columns not used by the email ingest pipeline
+ALTER TABLE cv_files ADD COLUMN IF NOT EXISTS file_path TEXT;
+ALTER TABLE cv_files ADD COLUMN IF NOT EXISTS file_extension TEXT;
+
 -- Add category_id column to candidates table if it doesn't exist
 ALTER TABLE candidates ADD COLUMN IF NOT EXISTS category_id UUID REFERENCES candidate_categories(id) ON DELETE SET NULL;
 
