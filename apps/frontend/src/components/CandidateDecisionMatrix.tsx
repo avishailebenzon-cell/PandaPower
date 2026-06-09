@@ -186,8 +186,7 @@ export function CandidateDecisionMatrix({ showTitle = true, agentCode }: Props) 
                 <th className="px-4 py-3 font-semibold text-gray-200 text-center">📝</th>
               </tr>
             </thead>
-            <tbody>
-              {matches.map((match: CandidateMatch, idx: number) => {
+            {matches.map((match: CandidateMatch, idx: number) => {
                 const isExpanded = expandedRows.has(match.id);
                 const agentName = AGENT_NAMES[match.matchedByAgentCode] || match.matchedByAgentCode;
                 const stateColor = STATE_COLORS[match.currentState] || "bg-gray-700";
@@ -260,7 +259,6 @@ export function CandidateDecisionMatrix({ showTitle = true, agentCode }: Props) 
                   </tbody>
                 );
               })}
-            </tbody>
           </table>
         </div>
       )}

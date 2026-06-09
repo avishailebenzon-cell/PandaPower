@@ -636,57 +636,90 @@ async def get_carmit_decisions(
     try:
         supabase = await get_supabase_client()
 
-        # Query match_state_history to find all matches that transitioned TO carmit_approved/rejected
-        history_states = []
+        # SOURCE OF TRUTH = the matches table, NOT match_state_history.
+        # Carmit's ruling lives in matches.current_state; history rows are only
+        # used below to enrich the row with reasoning/gates. Driving off history
+        # silently hid every match whose transition was never logged (e.g. the
+        # 82 carmit_rejected matches that the agent-matches tab DOES show).
+        #
+        # A REJECTED match stays in current_state == "carmit_rejected".
+        # An APPROVED match has moved on — it sits in carmit_approved or any
+        # downstream state, so we treat all of those as "approved".
+        APPROVED_STATES = [
+            "carmit_approved", "sent_to_tal", "tal_conversation",
+            "tal_accepted", "tal_approved", "tal_rejected",
+            "sent_to_elad", "elad_conversation", "elad_approved",
+            "rejected_tal", "rejected_elad", "hired", "placement_failed",
+        ]
+        REJECTED_STATES = ["carmit_rejected"]
+
+        current_states: list[str] = []
         if decision_filter in ["all", "approved"]:
-            history_states.append("carmit_approved")
+            current_states += APPROVED_STATES
         if decision_filter in ["all", "rejected"]:
-            history_states.append("carmit_rejected")
+            current_states += REJECTED_STATES
+        if not current_states:
+            current_states = APPROVED_STATES + REJECTED_STATES
 
-        if not history_states:
-            history_states = ["carmit_approved", "carmit_rejected"]
+        # Total count (for pagination) of all matches Carmit decided on.
+        count_resp = await (
+            supabase.table("matches")
+            .select("id", count="exact")
+            .eq("is_valid", True)
+            .in_("current_state", current_states)
+            .execute()
+        )
+        total = getattr(count_resp, "count", None) or len(count_resp.data or [])
 
-        # Get ALL matches that Carmit decided on (from history)
-        history_query = supabase.table("match_state_history").select(
-            "match_id, to_state, created_at, details"
-        ).in_("to_state", history_states).order("created_at", desc=True)
+        # Page of matches, newest decision first.
+        matches_response = await (
+            supabase.table("matches")
+            .select("id, candidate_id, job_id, match_score, current_state, updated_at, state_updated_at")
+            .eq("is_valid", True)
+            .in_("current_state", current_states)
+            .order("state_updated_at", desc=True)
+            .order("updated_at", desc=True)
+            .range(offset, offset + limit - 1)
+            .execute()
+        )
+        page_matches = matches_response.data or []
+        paginated_ids = [m["id"] for m in page_matches]
 
-        history_response = await history_query.execute()
-        history_entries = history_response.data or []
-
-        # Deduplicate by match_id (keep most recent decision for each match)
-        seen_matches = {}
-        for entry in history_entries:
-            mid = entry.get("match_id")
-            if mid not in seen_matches:
-                seen_matches[mid] = entry
-
-        # Now fetch current state for each match from the matches table
-        match_ids = list(seen_matches.keys())
-        if not match_ids:
+        if not paginated_ids:
             return {
                 "decisions": [],
-                "total": 0,
+                "total": total,
                 "offset": offset,
                 "limit": limit,
                 "filter": decision_filter,
                 "timestamp": datetime.utcnow().isoformat(),
             }
 
-        # Apply pagination to match_ids
-        paginated_ids = match_ids[offset : offset + limit]
+        # Enrich (optional) with the Carmit transition from history — gives us
+        # decision_reasoning + gate_results + the exact decision timestamp.
+        seen_matches: dict[str, dict] = {}
+        try:
+            history_response = await (
+                supabase.table("match_state_history")
+                .select("match_id, to_state, created_at, details")
+                .in_("match_id", paginated_ids)
+                .in_("to_state", ["carmit_approved", "carmit_rejected"])
+                .order("created_at", desc=True)
+                .execute()
+            )
+            for entry in history_response.data or []:
+                mid = entry.get("match_id")
+                if mid and mid not in seen_matches:
+                    seen_matches[mid] = entry
+        except Exception as hist_err:
+            logger.warning(f"decisions: history enrichment failed: {hist_err}")
 
-        # Fetch current match data
-        matches_response = await supabase.table("matches").select(
-            "id, candidate_id, job_id, match_score, current_state, updated_at, state_updated_at"
-        ).in_("id", paginated_ids).execute()
-
-        matches_by_id = {m["id"]: m for m in (matches_response.data or [])}
+        matches_by_id = {m["id"]: m for m in page_matches}
 
         # Build decisions with current state and explanation
         decisions = []
         for match_id in paginated_ids:
-            history_entry = seen_matches.get(match_id)
+            history_entry = seen_matches.get(match_id) or {}
             match = matches_by_id.get(match_id)
             if not match:
                 continue
@@ -698,9 +731,14 @@ async def get_carmit_decisions(
             current_state = match.get("current_state", "")
             updated_at = match.get("updated_at", "")
 
-            # Decision from history
-            decision_made = history_entry.get("to_state", "").replace("carmit_", "")
-            decision_timestamp = history_entry.get("created_at", "")
+            # Decision is derived from current_state (source of truth); fall back
+            # to history only for the precise decision timestamp.
+            decision_made = "rejected" if current_state in REJECTED_STATES else "approved"
+            decision_timestamp = (
+                history_entry.get("created_at")
+                or match.get("state_updated_at")
+                or updated_at
+            )
 
             candidate_name = "Unknown"
             job_title = "Unknown"
@@ -800,7 +838,7 @@ async def get_carmit_decisions(
 
         return {
             "decisions": decisions,
-            "total": len(match_ids),
+            "total": total,
             "offset": offset,
             "limit": limit,
             "filter": decision_filter,
