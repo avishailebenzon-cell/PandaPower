@@ -3,7 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { env } from "@/lib/env";
 
 interface UploadFile {
-  filename: string;
+  filename?: string;
+  original_filename?: string;
   parse_status: string;
   candidate_id?: string;
   created_at: string;
@@ -167,7 +168,7 @@ export function CVUploadStatusPage() {
                       className="border-b border-gray-700 hover:bg-gray-700/30 transition-colors"
                     >
                       <td className="py-4 px-4 font-mono text-xs text-gray-300 truncate">
-                        {file.filename}
+                        {file.original_filename || file.filename || "—"}
                       </td>
                       <td className="py-4 px-4">
                         <span
