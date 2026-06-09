@@ -30,12 +30,14 @@ const fetchKpiSummary = async () => {
   return response.json();
 };
 
-// Real system summary: active jobs (status='open'), matches in progress, etc.
-const fetchSystemSummary = async () => {
-  const response = await fetch(`${API_BASE}/admin/agent-matching/system-status`);
-  if (!response.ok) throw new Error('Failed to fetch system status');
+// Real active-jobs count (status='open'). Uses the lightweight paginated jobs
+// endpoint (limit=1, read total) instead of the heavy /system-status endpoint,
+// which periodically 500s on Render and left this card stuck on 0.
+const fetchActiveJobsCount = async (): Promise<number> => {
+  const response = await fetch(`${API_BASE}/admin/pipedrive/data/jobs?status=open&limit=1`);
+  if (!response.ok) throw new Error('Failed to fetch active jobs count');
   const data = await response.json();
-  return data.system_summary || {};
+  return data.total ?? 0;
 };
 
 interface StatCard {
@@ -84,11 +86,11 @@ export const WorkDashboard: React.FC = () => {
     refetchInterval: 15000,
     retry: 1,
   });
-  const { data: systemSummary } = useQuery({
-    queryKey: ['work-system-summary'],
-    queryFn: fetchSystemSummary,
+  const { data: activeJobs = 0 } = useQuery({
+    queryKey: ['work-active-jobs'],
+    queryFn: fetchActiveJobsCount,
     refetchInterval: 15000,
-    retry: 1,
+    retry: 2,
   });
 
   // Map real per-department data for the agent cards.
@@ -102,7 +104,6 @@ export const WorkDashboard: React.FC = () => {
   // Real aggregate values (fall back to 0 while loading — never to fabricated estimates).
   const totalPendingMatches = kpi?.pending_matches ?? 0;
   const totalConversations = kpi?.active_conversations ?? 0;
-  const activeJobs = systemSummary?.total_active_jobs ?? 0;
   const avgSuccessRate = allStatsData.length > 0
     ? Math.round(allStatsData.reduce((sum, item) => sum + (item.successRate || 0), 0) / allStatsData.length)
     : 0;
