@@ -164,7 +164,7 @@ export function AdminLayout() {
             </li>
             <li>
               <a href="/admin/whatsapp-agents" className="block px-3 py-2 rounded text-slate-300 hover:bg-slate-800 transition">
-                📞 הגדרות WhatsApp (טל / אלעד / פנדי)
+                📞 הגדרות WhatsApp
               </a>
             </li>
 
