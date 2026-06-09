@@ -328,18 +328,21 @@ class CandidateCreationWorker:
                 logger.debug(f"Phone lookup failed for {phone}: {e}")
 
             # Fall back to digits-only comparison: '+972-54-220-6805' should match
-            # '+972542206805'. Pull a small batch and compare client-side.
+            # '+972542206805' AND '+972-52-950-7574' (separators that split the
+            # local number). The ilike prefilter therefore uses only the LAST 4
+            # digits — these stay contiguous in every common format — then we
+            # compare the full normalized numbers in Python via phones_match().
             try:
-                digits = "".join(ch for ch in phone if ch.isdigit())
-                if len(digits) >= 7:
-                    # Last 7 digits are typically the local number
-                    tail = digits[-7:]
+                from pandapower.core.phone import phones_match, to_international
+
+                intl = to_international(phone)
+                if intl and len(intl) >= 7:
+                    tail4 = intl[-4:]
                     r = await self.supabase.table("candidates").select("*").ilike(
-                        "phone", f"%{tail}%"
-                    ).is_("deleted_at", "null").limit(5).execute()
+                        "phone", f"%{tail4}%"
+                    ).is_("deleted_at", "null").limit(50).execute()
                     for row in r.data or []:
-                        row_digits = "".join(ch for ch in (row.get("phone") or "") if ch.isdigit())
-                        if row_digits.endswith(tail):
+                        if phones_match(phone, row.get("phone")):
                             return row
             except Exception as e:
                 logger.debug(f"Fuzzy phone lookup failed for {phone}: {e}")

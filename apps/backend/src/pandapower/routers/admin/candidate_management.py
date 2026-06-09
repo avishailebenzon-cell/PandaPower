@@ -149,52 +149,87 @@ async def list_candidates(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Columns the candidates database table is allowed to sort by. Restricting
+# this prevents arbitrary/injected column names from reaching the query.
+_DB_SORTABLE = {
+    "name",
+    "email",
+    "phone",
+    "location",
+    "clearance_level",
+    "years_of_experience",
+    "detected_language",
+    "overall_confidence_score",
+    "skill_readiness_status",
+    "created_at",
+}
+
+_DB_COLUMNS = (
+    "id, name, email, phone, location, "
+    "clearance_level, key_skills, years_of_experience, "
+    "detected_language, overall_confidence_score, "
+    "skill_readiness_status, cv_file_id, "
+    "source_email_from, created_at"
+)
+
+
+def _apply_db_filters(q, *, search, language, clearance, location):
+    """Apply the shared candidates-database filters to a query builder."""
+    if language:
+        q = q.eq("detected_language", language)
+    if clearance:
+        q = q.eq("clearance_level", clearance)
+    if location:
+        q = q.eq("location", location)
+    if search:
+        term = search.strip().replace(",", " ")
+        q = q.or_(
+            f"name.ilike.%{term}%,"
+            f"email.ilike.%{term}%,"
+            f"phone.ilike.%{term}%"
+        )
+    return q
+
+
 @router.get("/database")
 async def candidates_database(
     search: Optional[str] = None,
     language: Optional[str] = None,
+    clearance: Optional[str] = None,
+    location: Optional[str] = None,
+    sort: str = "created_at",
+    order: str = "desc",
     limit: int = 50,
     offset: int = 0,
     supabase=Depends(get_supabase_client),
 ) -> dict:
-    """Full candidates database view with search, paging and total count.
+    """Full candidates database view with search, sort, filter, paging + count.
 
-    Powers the admin "כל המועמדים" table. Returns the core columns for the
-    table plus a total count for pagination.
+    Powers the admin "מאגר המועמדים" table.
 
     Args:
         search: Free-text match against name / email / phone
         language: Filter by detected language (e.g. 'he', 'en')
+        clearance: Filter by exact clearance_level
+        location: Filter by exact location
+        sort: Column to sort by (whitelisted in _DB_SORTABLE)
+        order: 'asc' or 'desc'
         limit: Page size
         offset: Pagination offset
     """
     try:
-        columns = (
-            "id, name, email, phone, location, "
-            "clearance_level, key_skills, years_of_experience, "
-            "detected_language, overall_confidence_score, "
-            "skill_readiness_status, cv_file_id, "
-            "source_email_from, created_at"
+        sort_col = sort if sort in _DB_SORTABLE else "created_at"
+        descending = order.lower() != "asc"
+
+        q = supabase.table("candidates").select(_DB_COLUMNS, count="exact").is_(
+            "deleted_at", "null"
+        )
+        q = _apply_db_filters(
+            q, search=search, language=language, clearance=clearance, location=location
         )
 
-        def _base():
-            q = supabase.table("candidates").select(columns, count="exact").is_(
-                "deleted_at", "null"
-            )
-            if language:
-                q = q.eq("detected_language", language)
-            if search:
-                term = search.strip().replace(",", " ")
-                q = q.or_(
-                    f"name.ilike.%{term}%,"
-                    f"email.ilike.%{term}%,"
-                    f"phone.ilike.%{term}%"
-                )
-            return q
-
         response = await (
-            _base()
-            .order("created_at", desc=True)
+            q.order(sort_col, desc=descending)
             .range(offset, offset + limit - 1)
             .execute()
         )
@@ -204,10 +239,116 @@ async def candidates_database(
             "total": response.count or 0,
             "limit": limit,
             "offset": offset,
+            "sort": sort_col,
+            "order": "desc" if descending else "asc",
         }
 
     except Exception as e:
         logger.error(f"Failed to load candidates database: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/database/groups")
+async def candidates_database_groups(
+    by: str = "clearance_level",
+    search: Optional[str] = None,
+    language: Optional[str] = None,
+    supabase=Depends(get_supabase_client),
+) -> dict:
+    """Return candidate counts grouped by clearance_level or location.
+
+    Powers the "קבץ לפי" view: the UI shows one collapsible header per group
+    with its count, then lazily loads each group's rows via /database with the
+    matching filter.
+
+    Args:
+        by: 'clearance_level' or 'location'
+        search/language: optional filters applied before grouping
+    """
+    try:
+        field = by if by in ("clearance_level", "location") else "clearance_level"
+
+        q = supabase.table("candidates").select(field).is_("deleted_at", "null")
+        q = _apply_db_filters(
+            q, search=search, language=language, clearance=None, location=None
+        )
+        # Pull enough rows to cover the whole table; grouping is done in Python.
+        response = await q.limit(100000).execute()
+
+        counts: dict[str, int] = {}
+        for row in response.data or []:
+            key = row.get(field)
+            key = key if (key is not None and str(key).strip() != "") else "—"
+            counts[key] = counts.get(key, 0) + 1
+
+        groups = [
+            {"key": k, "count": v}
+            for k, v in sorted(counts.items(), key=lambda x: (-x[1], str(x[0])))
+        ]
+        return {"by": field, "groups": groups, "total_groups": len(groups)}
+
+    except Exception as e:
+        logger.error(f"Failed to group candidates database: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/database/duplicates")
+async def candidates_duplicates(
+    supabase=Depends(get_supabase_client),
+) -> dict:
+    """Detect potential duplicate candidates by normalized email / phone.
+
+    A safeguard view for the "no duplicates" guarantee. Two candidates are
+    flagged when they share the same lowercased email OR the same normalized
+    phone (last 9 digits — ignores formatting like +972 / dashes / spaces).
+    Platform/sender mailboxes (info@jobnet…) are excluded from the email key
+    because thousands of CVs legitimately share them.
+    """
+    try:
+        from pandapower.core.phone import to_international
+        from pandapower.workers.sender_blocklist import is_likely_candidate_email
+
+        response = await supabase.table("candidates").select(
+            "id, name, email, phone, location, clearance_level, "
+            "cv_file_id, created_at"
+        ).is_("deleted_at", "null").limit(100000).execute()
+
+        rows = response.data or []
+        by_email: dict[str, list] = {}
+        by_phone: dict[str, list] = {}
+
+        for r in rows:
+            email = (r.get("email") or "").strip().lower()
+            if email and is_likely_candidate_email(email):
+                by_email.setdefault(email, []).append(r)
+
+            intl = to_international(r.get("phone"))
+            if intl and len(intl) >= 9:
+                by_phone.setdefault(intl[-9:], []).append(r)
+
+        def _groups(d: dict, key_name: str) -> list:
+            out = []
+            for k, members in d.items():
+                if len(members) > 1:
+                    out.append({"match_type": key_name, "value": k, "candidates": members})
+            return out
+
+        email_groups = _groups(by_email, "email")
+        phone_groups = _groups(by_phone, "phone")
+
+        # A phone group whose members are already all in an email group is a
+        # duplicate flag; we still surface both so reviewers see the reason.
+        redundant = sum(len(g["candidates"]) - 1 for g in email_groups + phone_groups)
+
+        return {
+            "total_candidates": len(rows),
+            "duplicate_groups": email_groups + phone_groups,
+            "group_count": len(email_groups) + len(phone_groups),
+            "redundant_records": redundant,
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to detect duplicate candidates: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
