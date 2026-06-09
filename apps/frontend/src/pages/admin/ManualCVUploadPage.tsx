@@ -119,7 +119,7 @@ export function ManualCVUploadPage() {
               📤 העלאה ידנית של קורות חיים
             </h1>
             <p className="text-indigo-300">
-              בחר סווג מועמד והעלה קורות חיים בודדות או תיקייה שלמה
+              בחר סווג בטחוני והעלה קורות חיים בודדות או תיקייה שלמה
             </p>
           </div>
         </div>
@@ -127,7 +127,7 @@ export function ManualCVUploadPage() {
         {/* Category Selection */}
         <div className="bg-gray-800 rounded-lg border border-gray-700 p-6 mb-8">
           <h2 className="text-xl font-semibold text-white mb-4">
-            1️⃣ בחר סווג מועמד
+            1️⃣ בחר סווג בטחוני
           </h2>
 
           {categories.length === 0 ? (
