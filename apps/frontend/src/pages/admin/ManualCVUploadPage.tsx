@@ -10,10 +10,7 @@ interface CandidateCategory {
   level: number;
 }
 
-interface UploadFile {
-  name: string;
-  size: number;
-}
+type UploadFile = File;
 
 export function ManualCVUploadPage() {
   const [selectedCategory, setSelectedCategory] = useState<string>("");
@@ -39,10 +36,7 @@ export function ManualCVUploadPage() {
 
       const formData = new FormData();
       formData.append("category_id", selectedCategory);
-
-      // Note: In real implementation, we'd need actual File objects
-      // For now, we're passing file info and creating the form data properly
-      // This would need to be adjusted for actual file uploads
+      filesToUpload.forEach(file => formData.append("files", file, file.name));
 
       const response = await fetch(`${env.API_BASE_URL}/admin/cv/upload`, {
         method: "POST",
@@ -50,7 +44,14 @@ export function ManualCVUploadPage() {
       });
 
       if (!response.ok) {
-        throw new Error("Upload failed");
+        let detail = "Upload failed";
+        try {
+          const err = await response.json();
+          if (err?.detail) detail = err.detail;
+        } catch {
+          /* ignore non-JSON error bodies */
+        }
+        throw new Error(detail);
       }
 
       return response.json();
@@ -85,20 +86,12 @@ export function ManualCVUploadPage() {
         file.name.endsWith(".doc")
     );
 
-    const uploadFiles: UploadFile[] = newFiles.map(f => ({
-      name: f.name,
-      size: f.size,
-    }));
-
-    setFiles(prev => [...prev, ...uploadFiles]);
+    setFiles(prev => [...prev, ...newFiles]);
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
-      const newFiles = Array.from(e.target.files).map(f => ({
-        name: f.name,
-        size: f.size,
-      }));
+      const newFiles = Array.from(e.target.files);
       setFiles(prev => [...prev, ...newFiles]);
     }
   };
