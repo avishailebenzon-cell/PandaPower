@@ -132,10 +132,26 @@ class ConvertApiClient:
         template. ConvertAPI's html/to/pdf runs a Chromium engine, so RTL and
         Hebrew web fonts render correctly with no local system libraries. Raises
         on failure so the caller can fall back / surface the error.
+
+        We pin the output to A4 with zero PDF margins and an A4-width browser
+        viewport (794px @ 96dpi) — otherwise Chromium renders against a very wide
+        default viewport and the (RTL) content collapses into a narrow, clipped
+        column. Page padding is handled in the HTML/CSS instead.
         """
         client = await self._get_client()
         url = f"{CONVERTAPI_BASE}/convert/html/to/pdf"
-        params = {"Secret": self.secret, "StoreFile": "false"}
+        params = {
+            "Secret": self.secret,
+            "StoreFile": "false",
+            "PageSize": "a4",
+            "PageOrientation": "portrait",
+            "MarginTop": "0",
+            "MarginBottom": "0",
+            "MarginLeft": "0",
+            "MarginRight": "0",
+            "ViewportWidth": "794",
+            "ConversionDelay": "1",
+        }
         files = {"File": ("cv.html", html.encode("utf-8"), "text/html")}
 
         last_err: Optional[Exception] = None

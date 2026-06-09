@@ -236,9 +236,11 @@ def build_cv_html(cand_row: dict, iron_number: str, branding: dict) -> str:
 <meta charset="utf-8" />
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700&display=swap');
+  @page {{ size: A4; margin: 0; }}
   * {{ box-sizing: border-box; }}
-  body {{ font-family: 'Heebo', Arial, sans-serif; color: #1f2937; margin: 0; padding: 0; direction: rtl; }}
-  .page {{ padding: 32px 40px; }}
+  html, body {{ width: 100%; margin: 0; padding: 0; }}
+  body {{ font-family: 'Heebo', Arial, sans-serif; color: #1f2937; direction: rtl; }}
+  .page {{ width: 100%; padding: 40px 44px; overflow: hidden; }}
   header.brand {{ display: flex; align-items: center; justify-content: space-between;
     border-bottom: 3px solid #4f46e5; padding-bottom: 16px; margin-bottom: 20px; }}
   .logo {{ max-height: 56px; }}
@@ -262,7 +264,7 @@ def build_cv_html(cand_row: dict, iron_number: str, branding: dict) -> str:
   p {{ font-size: 13px; line-height: 1.5; margin: 0; color: #374151; }}
   .chips {{ display: flex; flex-wrap: wrap; gap: 6px; }}
   .chip {{ background: #eef2ff; color: #3730a3; font-size: 12px;
-    padding: 3px 10px; border-radius: 12px; }}
+    padding: 3px 10px; border-radius: 12px; unicode-bidi: plaintext; }}
   footer {{ margin-top: 28px; border-top: 1px solid #e5e7eb; padding-top: 10px;
     font-size: 10.5px; color: #9ca3af; text-align: center; }}
 </style>
