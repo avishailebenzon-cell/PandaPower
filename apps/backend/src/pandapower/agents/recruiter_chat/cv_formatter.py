@@ -344,7 +344,8 @@ async def generate_formatted_cv(supabase, match_id: str, *, force: bool = False)
 
     # Upload (overwrite-safe: stable path per candidate; upsert).
     safe_iron = (iron_number or str(match_id)).replace("/", "_")
-    storage_path = f"formatted/{candidate_id}/panda_cv_{safe_iron}.pdf"
+    folder = candidate_id or match_id  # test matches may lack a candidate
+    storage_path = f"formatted/{folder}/panda_cv_{safe_iron}.pdf"
     try:
         from pandapower.integrations.supabase_storage import SupabaseStorageManager
         storage = SupabaseStorageManager(supabase)
