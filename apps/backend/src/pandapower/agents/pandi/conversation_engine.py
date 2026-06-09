@@ -150,6 +150,11 @@ class ConversationEngine:
         )
         logger.info("conversation_mode", mode=mode)
 
+        # 5b. Build ground-truth client status so Pandi doesn't restart Phase 1
+        # (identification) every turn — the root cause of "I haven't registered
+        # you yet" appearing after the client was already created.
+        client_status = await self._build_client_status(pandi_client_id, supabase)
+
         # 6. Call LLM with tools
         tools_list = get_pandi_tools()
         # Map our storage directions to Anthropic chat roles. inbound (from the
@@ -175,6 +180,7 @@ class ConversationEngine:
                 tools=tools_list,
                 job_context=job_context,
                 model="claude-opus-4-7",
+                client_status=client_status,
             )
         except Exception as e:
             logger.error("claude_call_failed", error=str(e))
@@ -318,6 +324,57 @@ Respond with only: YES or NO"""
             ).execute()
         except Exception as e:
             logger.warning("increment_quota_usage unavailable — skipping", error=str(e))
+
+    async def _build_client_status(self, pandi_client_id: UUID, supabase) -> str:
+        """Describe whether this client is already identified/registered, with
+        their known details, so the LLM never re-runs Phase 1 mid-conversation.
+
+        Best-effort: any failure returns an empty hint rather than breaking the
+        reply."""
+        try:
+            res = await supabase.table("pandi_clients").select(
+                "intake_status, contact_id, intake_collected_data, phone"
+            ).eq("id", str(pandi_client_id)).limit(1).execute()
+            client = res.data[0] if res.data else {}
+        except Exception:
+            client = {}
+
+        contact_id = client.get("contact_id")
+        intake = (client.get("intake_status") or "").lower()
+        collected = client.get("intake_collected_data") or {}
+
+        name = email = company = None
+        if contact_id:
+            try:
+                cres = await supabase.table("contacts").select(
+                    "full_name, email"
+                ).eq("id", str(contact_id)).limit(1).execute()
+                if cres.data:
+                    name = cres.data[0].get("full_name")
+                    email = cres.data[0].get("email")
+            except Exception:
+                pass
+        name = name or collected.get("name")
+        email = email or collected.get("email")
+        company = collected.get("company")
+
+        # Registered if we have a contact link, OR intake already completed.
+        registered = bool(contact_id) or intake in ("completed", "active", "identified")
+
+        lines = []
+        if registered:
+            lines.append("הלקוח כבר זוהה ונרשם במערכת — שלב הזיהוי (Phase 1) הושלם.")
+            lines.append("אל תציגי את עצמך מחדש, אל תבקשי שוב שם/מייל/חברה, ואל תקראי שוב ל-identify_client/create_client.")
+            lines.append("המשיכי ישירות לשיחה על המשרה.")
+        else:
+            lines.append("הלקוח עדיין לא נרשם — זהו לקוח חדש שצריך לעבור את שלב הזיהוי (Phase 1).")
+        if name:
+            lines.append(f"שם הלקוח: {name}")
+        if email:
+            lines.append(f"מייל: {email}")
+        if company:
+            lines.append(f"חברה: {company}")
+        return "\n".join(lines)
 
     async def _load_conversation(self, conversation_id: UUID, supabase=None) -> dict:
         """Load conversation record."""
@@ -519,6 +576,7 @@ Focus on: what the client is looking for (job type, requirements, preferences)."
         tools: list,
         job_context: dict,
         model: str = "claude-opus-4-7",
+        client_status: str = "",
     ) -> dict:
         """
         Call Claude API with tools and dynamic context guidance.
@@ -540,7 +598,8 @@ Focus on: what the client is looking for (job type, requirements, preferences)."
         except Exception:
             company_extra = ""
         system_prompt = get_system_prompt(
-            "1.0", context_guidance=context_guidance, company_extra=company_extra
+            "1.0", context_guidance=context_guidance, company_extra=company_extra,
+            client_status=client_status,
         )
 
         response = self.anthropic.messages.create(
