@@ -25,6 +25,7 @@ import {
   fetchRecruiterMatches,
   fetchRecruiterStatus,
   performMatchAction,
+  setMatchFavorite,
   fetchMatchConversation,
   fetchMatchDetail,
   type Match,
@@ -119,6 +120,7 @@ export function RecruiterMatchesPanel({
   const [showActionMenu, setShowActionMenu] = useState<string | null>(null);
   const [detailMatchId, setDetailMatchId] = useState<string | null>(null);
   const [candidateDetailId, setCandidateDetailId] = useState<string | null>(null);
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
 
   const queryClient = useQueryClient();
   const tabParam = `${recruiter}-${subTab}`; // tal-queue, elad-history, etc.
@@ -127,8 +129,8 @@ export function RecruiterMatchesPanel({
   const counterparty = recruiter === "carmit" ? "התאמה" : recruiter === "tal" ? "מועמד" : "לקוח";
 
   const matchesQuery = useQuery({
-    queryKey: ["recruiter-matches", tabParam],
-    queryFn: () => fetchRecruiterMatches(tabParam, 100, 1),
+    queryKey: ["recruiter-matches", tabParam, favoritesOnly],
+    queryFn: () => fetchRecruiterMatches(tabParam, 100, 1, favoritesOnly),
     refetchInterval: 20000,
   });
 
@@ -158,6 +160,14 @@ export function RecruiterMatchesPanel({
       queryClient.invalidateQueries({ queryKey: ["recruiter-matches"] });
       queryClient.invalidateQueries({ queryKey: ["recruiter-status"] });
       setShowActionMenu(null);
+    },
+  });
+
+  const favoriteMutation = useMutation({
+    mutationFn: ({ matchId, isStarred }: { matchId: string; isStarred: boolean }) =>
+      setMatchFavorite(matchId, isStarred),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["recruiter-matches"] });
     },
   });
 
@@ -233,14 +243,31 @@ export function RecruiterMatchesPanel({
       className="border-b border-gray-700 hover:bg-gray-750 transition"
     >
       <td className="px-4 py-3">
-        <button
-          onClick={() => m.candidateId && setCandidateDetailId(m.candidateId)}
-          disabled={!m.candidateId}
-          className="text-white font-semibold hover:text-indigo-300 hover:underline transition disabled:cursor-default disabled:hover:text-white disabled:no-underline text-right"
-          title={m.candidateId ? "הצג תקציר קורות חיים" : undefined}
-        >
-          {m.candidateName}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() =>
+              favoriteMutation.mutate({ matchId: m.id, isStarred: !m.isStarred })
+            }
+            disabled={favoriteMutation.isPending}
+            className={`text-lg leading-none transition disabled:opacity-50 ${
+              m.isStarred
+                ? "text-orange-400 hover:text-orange-300"
+                : "text-gray-600 hover:text-orange-300"
+            }`}
+            title={m.isStarred ? "הסר ממועדפים" : "סמן כמועדף"}
+            aria-label={m.isStarred ? "הסר ממועדפים" : "סמן כמועדף"}
+          >
+            {m.isStarred ? "★" : "☆"}
+          </button>
+          <button
+            onClick={() => m.candidateId && setCandidateDetailId(m.candidateId)}
+            disabled={!m.candidateId}
+            className="text-white font-semibold hover:text-indigo-300 hover:underline transition disabled:cursor-default disabled:hover:text-white disabled:no-underline text-right"
+            title={m.candidateId ? "הצג תקציר קורות חיים" : undefined}
+          >
+            {m.candidateName}
+          </button>
+        </div>
       </td>
       <td className="px-4 py-3 text-gray-300">
         <div className="flex flex-col gap-1.5">
@@ -360,6 +387,22 @@ export function RecruiterMatchesPanel({
           />
         </div>
       )}
+
+      {/* Favorites filter — show only starred matches */}
+      <div className="flex items-center">
+        <button
+          onClick={() => setFavoritesOnly((v) => !v)}
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-semibold transition border ${
+            favoritesOnly
+              ? "bg-orange-900/40 border-orange-600 text-orange-200"
+              : "bg-gray-800 border-gray-700 text-gray-300 hover:text-white"
+          }`}
+          title="הצג רק התאמות שסומנו כמועדפים"
+        >
+          <span className={favoritesOnly ? "text-orange-400" : "text-gray-500"}>★</span>
+          מועדפים בלבד
+        </button>
+      </div>
 
       {/* Optional: queue/history toggle */}
       {showSubTabs && (

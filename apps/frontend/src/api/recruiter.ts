@@ -21,6 +21,7 @@ export interface Match {
   daysInStage: number;
   geographicMismatch?: boolean;
   geographicMismatchReason?: string;
+  isStarred?: boolean;
 }
 
 export interface StatusMetrics {
@@ -116,13 +117,17 @@ export async function fetchRecruiterStatus(): Promise<StatusMetrics> {
 export async function fetchRecruiterMatches(
   tab: string,
   limit: number = 50,
-  page: number = 1
+  page: number = 1,
+  favoritesOnly: boolean = false
 ): Promise<MatchesResponse> {
   const params = new URLSearchParams({
     tab,
     limit: String(limit),
     page: String(page),
   });
+  if (favoritesOnly) {
+    params.set("favorites_only", "true");
+  }
 
   const response = await fetch(
     `${API_BASE}/admin/recruiter/matches?${params.toString()}`
@@ -152,6 +157,7 @@ export async function fetchRecruiterMatches(
       daysInStage: match.days_in_stage,
       geographicMismatch: match.geographic_mismatch ?? false,
       geographicMismatchReason: match.geographic_mismatch_reason ?? undefined,
+      isStarred: match.is_starred ?? false,
     })),
     total: data.total,
     page: data.page,
@@ -189,6 +195,31 @@ export async function performMatchAction(
 
   if (!response.ok) {
     throw new Error(`Failed to perform match action: ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Star/unstar a match as a favorite. Works at any stage (Carmit/Tal/Elad).
+ */
+export async function setMatchFavorite(
+  matchId: string,
+  isStarred: boolean
+): Promise<any> {
+  const response = await fetch(
+    `${API_BASE}/admin/recruiter/${matchId}/favorite`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ is_starred: isStarred }),
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Failed to set match favorite: ${response.statusText}`);
   }
 
   return response.json();

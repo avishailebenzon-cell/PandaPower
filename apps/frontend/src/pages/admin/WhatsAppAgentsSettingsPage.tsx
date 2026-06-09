@@ -50,6 +50,7 @@ const BOT_COLORS: Record<WhatsAppAgentCode, { border: string; accent: string; bg
   tal: { border: "border-blue-500", accent: "text-blue-300", bg: "bg-blue-900/20" },
   elad: { border: "border-emerald-500", accent: "text-emerald-300", bg: "bg-emerald-900/20" },
   pandi: { border: "border-cyan-500", accent: "text-cyan-300", bg: "bg-cyan-900/20" },
+  pandius: { border: "border-purple-500", accent: "text-purple-300", bg: "bg-purple-900/20" },
 };
 
 function formatWhen(iso: string | null | undefined): string {
@@ -87,7 +88,7 @@ export const WhatsAppAgentsSettingsPage = () => {
           <span>📞</span> קונסול WhatsApp לסוכני AI
         </h1>
         <p className="text-gray-400 mt-1 max-w-3xl">
-          הגדרה, מעקב והתאמה של 3 בוטים נפרדים. כל בוט אטום לחלוטין משאר הבוטים —
+          הגדרה, מעקב והתאמה של הבוטים הנפרדים. כל בוט אטום לחלוטין משאר הבוטים —
           שינוי טוקן, התנהגות או הגדרה אצל אחד לעולם לא ייגע באחרים.
         </p>
       </header>

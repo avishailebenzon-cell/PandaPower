@@ -143,6 +143,24 @@ def _public_base_url(request: Optional[Request]) -> str:
     return f"{forwarded_proto}://{host}".rstrip("/")
 
 
+def _is_real_value(value: str) -> bool:
+    """True iff a setting holds a real value, not an empty/placeholder string.
+
+    Migrations seed pandius.* with placeholders like 'PASTE_INSTANCE_ID' or
+    '+9725XXXXXXXX'. Those are non-empty but must NOT count as configured, or
+    the UI shows a bot as 🟢 מוגדר before the admin entered any credentials.
+    """
+    v = (value or "").strip()
+    if not v:
+        return False
+    upper = v.upper()
+    if "PASTE" in upper or "XXXX" in upper:
+        return False
+    if upper in {"TODO", "CHANGEME", "CHANGE_ME", "YOUR_TOKEN", "YOUR_INSTANCE_ID"}:
+        return False
+    return True
+
+
 def _build_config(
     agent_code: str,
     settings: dict[str, str],
@@ -170,7 +188,7 @@ def _build_config(
         whatsapp_number=settings.get("whatsapp_number", ""),
         webhook_secret=webhook_secret,
         last_updated_at=last_updated,
-        is_configured=bool(instance_id and token),
+        is_configured=_is_real_value(instance_id) and _is_real_value(token),
         webhook_url=webhook_url,
         webhook_url_with_token=webhook_url_with_token,
     )
@@ -488,7 +506,9 @@ async def get_dashboard(
     active = sum(1 for c in conv_rows if (c.get("status") or "active") == "active")
 
     settings_dict, _ = await _fetch_settings_dict(supabase, agent_code)
-    is_configured = bool(settings_dict.get("instance_id") and settings_dict.get("token"))
+    is_configured = _is_real_value(settings_dict.get("instance_id", "")) and _is_real_value(
+        settings_dict.get("token", "")
+    )
 
     out = DashboardResponse(
         bot_code=agent_code,

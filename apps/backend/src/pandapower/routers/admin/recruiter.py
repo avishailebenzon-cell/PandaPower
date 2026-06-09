@@ -81,6 +81,10 @@ class MatchInfo(BaseModel):
     days_in_stage: int
     geographic_mismatch: bool = False
     geographic_mismatch_reason: Optional[str] = None
+    # Favorite/starred flag — can be toggled at any stage, orthogonal to the
+    # match state machine. Starred matches show an orange star and can be
+    # filtered in every agent queue.
+    is_starred: bool = False
 
 
 class MatchDetailInfo(BaseModel):
@@ -265,6 +269,7 @@ async def get_recruiter_matches(
     tab: str = Query("tal-queue", description="Tab: tal-queue, tal-history, elad-queue, elad-history"),
     limit: int = Query(50, le=100),
     page: int = Query(1, ge=1),
+    favorites_only: bool = Query(False, description="Only return matches starred as favorites"),
     supabase = Depends(get_supabase_client)
 ) -> MatchesResponse:
     """Get matches for recruiter queues.
@@ -298,14 +303,20 @@ async def get_recruiter_matches(
         # note we filter by is_valid so Phase-4 invalidations don't show up.
         query = supabase.table("matches").select(
             "id, candidate_id, job_id, current_state, match_score, created_at, updated_at, "
-            "geographic_mismatch, geographic_mismatch_reason, "
+            "geographic_mismatch, geographic_mismatch_reason, is_starred, "
             "candidates(name), jobs(job_title, organization_name, pipedrive_deal_id)"
-        ).in_("current_state", states).eq("is_valid", True).order("created_at", desc=True)
+        ).in_("current_state", states).eq("is_valid", True)
+        if favorites_only:
+            query = query.eq("is_starred", True)
+        query = query.order("created_at", desc=True)
 
         # Get total count (separate query, awaited)
-        total_result = await supabase.table("matches").select("id", count="exact").in_(
+        count_query = supabase.table("matches").select("id", count="exact").in_(
             "current_state", states
-        ).eq("is_valid", True).execute()
+        ).eq("is_valid", True)
+        if favorites_only:
+            count_query = count_query.eq("is_starred", True)
+        total_result = await count_query.execute()
         total = total_result.count if hasattr(total_result, "count") else 0
 
         # Get paginated results
@@ -370,6 +381,7 @@ async def get_recruiter_matches(
                     days_in_stage=days_in_stage,
                     geographic_mismatch=bool(row.get("geographic_mismatch")),
                     geographic_mismatch_reason=row.get("geographic_mismatch_reason"),
+                    is_starred=bool(row.get("is_starred")),
                 )
                 matches.append(match_info)
 
@@ -645,6 +657,53 @@ async def perform_match_action(
     except Exception as e:
         logger.error(f"Error performing match action: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to perform action")
+
+
+class FavoriteRequest(BaseModel):
+    """Request to set/unset a match as favorite (starred)."""
+    is_starred: bool
+
+
+class FavoriteResponse(BaseModel):
+    """Response from toggling a match favorite."""
+    success: bool
+    matchId: str
+    isStarred: bool
+
+
+@router.post("/{match_id}/favorite", response_model=FavoriteResponse)
+async def set_match_favorite(
+    match_id: str,
+    body: FavoriteRequest,
+    supabase = Depends(get_supabase_client)
+) -> FavoriteResponse:
+    """Star/unstar a match as a favorite.
+
+    Favorites are orthogonal to the match state machine — a match can be
+    starred at any stage (Carmit, Tal, Elad) and surfaces with an orange star
+    plus a "favorites only" filter in every agent queue.
+    """
+    try:
+        now = datetime.utcnow().isoformat()
+        update_result = await supabase.table("matches").update({
+            "is_starred": body.is_starred,
+            "starred_at": now if body.is_starred else None,
+            "updated_at": now,
+        }).eq("id", match_id).execute()
+
+        if not update_result.data:
+            raise HTTPException(status_code=404, detail="Match not found")
+
+        return FavoriteResponse(
+            success=True,
+            matchId=match_id,
+            isStarred=body.is_starred,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error setting match favorite: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to set favorite")
 
 
 @router.get("/{match_id}/conversation", response_model=ConversationInfo)
