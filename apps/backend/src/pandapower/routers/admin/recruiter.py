@@ -20,6 +20,19 @@ class ActionType(str, Enum):
     WAIT = "wait"                      # Keep in queue (no change)
     HAND_TO_HUMAN = "hand_to_human"    # A human takes over the candidate contact
     RETURN_FROM_HUMAN = "return_from_human"  # Undo hand-off, back to the agent queue
+    MARK_COMPANY_EMPLOYEE = "mark_company_employee"  # Candidate is a company employee — never contact
+    MARK_COMPANY_CLIENT = "mark_company_client"      # Candidate is a company client — never contact
+
+
+# States used when a candidate is flagged as do-not-contact. ALL of that
+# candidate's matches are moved to the chosen state so no agent ever reaches
+# out to them (a person who already works for, or is a client of, the company).
+COMPANY_EMPLOYEE_STATE = "company_employee_do_not_contact"
+COMPANY_CLIENT_STATE = "company_client_do_not_contact"
+DO_NOT_CONTACT_ACTIONS = {
+    ActionType.MARK_COMPANY_EMPLOYEE: COMPANY_EMPLOYEE_STATE,
+    ActionType.MARK_COMPANY_CLIENT: COMPANY_CLIENT_STATE,
+}
 
 
 # ============================================================================
@@ -472,6 +485,55 @@ async def perform_match_action(
 
         match = match_result.data[0]
         old_state = match.get("current_state", "unknown")
+
+        # "Do not contact" flags (company employee / company client): these are
+        # candidate-wide, not match-specific. Flagging one match moves EVERY
+        # match of that candidate to the do-not-contact state and pauses any open
+        # conversations, so no agent ever reaches out to a person who already
+        # works for, or is a client of, the company.
+        if body.action in DO_NOT_CONTACT_ACTIONS:
+            target_state = DO_NOT_CONTACT_ACTIONS[body.action]
+            candidate_id = match.get("candidate_id")
+            if not candidate_id:
+                raise HTTPException(
+                    status_code=400, detail="Match has no candidate to flag"
+                )
+
+            now = datetime.utcnow().isoformat()
+            await supabase.table("matches").update({
+                "current_state": target_state,
+                "updated_at": now,
+            }).eq("candidate_id", candidate_id).execute()
+
+            # Pause auto-reply on all of this candidate's conversations so the
+            # agents stop messaging them. Best-effort — never blocks the action.
+            try:
+                match_ids = [
+                    r["id"]
+                    for r in (
+                        await supabase.table("matches")
+                        .select("id")
+                        .eq("candidate_id", candidate_id)
+                        .execute()
+                    ).data or []
+                ]
+                if match_ids:
+                    await supabase.table("recruiter_conversations").update({
+                        "auto_reply_paused": True,
+                    }).in_("match_id", match_ids).execute()
+            except Exception as e:
+                logger.warning(
+                    f"Could not pause conversations for candidate {candidate_id}: {e}"
+                )
+
+            return MatchActionResponse(
+                success=True,
+                matchId=match_id,
+                oldState=old_state,
+                newState=target_state,
+                action=body.action.value,
+                timestamp=now,
+            )
 
         # Determine new state based on action
         # Detect which recruiter stage we're in. The "handed_to_human" state is

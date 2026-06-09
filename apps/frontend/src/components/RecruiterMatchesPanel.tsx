@@ -31,6 +31,7 @@ import {
   type MatchAction,
 } from "@/api/recruiter";
 import { MatchDetailModal } from "@/components/MatchDetailModal";
+import { CandidateDetailModal } from "@/components/CandidateDetailModal";
 import { GeoMismatchBadge } from "@/components/GeoMismatchBadge";
 import type { DepartmentMatch } from "@/api/recruitment-departments";
 
@@ -68,6 +69,8 @@ const STATE_LABELS: Record<string, { label: string; cls: string; live?: boolean 
   elad_approved: { label: "אושר ע״י אלעד", cls: "bg-emerald-900 text-emerald-200" },
   hired: { label: "🎉 הושמה", cls: "bg-emerald-700 text-white" },
   placement_failed: { label: "כשלון השמה", cls: "bg-red-900 text-red-200" },
+  company_employee_do_not_contact: { label: "🚫 עובד חברה - לא לפנות", cls: "bg-orange-900 text-orange-200" },
+  company_client_do_not_contact: { label: "🚫 לקוח חברה - לא לפנות", cls: "bg-orange-900 text-orange-200" },
 };
 
 function StateBadge({ state }: { state: string }) {
@@ -115,6 +118,7 @@ export function RecruiterMatchesPanel({
   const [showConversationModal, setShowConversationModal] = useState(false);
   const [showActionMenu, setShowActionMenu] = useState<string | null>(null);
   const [detailMatchId, setDetailMatchId] = useState<string | null>(null);
+  const [candidateDetailId, setCandidateDetailId] = useState<string | null>(null);
 
   const queryClient = useQueryClient();
   const tabParam = `${recruiter}-${subTab}`; // tal-queue, elad-history, etc.
@@ -228,7 +232,16 @@ export function RecruiterMatchesPanel({
       key={m.id}
       className="border-b border-gray-700 hover:bg-gray-750 transition"
     >
-      <td className="px-4 py-3 text-white font-semibold">{m.candidateName}</td>
+      <td className="px-4 py-3">
+        <button
+          onClick={() => m.candidateId && setCandidateDetailId(m.candidateId)}
+          disabled={!m.candidateId}
+          className="text-white font-semibold hover:text-indigo-300 hover:underline transition disabled:cursor-default disabled:hover:text-white disabled:no-underline text-right"
+          title={m.candidateId ? "הצג תקציר קורות חיים" : undefined}
+        >
+          {m.candidateName}
+        </button>
+      </td>
       <td className="px-4 py-3 text-gray-300">
         <div className="flex flex-col gap-1.5">
           <span>{m.jobTitle}</span>
@@ -262,6 +275,26 @@ export function RecruiterMatchesPanel({
               )
             ) {
               actionMutation.mutate({ matchId: m.id, action: "reject" });
+            }
+          }}
+          onMarkCompanyEmployee={() => {
+            if (
+              window.confirm(
+                `לסמן את ${m.candidateName} כ"עובד חברה - לא לפנות"?\n` +
+                  `כל ההתאמות של מועמד זה במערכת יועברו למצב זה ולא תתבצע אליו פנייה.`
+              )
+            ) {
+              actionMutation.mutate({ matchId: m.id, action: "mark_company_employee" });
+            }
+          }}
+          onMarkCompanyClient={() => {
+            if (
+              window.confirm(
+                `לסמן את ${m.candidateName} כ"לקוח חברה - לא לפנות"?\n` +
+                  `כל ההתאמות של מועמד זה במערכת יועברו למצב זה ולא תתבצע אליו פנייה.`
+              )
+            ) {
+              actionMutation.mutate({ matchId: m.id, action: "mark_company_client" });
             }
           }}
           onHandToHuman={() => actionMutation.mutate({ matchId: m.id, action: "hand_to_human" })}
@@ -452,6 +485,15 @@ export function RecruiterMatchesPanel({
               />
             )
           )}
+
+          {/* CV summary — opened by clicking a candidate's name. Same modal the
+              candidates-database screen uses, so the summary is identical. */}
+          {candidateDetailId && (
+            <CandidateDetailModal
+              id={candidateDetailId}
+              onClose={() => setCandidateDetailId(null)}
+            />
+          )}
         </>
       )}
     </div>
@@ -520,6 +562,8 @@ function MatchActionsMenu({
   onToggle,
   onActivate,
   onReject,
+  onMarkCompanyEmployee,
+  onMarkCompanyClient,
   onHandToHuman,
   onReturnFromHuman,
   onConversation,
@@ -532,6 +576,8 @@ function MatchActionsMenu({
   onToggle: () => void;
   onActivate: () => void;
   onReject: () => void;
+  onMarkCompanyEmployee: () => void;
+  onMarkCompanyClient: () => void;
   onHandToHuman: () => void;
   onReturnFromHuman: () => void;
   onConversation: () => void;
@@ -577,6 +623,28 @@ function MatchActionsMenu({
                 ✕ מחיקת התאמה
               </button>
             </>
+          )}
+          {recruiter !== "carmit" && match.state !== "company_employee_do_not_contact" && (
+            <button
+              onClick={() => {
+                onMarkCompanyEmployee();
+              }}
+              disabled={isLoading}
+              className="block w-full text-right px-4 py-2 hover:bg-orange-900 text-orange-200 text-sm disabled:opacity-50 border-b border-gray-600 whitespace-nowrap"
+            >
+              🚫 עובד חברה - לא לפנות
+            </button>
+          )}
+          {recruiter !== "carmit" && match.state !== "company_client_do_not_contact" && (
+            <button
+              onClick={() => {
+                onMarkCompanyClient();
+              }}
+              disabled={isLoading}
+              className="block w-full text-right px-4 py-2 hover:bg-orange-900 text-orange-200 text-sm disabled:opacity-50 border-b border-gray-600 whitespace-nowrap"
+            >
+              🚫 לקוח חברה - לא לפנות
+            </button>
           )}
           {canHandToHuman && (
             <button

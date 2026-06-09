@@ -164,7 +164,9 @@ export type MatchAction =
   | "reject"
   | "wait"
   | "hand_to_human"
-  | "return_from_human";
+  | "return_from_human"
+  | "mark_company_employee"
+  | "mark_company_client";
 
 /**
  * Perform an action on a match (activate, reject, wait, hand_to_human, return_from_human)
