@@ -471,7 +471,8 @@ class NotificationService:
                     resend_result = {"status": "skipped"}
                 else:
                     resend = ResendClient(api_key=settings.RESEND_API_KEY)
-                    admin_email = "avishai.lebenzon@gmail.com"
+                    from pandapower.integrations.alert_service import get_admin_email
+                    admin_email = await get_admin_email()
 
                     email_body = f"""
 שלום,

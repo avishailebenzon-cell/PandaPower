@@ -415,6 +415,10 @@ export function AlertsPage() {
             <label className="block text-sm text-gray-300 font-semibold">
               כתובת דוא"ל של מנהל המערכת
             </label>
+            <p className="text-xs text-gray-400 -mt-1">
+              כל מיילי המערכת נשלחים לכתובת זו — התראות תקלות, וגם התראות הסוכנים
+              (לקוח חדש של פנדי, פניות מועמדים וכו'). שינוי כאן משפיע על הכול.
+            </p>
             <div className="flex gap-2">
               <input
                 type="email"

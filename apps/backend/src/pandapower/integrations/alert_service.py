@@ -283,6 +283,20 @@ async def _get_admin_email(sb) -> Optional[str]:
     return DEFAULT_ADMIN_EMAIL
 
 
+async def get_admin_email(sb=None) -> str:
+    """Public, single source of truth for the system admin email.
+
+    Every system email (alerts, Pandi new-client / referral notifications, …)
+    should resolve its recipient through this helper so it's editable in one
+    place — the Alerts settings screen (`alerts.admin_email`). Builds its own
+    Supabase client when one isn't supplied.
+    """
+    if sb is None:
+        from pandapower.core.supabase import get_supabase_client
+        sb = await get_supabase_client()
+    return await _get_admin_email(sb)
+
+
 async def _is_globally_snoozed(sb) -> bool:
     """Check if alerts are paused via /admin/alerts/snooze.
 

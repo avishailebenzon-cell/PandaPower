@@ -253,7 +253,8 @@ async def handle_mark_client_interested(
 
                 if settings.RESEND_API_KEY:
                     resend = ResendClient(api_key=settings.RESEND_API_KEY)
-                    admin_email = "avishai.lebenzon@gmail.com"
+                    from pandapower.integrations.alert_service import get_admin_email
+                    admin_email = await get_admin_email(supabase)
 
                     # Notify manager
                     await resend.send_email(
