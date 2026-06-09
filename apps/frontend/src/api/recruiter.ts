@@ -159,12 +159,19 @@ export async function fetchRecruiterMatches(
   };
 }
 
+export type MatchAction =
+  | "activate"
+  | "reject"
+  | "wait"
+  | "hand_to_human"
+  | "return_from_human";
+
 /**
- * Perform an action on a match (activate, reject, wait)
+ * Perform an action on a match (activate, reject, wait, hand_to_human, return_from_human)
  */
 export async function performMatchAction(
   matchId: string,
-  action: "activate" | "reject" | "wait",
+  action: MatchAction,
   notes?: string
 ): Promise<any> {
   const response = await fetch(`${API_BASE}/admin/recruiter/${matchId}/action`, {

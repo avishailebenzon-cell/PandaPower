@@ -15,9 +15,11 @@ router = APIRouter(prefix="/admin/recruiter", tags=["admin", "recruiter"])
 
 class ActionType(str, Enum):
     """Match action types."""
-    ACTIVATE = "activate"      # Move to conversation state
-    REJECT = "reject"          # Reject match
-    WAIT = "wait"              # Keep in queue (no change)
+    ACTIVATE = "activate"              # Move to conversation state
+    REJECT = "reject"                  # Reject match
+    WAIT = "wait"                      # Keep in queue (no change)
+    HAND_TO_HUMAN = "hand_to_human"    # A human takes over the candidate contact
+    RETURN_FROM_HUMAN = "return_from_human"  # Undo hand-off, back to the agent queue
 
 
 # ============================================================================
@@ -268,11 +270,11 @@ async def get_recruiter_matches(
         elif tab == "carmit-history":
             states = ["carmit_approved", "carmit_rejected"]
         elif tab == "tal-queue":
-            states = ["sent_to_tal", "tal_conversation"]
+            states = ["sent_to_tal", "tal_conversation", "tal_handed_to_human"]
         elif tab == "tal-history":
             states = ["tal_approved", "tal_rejected"]
         elif tab == "elad-queue":
-            states = ["sent_to_elad", "elad_conversation"]
+            states = ["sent_to_elad", "elad_conversation", "elad_handed_to_human"]
         elif tab == "elad-history":
             states = ["elad_approved", "hired", "placement_failed"]
         else:
@@ -472,21 +474,32 @@ async def perform_match_action(
         old_state = match.get("current_state", "unknown")
 
         # Determine new state based on action
-        # Detect which recruiter stage we're in
-        if old_state in ["sent_to_tal", "tal_conversation"]:
+        # Detect which recruiter stage we're in. The "handed_to_human" state is
+        # a per-recruiter holding state: the candidate/client is contacted by a
+        # human, so the agent never reaches out. It lives in the recruiter's
+        # active queue and can be toggled back to the normal waiting state.
+        if old_state in ["sent_to_tal", "tal_conversation", "tal_handed_to_human"]:
             recruiter = "tal"
             if body.action == ActionType.ACTIVATE:
                 new_state = "tal_conversation"
             elif body.action == ActionType.REJECT:
                 new_state = "tal_rejected"
+            elif body.action == ActionType.HAND_TO_HUMAN:
+                new_state = "tal_handed_to_human"
+            elif body.action == ActionType.RETURN_FROM_HUMAN:
+                new_state = "sent_to_tal"
             else:  # WAIT
                 new_state = "sent_to_tal"
-        elif old_state in ["sent_to_elad", "elad_conversation"]:
+        elif old_state in ["sent_to_elad", "elad_conversation", "elad_handed_to_human"]:
             recruiter = "elad"
             if body.action == ActionType.ACTIVATE:
                 new_state = "elad_conversation"
             elif body.action == ActionType.REJECT:
                 new_state = "elad_rejected"
+            elif body.action == ActionType.HAND_TO_HUMAN:
+                new_state = "elad_handed_to_human"
+            elif body.action == ActionType.RETURN_FROM_HUMAN:
+                new_state = "sent_to_elad"
             else:  # WAIT
                 new_state = "sent_to_elad"
         else:
@@ -512,6 +525,19 @@ async def perform_match_action(
             await _record_candidate_decline(
                 supabase, match.get("candidate_id"), match.get("job_id")
             )
+
+        # Handing to / returning from a human flips the agent's auto-reply on any
+        # existing conversation: paused while a human owns the contact, resumed
+        # when control returns to the agent. Best-effort — never blocks the action.
+        if body.action in (ActionType.HAND_TO_HUMAN, ActionType.RETURN_FROM_HUMAN):
+            try:
+                await supabase.table("recruiter_conversations").update({
+                    "auto_reply_paused": body.action == ActionType.HAND_TO_HUMAN,
+                }).eq("match_id", match_id).eq("recruiter", recruiter).execute()
+            except Exception as e:
+                logger.warning(
+                    f"Could not toggle auto_reply_paused for match {match_id}: {e}"
+                )
 
         # Create conversation record if moving to conversation state, then have
         # the agent INITIATE contact (send the opening WhatsApp message) — this

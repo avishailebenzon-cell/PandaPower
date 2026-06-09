@@ -28,6 +28,7 @@ import {
   fetchMatchConversation,
   fetchMatchDetail,
   type Match,
+  type MatchAction,
 } from "@/api/recruiter";
 import { MatchDetailModal } from "@/components/MatchDetailModal";
 import { GeoMismatchBadge } from "@/components/GeoMismatchBadge";
@@ -58,10 +59,12 @@ const STATE_LABELS: Record<string, { label: string; cls: string; live?: boolean 
   carmit_rejected: { label: "נדחתה על ידי כרמית", cls: "bg-red-900 text-red-200" },
   sent_to_tal: { label: "ממתינה לטל", cls: "bg-blue-900 text-blue-200" },
   tal_conversation: { label: "בשיחה עם טל", cls: "bg-indigo-600 text-white", live: true },
+  tal_handed_to_human: { label: "הועבר לגורם אנושי", cls: "bg-amber-800 text-amber-100" },
   tal_approved: { label: "אושר ע״י טל", cls: "bg-green-900 text-green-200" },
   tal_rejected: { label: "נדחה ע״י טל", cls: "bg-red-900 text-red-200" },
   sent_to_elad: { label: "ממתינה לאלעד", cls: "bg-purple-900 text-purple-200" },
   elad_conversation: { label: "בשיחה עם אלעד", cls: "bg-fuchsia-600 text-white", live: true },
+  elad_handed_to_human: { label: "הועבר לגורם אנושי", cls: "bg-amber-800 text-amber-100" },
   elad_approved: { label: "אושר ע״י אלעד", cls: "bg-emerald-900 text-emerald-200" },
   hired: { label: "🎉 הושמה", cls: "bg-emerald-700 text-white" },
   placement_failed: { label: "כשלון השמה", cls: "bg-red-900 text-red-200" },
@@ -145,7 +148,7 @@ export function RecruiterMatchesPanel({
   });
 
   const actionMutation = useMutation({
-    mutationFn: ({ matchId, action, notes }: { matchId: string; action: "activate" | "reject" | "wait"; notes?: string }) =>
+    mutationFn: ({ matchId, action, notes }: { matchId: string; action: MatchAction; notes?: string }) =>
       performMatchAction(matchId, action, notes),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["recruiter-matches"] });
@@ -261,6 +264,8 @@ export function RecruiterMatchesPanel({
               actionMutation.mutate({ matchId: m.id, action: "reject" });
             }
           }}
+          onHandToHuman={() => actionMutation.mutate({ matchId: m.id, action: "hand_to_human" })}
+          onReturnFromHuman={() => actionMutation.mutate({ matchId: m.id, action: "return_from_human" })}
           onConversation={() => {
             setSelectedMatchId(m.id);
             setShowConversationModal(true);
@@ -515,6 +520,8 @@ function MatchActionsMenu({
   onToggle,
   onActivate,
   onReject,
+  onHandToHuman,
+  onReturnFromHuman,
   onConversation,
   onDetail,
   isLoading,
@@ -525,6 +532,8 @@ function MatchActionsMenu({
   onToggle: () => void;
   onActivate: () => void;
   onReject: () => void;
+  onHandToHuman: () => void;
+  onReturnFromHuman: () => void;
   onConversation: () => void;
   onDetail: () => void;
   isLoading: boolean;
@@ -532,6 +541,10 @@ function MatchActionsMenu({
   const isInQueue = recruiter === "carmit"
     ? match.state === "found"
     : (match.state === `sent_to_${recruiter}` || match.state === `${recruiter}_conversation`);
+  // Handed to a human: the agent no longer contacts the candidate. Only Carmit
+  // has no human-handoff stage. Toggleable from queue states and back.
+  const isHandedToHuman = match.state === `${recruiter}_handed_to_human`;
+  const canHandToHuman = recruiter !== "carmit" && isInQueue;
 
   return (
     <div className="relative inline-block z-50">
@@ -564,6 +577,30 @@ function MatchActionsMenu({
                 ✕ מחיקת התאמה
               </button>
             </>
+          )}
+          {canHandToHuman && (
+            <button
+              onClick={() => {
+                onHandToHuman();
+                onToggle();
+              }}
+              disabled={isLoading}
+              className="block w-full text-right px-4 py-2 hover:bg-amber-900 text-amber-200 text-sm disabled:opacity-50 border-b border-gray-600 whitespace-nowrap"
+            >
+              👤 הועבר לגורם אנושי
+            </button>
+          )}
+          {isHandedToHuman && (
+            <button
+              onClick={() => {
+                onReturnFromHuman();
+                onToggle();
+              }}
+              disabled={isLoading}
+              className="block w-full text-right px-4 py-2 hover:bg-amber-900 text-amber-200 text-sm disabled:opacity-50 border-b border-gray-600 whitespace-nowrap"
+            >
+              ↩ ביטול העברה לגורם אנושי
+            </button>
           )}
           <button
             onClick={() => {
