@@ -341,6 +341,28 @@ def _extract_phone(person: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+async def sync_pipedrive_organizations(since: Optional[datetime] = None) -> Dict[str, Any]:
+    """
+    Sync ONLY organizations from Pipedrive (lightweight).
+
+    Used by the scheduler's `organizations` entity so it does NOT re-trigger a
+    full contacts sync (which would re-fetch every person and double the API
+    cost). The `persons` sync still syncs orgs first for contact->org FK safety;
+    this just keeps the org table fresh on its own cadence.
+    """
+    sync_start_time = datetime.utcnow()
+    db = await get_supabase_client()
+    pipedrive = PipedriveClient(
+        api_token=settings.PIPEDRIVE_API_TOKEN,
+        api_domain=settings.PIPEDRIVE_API_DOMAIN,
+    )
+    try:
+        synced = await _sync_organizations(db, pipedrive, since=since)
+        return {"total_fetched": synced, "synced": synced}
+    finally:
+        await pipedrive.close()
+
+
 async def _sync_organizations(
     db: Any, pipedrive: PipedriveClient, since: Optional[datetime] = None
 ) -> int:

@@ -40,21 +40,26 @@ def _compute_delta_cursor(schedule: Dict[str, Any]) -> Optional[datetime]:
 
     Returns a datetime to fetch only changes since then (delta sync), or None to
     request a FULL sync. We do a full sync when:
-      - there is no prior successful sync (last_sync_at missing), or
-      - the previous run did not complete cleanly (status != "completed"), or
+      - there has never been a successful sync (no cursor to delta from), or
       - it is time for the periodic full reconciliation pass.
 
-    Otherwise we return last_sync_at minus an overlap buffer.
+    The cursor is taken from `last_successful_sync_at`, NOT `last_sync_at`, so a
+    transient failure (e.g. a 429 daily-budget hit) does NOT force an expensive
+    full re-fetch on the next run — we simply retry a cheap delta from the last
+    point we know the DB was current. Falls back to last_sync_at for rows
+    predating the last_successful_sync_at column.
     """
-    last_sync = _parse_ts(schedule.get("last_sync_at"))
-    last_status = schedule.get("last_sync_status")
+    last_ok = _parse_ts(schedule.get("last_successful_sync_at"))
+    if last_ok is None and schedule.get("last_sync_status") == "completed":
+        # Backward-compat: column not yet populated but last run did complete.
+        last_ok = _parse_ts(schedule.get("last_sync_at"))
     sync_count = int(schedule.get("sync_count") or 0)
 
-    if last_sync is None or last_status != "completed":
-        return None  # full sync
+    if last_ok is None:
+        return None  # never succeeded -> full sync to establish a baseline
     if FULL_SYNC_EVERY > 0 and sync_count > 0 and sync_count % FULL_SYNC_EVERY == 0:
         return None  # periodic full reconciliation
-    return last_sync - timedelta(minutes=DELTA_OVERLAP_MINUTES)
+    return last_ok - timedelta(minutes=DELTA_OVERLAP_MINUTES)
 
 
 def _parse_ts(value: Any) -> Optional[datetime]:
@@ -174,11 +179,31 @@ async def mark_schedule_completed(
         "next_scheduled_sync": next_run.isoformat(),
         "sync_count": sync_count + 1,
     }
+    # Advance the delta cursor only on success. On failure we keep the previous
+    # cursor so the next run retries a cheap delta from the last good point.
+    if success:
+        update_data["last_successful_sync_at"] = now.isoformat()
     try:
         await db.table("pipedrive_sync_schedule").update(update_data).eq(
             "id", schedule_id
         ).execute()
     except Exception as e:
+        # Resilience for the deploy window before the migration adding
+        # last_successful_sync_at is applied: retry without that column so the
+        # core status fields still get written and syncs aren't left stuck.
+        if "last_successful_sync_at" in update_data:
+            update_data.pop("last_successful_sync_at", None)
+            try:
+                await db.table("pipedrive_sync_schedule").update(update_data).eq(
+                    "id", schedule_id
+                ).execute()
+                logger.warning(
+                    "Marked schedule completed without last_successful_sync_at "
+                    "(apply migration to enable failure-resilient delta cursor)"
+                )
+                return
+            except Exception as e2:
+                e = e2
         logger.error(f"Failed to mark schedule {schedule_id} as completed: {e}")
 
 
@@ -221,10 +246,11 @@ async def run_due_syncs() -> Dict[str, Any]:
                 from pandapower.workers.pipedrive_sync import sync_pipedrive_contacts
                 await sync_pipedrive_contacts(since=since)
             elif entity_type == "organizations":
-                # Organizations are synced as part of contacts sync (pipedrive_sync)
-                # because contact->org links require orgs to exist first.
-                from pandapower.workers.pipedrive_sync import sync_pipedrive_contacts
-                await sync_pipedrive_contacts(since=since)
+                # Orgs-only sync. The `persons` sync already syncs orgs first
+                # (for contact->org FK safety), so routing this to a full
+                # contacts sync would re-fetch every person and double API cost.
+                from pandapower.workers.pipedrive_sync import sync_pipedrive_organizations
+                await sync_pipedrive_organizations(since=since)
             else:
                 logger.warning(f"Unknown entity_type in schedule: {entity_type}")
                 continue
