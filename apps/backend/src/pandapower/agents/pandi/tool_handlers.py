@@ -258,7 +258,7 @@ async def handle_mark_client_interested(
                     # Notify manager
                     await resend.send_email(
                         to=[admin_email],
-                        from_addr="pandi@pandatech.jobs",
+                        from_addr=settings.RESEND_FROM_EMAIL,
                         subject=f"🎯 פנייה חדשה: {candidate_number}",
                         html=f"""
                         <p>פנייה חדשה בדבר מועמד:</p>

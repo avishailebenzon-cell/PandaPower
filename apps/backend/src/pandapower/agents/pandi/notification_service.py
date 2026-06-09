@@ -492,9 +492,10 @@ class NotificationService:
 פנדי, סוכנת הבינה המלאכותית של פנדה-טק
                     """.strip()
 
+                    from pandapower.core.config import settings as _settings
                     resend_result = await resend.send_email(
                         to=[admin_email],
-                        from_addr="pandi@pandatech.jobs",  # Or configured address
+                        from_addr=_settings.RESEND_FROM_EMAIL,
                         subject=f"🎉 לקוח חדש: {client_name}",
                         html=email_body.replace("\n", "<br>"),
                     )

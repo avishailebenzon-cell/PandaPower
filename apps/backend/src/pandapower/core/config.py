@@ -84,6 +84,11 @@ class Settings(BaseSettings):
 
     # Resend (transactional admin alerts via /admin/alerts)
     RESEND_API_KEY: str = ""
+    # Default "from" for Resend emails. `onboarding@resend.dev` is Resend's
+    # pre-verified sender and delivers without domain verification. Override
+    # with a verified custom domain (e.g. "Pandi <pandi@pandatech.jobs>") once
+    # that domain is verified at resend.com/domains.
+    RESEND_FROM_EMAIL: str = "PandaTech <onboarding@resend.dev>"
 
     # Pipedrive CRM (Phase 5: Carmit Orchestrator)
     PIPEDRIVE_API_TOKEN: str = ""
