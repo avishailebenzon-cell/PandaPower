@@ -52,7 +52,7 @@ async def get_candidate_stats(supabase=Depends(get_supabase_client)) -> Candidat
     """Get candidate statistics and summary."""
     try:
         # Get all candidates
-        response = supabase.table("candidates").select("*").is_("deleted_at", "null").execute()
+        response = await supabase.table("candidates").select("*").is_("deleted_at", "null").execute()
         candidates = response.data or []
 
         if not candidates:
@@ -139,7 +139,7 @@ async def list_candidates(
             query = query.gte("overall_confidence_score", min_confidence)
 
         # Pagination
-        response = query.order("created_at", desc=True).range(offset, offset + limit).execute()
+        response = await query.order("created_at", desc=True).range(offset, offset + limit).execute()
 
         candidates = response.data or []
         return [CandidateProfile(**c) for c in candidates]
@@ -192,7 +192,7 @@ async def candidates_database(
                 )
             return q
 
-        response = (
+        response = await (
             _base()
             .order("created_at", desc=True)
             .range(offset, offset + limit - 1)
@@ -217,7 +217,7 @@ async def get_candidate(
 ) -> dict:
     """Get detailed candidate information including full extracted data."""
     try:
-        response = supabase.table("candidates").select("*").eq("id", candidate_id).execute()
+        response = await supabase.table("candidates").select("*").eq("id", candidate_id).execute()
 
         if not response.data:
             raise HTTPException(status_code=404, detail="Candidate not found")
@@ -225,7 +225,7 @@ async def get_candidate(
         candidate = response.data[0]
 
         # Get linked CV details
-        cv_response = supabase.table("cv_files").select(
+        cv_response = await supabase.table("cv_files").select(
             "id, original_filename, source_email_from, source_email_received_at"
         ).eq("id", candidate["cv_file_id"]).execute()
 
@@ -253,7 +253,7 @@ async def create_candidate_from_cv(
         from pandapower.workers.candidate_creation import CandidateCreationWorker
 
         # Get the CV
-        cv_response = supabase.table("cv_files").select("*").eq("id", cv_file_id).execute()
+        cv_response = await supabase.table("cv_files").select("*").eq("id", cv_file_id).execute()
         if not cv_response.data:
             raise HTTPException(status_code=404, detail="CV file not found")
 
@@ -319,7 +319,7 @@ async def get_readiness_summary(
 ) -> dict:
     """Get summary of candidates by readiness status."""
     try:
-        all_candidates = supabase.table("candidates").select(
+        all_candidates = await supabase.table("candidates").select(
             "skill_readiness_status"
         ).is_("deleted_at", "null").execute()
 
@@ -358,7 +358,7 @@ async def get_candidates_by_readiness(
         limit: Maximum results to return
     """
     try:
-        response = supabase.table("candidates").select(
+        response = await supabase.table("candidates").select(
             "id, name, detected_language, normalized_skills_count, "
             "average_skill_confidence, skill_readiness_status, recommendation_score"
         ).eq("skill_readiness_status", status).is_("deleted_at", "null").order(
@@ -380,7 +380,7 @@ async def get_low_confidence_mappings(
 ) -> dict:
     """Get all low-confidence skill mappings across candidates."""
     try:
-        response = supabase.table("candidate_skills_detailed").select(
+        response = await supabase.table("candidate_skills_detailed").select(
             "candidate_id, candidate_name, detected_language, raw_skill_text, "
             "skill_name, skill_category, confidence_score, normalization_method"
         ).lte("confidence_score", confidence_threshold).limit(limit).execute()
@@ -442,7 +442,7 @@ async def approve_candidate(
         if review_notes:
             update_data["review_notes"] = review_notes
 
-        response = supabase.table("candidates").update(update_data).eq("id", candidate_id).execute()
+        response = await supabase.table("candidates").update(update_data).eq("id", candidate_id).execute()
 
         if response.data:
             logger.info(f"Approved candidate {candidate_id}")
@@ -474,7 +474,7 @@ async def reject_candidate(
             "deleted_at": datetime.utcnow().isoformat(),  # Soft delete
         }
 
-        response = supabase.table("candidates").update(update_data).eq("id", candidate_id).execute()
+        response = await supabase.table("candidates").update(update_data).eq("id", candidate_id).execute()
 
         if response.data:
             logger.info(f"Rejected candidate {candidate_id}: {reason}")
