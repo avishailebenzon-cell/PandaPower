@@ -50,11 +50,24 @@ class PipedriveHistoricalImporter:
             "rejections_imported": 0,
             "errors": [],
             "duplicates_skipped": 0,
+            "deals_skipped_already_imported": 0,
         }
 
         try:
             # Get all deals from Pipedrive
             deals = await self._fetch_all_deals(limit)
+
+            # Skip deals we've already imported. The per-deal notes fetch
+            # (GET /v1/deals/{id}/notes) is the dominant Pipedrive token cost of
+            # this job — without this guard every run re-fetches notes for all
+            # ~1000 deals. Rejection notes are historical and effectively
+            # immutable, so once a deal is processed we never need to hit its
+            # notes endpoint again.
+            already_processed = await self._already_processed_deal_ids()
+            if already_processed:
+                before = len(deals)
+                deals = [d for d in deals if str(d.get("id")) not in already_processed]
+                results["deals_skipped_already_imported"] = before - len(deals)
 
             for deal in deals:
                 deal_id = deal.get("id")
@@ -91,6 +104,34 @@ class PipedriveHistoricalImporter:
         )
 
         return results
+
+    async def _already_processed_deal_ids(self) -> set[str]:
+        """Return the set of Pipedrive deal IDs already imported.
+
+        Rows are stored in match_state_history with a synthetic match_id of the
+        form ``pipedrive_deal_{deal_id}_{note_id}``. We pull those rows once and
+        derive the deal IDs so we can skip re-fetching their notes from
+        Pipedrive on subsequent runs (the expensive part of this job).
+        """
+        try:
+            res = await (
+                self.supabase_client.table("match_state_history")
+                .select("match_id")
+                .like("match_id", "pipedrive_deal_%")
+                .execute()
+            )
+            deal_ids: set[str] = set()
+            for row in (res.data or []):
+                mid = row.get("match_id") or ""
+                # pipedrive_deal_{deal_id}_{note_id} → middle segment is deal_id
+                parts = mid.split("_")
+                if len(parts) >= 4:
+                    deal_ids.add(parts[2])
+            return deal_ids
+        except Exception as e:
+            # Fail open: if we can't read history, just process everything.
+            logger.warning(f"Could not load already-processed deal IDs: {e}")
+            return set()
 
     async def _fetch_all_deals(self, limit: int) -> list[dict]:
         """Fetch all deals from Pipedrive with pagination.
@@ -242,8 +283,10 @@ class PipedriveHistoricalImporter:
                 }),
             }
 
-            # Try to insert; if exists, skip (duplicate)
-            self.supabase_client.table("match_state_history").insert(
+            # Try to insert; if exists, skip (duplicate). Must be awaited — the
+            # Supabase client here is the AsyncClient; without await the insert
+            # coroutine is never executed and nothing is persisted.
+            await self.supabase_client.table("match_state_history").insert(
                 history_entry
             ).execute()
 

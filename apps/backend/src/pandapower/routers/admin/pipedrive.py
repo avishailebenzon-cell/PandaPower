@@ -1,6 +1,7 @@
 """Phase 6-7: Pipedrive Live Integration Admin Endpoints."""
 
 import logging
+import time
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -306,25 +307,41 @@ async def trigger_bidirectional_sync(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Cache for /sync/status so UI polling doesn't burn a Pipedrive token on every
+# request. The connectivity probe (GET /v1/user) only confirms the token still
+# works — that doesn't change second-to-second, so a short TTL is plenty.
+_SYNC_STATUS_CACHE: dict[str, Any] = {"at": 0.0, "value": None}
+_SYNC_STATUS_TTL_SECONDS = 120
+
+
 @router.get("/sync/status")
 async def get_sync_status(
     pipedrive_client: PipedriveClient = Depends(get_pipedrive_client),
 ) -> dict[str, Any]:
     """Get synchronization status information.
-    
+
     Returns rate limit info, last sync times, and connection status.
+    Cached for a short window so UI polling doesn't consume Pipedrive tokens.
     """
+    now = time.monotonic()
+    cached = _SYNC_STATUS_CACHE.get("value")
+    if cached is not None and (now - _SYNC_STATUS_CACHE["at"]) < _SYNC_STATUS_TTL_SECONDS:
+        return {**cached, "cached": True}
+
     try:
         # Test API connectivity
         response = await pipedrive_client._make_request("GET", "/v1/user")
-        
-        return {
+
+        result = {
             "status": "success",
             "connected": response.get("success", False),
             "rate_limit_remaining": pipedrive_client.rate_limit_remaining,
             "rate_limit_reset": pipedrive_client.rate_limit_reset,
             "api_user": response.get("data", {}).get("email") if response.get("success") else None,
         }
+        _SYNC_STATUS_CACHE["value"] = result
+        _SYNC_STATUS_CACHE["at"] = now
+        return result
     except Exception as e:
         logger.error(f"Error getting sync status: {e}")
         raise HTTPException(status_code=500, detail=str(e))

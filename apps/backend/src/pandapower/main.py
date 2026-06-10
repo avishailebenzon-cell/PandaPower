@@ -196,8 +196,8 @@ async def _pipeline_scheduler_loop():
         - carmit_handoff_to_tal: 600s   (move approved matches into Tal's queue)
         - pipeline_watchdog    : 1800s  (re-kick matches stuck > threshold)
       Pipedrive metadata:
-        - pipedrive_field_sync       : 3600s   (custom field definitions)
-        - pipedrive_historical_import: 14400s  (historical rejection reasons)
+        - pipedrive_field_sync       : 86400s  (custom field definitions, near-static)
+        - pipedrive_historical_import: 86400s  (historical rejection reasons, incremental)
 
     Each stage runs independently and skips silently if its prerequisites
     (Azure creds, Anthropic key, etc.) are not configured. Failures in one
@@ -246,8 +246,16 @@ async def _pipeline_scheduler_loop():
         "carmit_review_matches": (_carmit_review_matches_async,    900.0,    65.0),
         "carmit_handoff_to_tal": (_carmit_handoff_to_tal_async,    600.0,    80.0),
         "pipeline_watchdog":     (_pipeline_watchdog_async,        1800.0,   95.0),
-        "pipedrive_field_sync":  (_pipedrive_field_sync_async,     3600.0,   110.0),
-        "pipedrive_historical_import": (_pipedrive_historical_import_async, 14400.0, 125.0),
+        # Field DEFINITIONS (custom-field metadata) are near-static and the
+        # field endpoints return heavy payloads that burn Pipedrive's token
+        # budget. Once a day is plenty — they almost never change.
+        "pipedrive_field_sync":  (_pipedrive_field_sync_async,     86400.0,  110.0),
+        # Historical rejection import is idempotent "historical" data. It used to
+        # run every 4h, re-fetching notes for up to 1000 deals each run (~6000
+        # API calls/day — the single biggest Pipedrive token consumer). Now daily,
+        # and the importer skips deals it already processed (see
+        # pipedrive_historical_import.py), so after the first run it's near-zero.
+        "pipedrive_historical_import": (_pipedrive_historical_import_async, 86400.0, 125.0),
         # Push Pandi-created contacts (pipedrive_person_id NULL) up to Pipedrive
         # once the daily budget recovers. Runs hourly so backlog clears soon
         # after a 429 window; each run fails fast if still throttled.
