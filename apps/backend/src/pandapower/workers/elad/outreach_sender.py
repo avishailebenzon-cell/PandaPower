@@ -140,6 +140,17 @@ def process_elad_outreach(self, campaign_id: str) -> dict:
         Result dict with status, sent_count, failed_count
     """
     logger.info(f"Starting Elad outreach task for campaign {campaign_id}")
+
+    # Proactive outreach is time-gated (Shabbat/holiday/off-hours). If we're
+    # outside the allowed window, defer the whole campaign to the next open
+    # minute instead of cold-contacting clients at a bad time.
+    from pandapower.core.time_guard import can_perform_operation, seconds_until_allowed
+    allowed, reason = can_perform_operation("elad outreach campaign")
+    if not allowed:
+        delay = seconds_until_allowed()
+        logger.info(f"Elad outreach campaign {campaign_id} deferred {delay}s: {reason}")
+        raise self.retry(countdown=delay, max_retries=None)
+
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)

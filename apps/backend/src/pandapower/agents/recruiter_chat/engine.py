@@ -109,6 +109,14 @@ class RecruiterChatEngine:
         if history:
             return {"text": "", "skipped": True}
 
+        # Proactive outreach is time-gated (Shabbat/holiday/off-hours). Inbound
+        # replies are never gated — only this agent-initiated first contact is.
+        from pandapower.core.time_guard import can_perform_operation
+        allowed, reason = can_perform_operation(f"{self.recruiter} opening")
+        if not allowed:
+            logger.info(f"{self.recruiter} opening deferred for {conversation_id}: {reason}")
+            return {"text": "", "skipped": True, "deferred": True, "reason": reason}
+
         match_context = await self._build_match_context(conv.get("match_id"), supabase)
         addendum = await self._load_behavior_addendum(supabase)
         from pandapower.agents.company_profile import load_company_extra
