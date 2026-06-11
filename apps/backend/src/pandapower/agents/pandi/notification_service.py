@@ -50,22 +50,38 @@ class NotificationService:
         self._telegram_client = None
         self._settings = None
 
+    @staticmethod
+    def _unwrap(val):
+        """system_settings.setting_value may be a plain string or {"value": ...}."""
+        if isinstance(val, dict):
+            val = val.get("value")
+        if isinstance(val, str):
+            val = val.strip().strip('"').strip()
+        return val or ""
+
     async def _get_settings(self):
-        """Get Telegram settings from system_settings table."""
+        """Load Telegram settings from system_settings (best-effort)."""
         if self._settings is None:
-            from pandapower.core.supabase import get_supabase_client
+            try:
+                from pandapower.core.supabase import get_supabase_client
 
-            supabase = await get_supabase_client()
-
-            # Load Telegram settings
-            result = await supabase.table("system_settings").select(
-                "setting_value"
-            ).eq("setting_key", "telegram.bot_token").single()
-
-            if result:
+                supabase = await get_supabase_client()
+                # NOTE: async Supabase requires await ...execute() — the prior
+                # code called .single() with no execute(), so this always raised
+                # and settings stayed empty.
+                result = await supabase.table("system_settings").select(
+                    "setting_key, setting_value"
+                ).in_(
+                    "setting_key", ["telegram.bot_token", "telegram.admin_chat_id"]
+                ).execute()
+                rows = {r["setting_key"]: r.get("setting_value") for r in (result.data or [])}
                 self._settings = {
-                    "bot_token": result["setting_value"].get("value"),
+                    "bot_token": self._unwrap(rows.get("telegram.bot_token")),
+                    "admin_chat_id": self._unwrap(rows.get("telegram.admin_chat_id")),
                 }
+            except Exception as e:
+                logger.warning("telegram_settings_load_failed", error=str(e))
+                self._settings = {}
 
         return self._settings or {}
 
@@ -212,41 +228,60 @@ class NotificationService:
         return emoji_map.get(event_type, "ℹ️")
 
     async def _send_telegram_message(self, notification: dict) -> dict:
-        """
-        Send Telegram message to admin group.
+        """Deliver the notification to the admin.
 
-        Session 33 Placeholder: Actual Telegram sending would be implemented
-        with python-telegram-bot or similar library
+        Prefers Telegram when ``telegram.bot_token`` + ``telegram.admin_chat_id``
+        are configured in system_settings; otherwise falls back to the proven
+        Resend email path (same channel the rest of the app uses for admin
+        alerts). Always best-effort — a delivery failure never breaks the flow.
         """
+        # 1) Telegram, if configured.
         try:
-            logger.info(
-                "notification_would_send_to_telegram",
-                event_type=notification.get("event_type"),
-                title=notification.get("title"),
-            )
-
-            # TODO (Session 33+): Implement actual Telegram sending
-            # settings = await self._get_settings()
-            # bot_token = settings.get("bot_token")
-            # admin_chat_id = settings.get("admin_chat_id")
-            #
-            # if bot_token and admin_chat_id:
-            #     async with aiohttp.ClientSession() as session:
-            #         await session.post(
-            #             f"https://api.telegram.org/bot{bot_token}/sendMessage",
-            #             json={
-            #                 "chat_id": admin_chat_id,
-            #                 "text": notification["telegram_text"],
-            #                 "parse_mode": "Markdown",
-            #             },
-            #         )
-            #     return {"sent": True}
-
-            # For now: log and return success (Telegram configured but not wired)
-            return {"sent": True, "message": "logged_for_telegram"}
-
+            settings = await self._get_settings()
+            bot_token = settings.get("bot_token")
+            admin_chat_id = settings.get("admin_chat_id")
+            if bot_token and admin_chat_id:
+                import aiohttp
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                        json={
+                            "chat_id": admin_chat_id,
+                            "text": notification["telegram_text"],
+                            "parse_mode": "Markdown",
+                        },
+                        timeout=aiohttp.ClientTimeout(total=10),
+                    ) as resp:
+                        if resp.status == 200:
+                            return {"sent": True, "channel": "telegram"}
+                        body = await resp.text()
+                        logger.warning("telegram_send_non_200", status=resp.status, body=body[:200])
         except Exception as e:
-            logger.error(f"send_telegram_message failed: {e}", exc_info=True)
+            logger.warning("telegram_send_failed_falling_back_to_email", error=str(e))
+
+        # 2) Email fallback via Resend.
+        try:
+            from pandapower.integrations.resend_client import ResendClient
+            from pandapower.core.config import settings as cfg
+
+            if not cfg.RESEND_API_KEY:
+                logger.info("notification_logged_no_channel_configured",
+                            title=notification.get("title"))
+                return {"sent": False, "channel": "none"}
+
+            from pandapower.integrations.alert_service import get_admin_email
+            admin_email = await get_admin_email()
+            resend = ResendClient(api_key=cfg.RESEND_API_KEY)
+            html = (notification.get("telegram_text") or notification.get("message") or "")
+            await resend.send_email(
+                to=[admin_email],
+                from_addr=cfg.RESEND_FROM_EMAIL,
+                subject=notification.get("title") or "Pandi notification",
+                html=html.replace("\n", "<br>"),
+            )
+            return {"sent": True, "channel": "email"}
+        except Exception as e:
+            logger.error(f"notification delivery failed (telegram+email): {e}", exc_info=True)
             return {"sent": False, "error": str(e)}
 
     async def _log_notification(

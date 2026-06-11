@@ -67,7 +67,7 @@ def get_pandi_tools() -> list:
         },
         {
             "name": "search_candidates",
-            "description": "Search for candidates matching the job context. Returns up to 3 anonymized candidate profiles with match reasoning and scoring. Session 30: Real database queries with skill-based matching.",
+            "description": "Search the candidate database for matches to the job context. Returns a shortlist of 3-5 anonymized candidate profiles (iron number + capability summary, NO personal details) with match reasoning and scoring. Present ALL returned candidates to the client as a shortlist so they can choose.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -77,8 +77,8 @@ def get_pandi_tools() -> list:
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Max candidates to return (default 3)",
-                        "default": 3,
+                        "description": "Max candidates to return for the shortlist (default 5, present 3-5)",
+                        "default": 5,
                     },
                 },
                 "required": ["context_summary"],
@@ -86,7 +86,7 @@ def get_pandi_tools() -> list:
         },
         {
             "name": "mark_client_interested",
-            "description": "Record that the client is interested in a specific candidate. Updates referral status to client_interested.",
+            "description": "Record that the client is interested in a specific candidate. Updates referral status to client_interested. Call this when the client picks a candidate from the shortlist, BEFORE asking them to confirm sending the full CV.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -97,6 +97,24 @@ def get_pandi_tools() -> list:
                     "interest_reason": {
                         "type": "string",
                         "description": "Why the client is interested (optional)",
+                    },
+                },
+                "required": ["candidate_number"],
+            },
+        },
+        {
+            "name": "send_candidate_cv",
+            "description": "Send the chosen candidate's FULL CV to the client in Panda-Tech format. ONLY call this after the client has EXPLICITLY confirmed (positive answer) that they want to receive the full CV of this specific candidate. The system renders the branded Panda-Tech CV and delivers it automatically over WhatsApp.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "candidate_number": {
+                        "type": "string",
+                        "description": "Candidate number the client confirmed (e.g., C000123)",
+                    },
+                    "confirmation_note": {
+                        "type": "string",
+                        "description": "Short note on the client's confirmation (optional)",
                     },
                 },
                 "required": ["candidate_number"],

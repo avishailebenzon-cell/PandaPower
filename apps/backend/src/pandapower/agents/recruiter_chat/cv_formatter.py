@@ -319,44 +319,18 @@ async def generate_formatted_cv(supabase, match_id: str, *, force: bool = False)
     candidate_id = row.get("candidate_id")
     iron_number = row.get("iron_number") or ""
 
-    branding = await _load_branding(supabase)
-    html_doc = build_cv_html(cand, iron_number, branding)
-
-    # Render HTML → PDF via ConvertAPI (no system libs needed on Render).
-    from pandapower.integrations.convertapi_client import (
-        ConvertApiClient,
-        get_convertapi_config,
+    # Render + upload via the shared, candidate-centric helper. Elad layers its
+    # approval gate and matches bookkeeping (below) on top of this.
+    from pandapower.agents.shared.cv_delivery import render_and_upload_cv
+    rendered = await render_and_upload_cv(
+        supabase,
+        cand,
+        iron_number or str(match_id),
+        folder=candidate_id or match_id,  # test matches may lack a candidate
     )
-    cfg = await get_convertapi_config(supabase)
-    secret = cfg.get("secret")
-    if not secret:
-        return {"ok": False, "status": None, "path": None,
-                "error": "ConvertAPI secret not configured"}
-
-    client = ConvertApiClient(secret)
-    try:
-        pdf_bytes = await client.html_to_pdf(html_doc)
-    except Exception as e:
-        logger.error(f"[panda_cv] render failed for match {match_id}: {e}")
-        return {"ok": False, "status": None, "path": None, "error": f"render failed: {e}"}
-    finally:
-        await client.close()
-
-    # Upload (overwrite-safe: stable path per candidate; upsert).
-    safe_iron = (iron_number or str(match_id)).replace("/", "_")
-    folder = candidate_id or match_id  # test matches may lack a candidate
-    storage_path = f"formatted/{folder}/panda_cv_{safe_iron}.pdf"
-    try:
-        from pandapower.integrations.supabase_storage import SupabaseStorageManager
-        storage = SupabaseStorageManager(supabase)
-        try:
-            await storage.supabase.storage.from_(storage.bucket_name).remove([storage_path])
-        except Exception:
-            pass  # first generation — nothing to remove
-        await storage.upload_file(storage_path, pdf_bytes, "application/pdf")
-    except Exception as e:
-        logger.error(f"[panda_cv] upload failed for match {match_id}: {e}")
-        return {"ok": False, "status": None, "path": None, "error": f"upload failed: {e}"}
+    if not rendered.get("ok"):
+        return {"ok": False, "status": None, "path": None, "error": rendered.get("error")}
+    storage_path = rendered["path"]
 
     try:
         await supabase.table("matches").update({

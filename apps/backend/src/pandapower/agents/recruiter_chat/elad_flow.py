@@ -428,12 +428,12 @@ async def handle_cv_decision_if_awaiting(engine, conversation_id: UUID, conv: di
 async def send_cv_file(engine, conversation_id: UUID, conv: dict) -> bool:
     """Deliver the candidate's CV to the client over WhatsApp — in Panda-Tech format.
 
-    We never forward the raw uploaded file. The client only ever receives the
-    branded "Panda-Tech format" CV, and only once a human has approved the
-    rendered document (``matches.formatted_cv_status = 'approved'``). If no
-    approved CV exists yet, we generate/stage one for review and return False so
-    the caller tells the client it's on the way — a human approval then triggers
-    the actual send. See :mod:`cv_formatter`.
+    We never forward the raw uploaded file; the client only ever receives the
+    branded "Panda-Tech format" CV. Elad now **auto-sends** on the client's own
+    explicit positive approval (the CV-offer buttons), with no human-in-the-loop
+    gate — mirroring Pandi (see
+    :func:`pandapower.agents.pandi.tool_handlers.handle_send_candidate_cv`).
+    If a rendered CV doesn't exist yet, we render one on the fly and deliver it.
     """
     supabase = await engine._get_supabase()
     match_id = conv.get("match_id")
@@ -451,31 +451,30 @@ async def send_cv_file(engine, conversation_id: UUID, conv: dict) -> bool:
         logger.error(f"elad: CV lookup failed for match {match_id}: {e}")
         return False
 
-    # Gate: only an approved Panda-Tech CV may be sent to the client.
-    if cv_status != "approved" or not storage_path:
+    # Auto-render the Panda-Tech CV if one isn't staged yet. No approval gate:
+    # the client already chose "receive full CV", so we deliver immediately.
+    if not storage_path:
         from pandapower.agents.recruiter_chat import cv_formatter
-        # Stage a CV for human review if none is pending yet (generated/approved).
-        if cv_status not in ("generated", "approved"):
-            try:
-                await cv_formatter.generate_formatted_cv(supabase, match_id)
-            except Exception as e:
-                logger.error(f"elad: could not stage formatted CV for {match_id}: {e}")
-        logger.info(f"elad: formatted CV not yet approved for match {match_id} — holding for review")
-        return False
+        try:
+            gen = await cv_formatter.generate_formatted_cv(supabase, match_id)
+        except Exception as e:
+            logger.error(f"elad: could not render formatted CV for {match_id}: {e}")
+            return False
+        if not gen.get("ok") or not gen.get("path"):
+            logger.error(f"elad: formatted CV render failed for {match_id}: {gen.get('error')}")
+            return False
+        storage_path = gen["path"]
 
     filename = f"PandaTech_CV_{iron or cand_name}.pdf"
 
-    try:
-        from pandapower.integrations.supabase_storage import SupabaseStorageManager
-        storage = SupabaseStorageManager(supabase)
-        signed_url = await storage.create_signed_url(storage_path, expires_in_seconds=604800)
-    except Exception as e:
-        logger.error(f"elad: signed URL failed for {storage_path}: {e}")
+    from pandapower.agents.shared.cv_delivery import signed_cv_url, send_cv_file_via
+    signed_url = await signed_cv_url(supabase, storage_path)
+    if not signed_url:
         return False
 
     raw_phone = await engine._resolve_phone(conversation_id, supabase)
     creds = await engine._load_green_api_creds(supabase)
-    if not (raw_phone and creds and signed_url):
+    if not (raw_phone and creds):
         return False
     from pandapower.core import phone as phone_utils
     from pandapower.integrations.green_api import GreenAPIClient
@@ -484,7 +483,31 @@ async def send_cv_file(engine, conversation_id: UUID, conv: dict) -> bool:
         return False
     client = GreenAPIClient(instance_id=creds["instance_id"], token=creds["token"])
     try:
-        res = await client.send_file(chat_id, signed_url, filename)
-        return bool(res.get("success"))
+        ok = await send_cv_file_via(
+            supabase, client, chat_id, storage_path, filename, signed_url=signed_url,
+        )
     finally:
         await client.close()
+
+    # Record the transferred file as its own chat message so the conversation
+    # screen shows a "file sent" marker with a link to view the CV.
+    if ok:
+        try:
+            await engine._save_message(
+                conversation_id, "outbound", filename, supabase,
+                author="agent", message_type="file", file_url=signed_url,
+            )
+        except Exception as e:
+            logger.error(f"elad: failed to record CV file message for {match_id}: {e}")
+        # Auto-approve bookkeeping: Elad sent on the client's own approval, so
+        # mark the rendered CV as delivered (no separate human approval step).
+        try:
+            await supabase.table("matches").update({
+                "formatted_cv_status": "approved",
+                "formatted_cv_path": storage_path,
+                "formatted_cv_approved_at": datetime.utcnow().isoformat(),
+                "formatted_cv_approved_by": "elad-auto",
+            }).eq("id", str(match_id)).execute()
+        except Exception as e:
+            logger.warning(f"elad: could not stamp auto-approved CV for {match_id}: {e}")
+    return ok

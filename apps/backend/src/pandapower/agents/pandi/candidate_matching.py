@@ -4,6 +4,7 @@ Implements candidate database queries and match score calculation
 """
 
 import logging
+import re
 from typing import Optional
 from uuid import UUID
 
@@ -15,6 +16,13 @@ logger = _structlog.get_logger(__name__)
 
 class CandidateMatchingEngine:
     """Match candidates to job contexts based on skills, experience, and requirements."""
+
+    # Don't present candidates below this composite score — a weak/irrelevant
+    # match on a client-facing shortlist is worse than a shorter list.
+    MIN_PRESENTABLE_SCORE = 45.0
+    # How many candidates to score per search. The scorer runs one skills query
+    # per candidate (N+1), so this is a deliberate ceiling, not the whole table.
+    SCORING_POOL = 200
 
     def __init__(self):
         self._supabase = None
@@ -60,14 +68,19 @@ class CandidateMatchingEngine:
                 required_clearance=required_clearance,
             )
 
-            # Query active candidates from database
+            # Query candidates from database. NOTE: the live schema has no
+            # is_active/primary_domain/languages columns — select only real
+            # columns (see routers/admin/candidate_management._DB_COLUMNS) plus
+            # the rich CV fields used for the capability description / formatted CV.
+            # Order the scoring pool by experience (a reasonable prior) so the
+            # window isn't an arbitrary insertion-order slice of the table.
             candidates_result = await supabase.table("candidates").select(
-                """
-                id, name, years_of_experience,
-                clearance_level,
-                location, primary_domain, languages
-                """
-            ).eq("is_active", True).limit(100).execute()  # Fetch batch for scoring
+                "id, candidate_number, name, years_of_experience, "
+                "clearance_level, location, key_skills, detected_language, "
+                "extracted_from_cv"
+            ).order(
+                "years_of_experience", desc=True
+            ).limit(self.SCORING_POOL).execute()
 
             candidates = candidates_result.data if candidates_result else []
 
@@ -89,13 +102,20 @@ class CandidateMatchingEngine:
                 )
                 scored_candidates.append(score_data)
 
-            # Sort by score descending and return top N
+            # Sort by score descending, then keep only presentable matches.
             scored_candidates.sort(key=lambda x: x["match_score"], reverse=True)
-            top_candidates = scored_candidates[:limit]
+            presentable = [
+                c for c in scored_candidates
+                if c["match_score"] >= self.MIN_PRESENTABLE_SCORE
+            ]
+            top_candidates = presentable[:limit]
 
             logger.info(
                 "candidates_matched",
-                count=len(top_candidates),
+                scored=len(scored_candidates),
+                presentable=len(presentable),
+                returned=len(top_candidates),
+                pool_truncated=len(candidates) >= self.SCORING_POOL,
                 top_score=top_candidates[0]["match_score"] if top_candidates else 0,
             )
 
@@ -119,13 +139,30 @@ class CandidateMatchingEngine:
 
         candidate_id = candidate["id"]
 
-        # Fetch candidate skills
-        skills_result = await supabase.table("candidate_skills").select(
-            "skill_name, years_in_skill, proficiency"
-        ).eq("candidate_id", str(candidate_id)).execute()
+        # Fetch normalized candidate skills. The candidate_skills table may be
+        # empty/absent for a given candidate — fall back to the key_skills array
+        # stored on the candidate row so matching still works.
+        candidate_skills: list = []
+        try:
+            skills_result = await supabase.table("candidate_skills").select(
+                "skill_name, years_in_skill, proficiency"
+            ).eq("candidate_id", str(candidate_id)).execute()
+            candidate_skills = skills_result.data if skills_result else []
+        except Exception:
+            candidate_skills = []
 
-        candidate_skills = skills_result.data if skills_result else []
-        candidate_skill_names = {skill["skill_name"].lower() for skill in candidate_skills}
+        if not candidate_skills:
+            for s in (candidate.get("key_skills") or []):
+                if isinstance(s, str) and s.strip():
+                    candidate_skills.append({"skill_name": s.strip()})
+                elif isinstance(s, dict) and s.get("skill_name"):
+                    candidate_skills.append(s)
+
+        candidate_skill_names = {
+            str(skill.get("skill_name", "")).lower()
+            for skill in candidate_skills
+            if skill.get("skill_name")
+        }
 
         # Calculate skill match scores
         must_have_matched = sum(
@@ -191,17 +228,76 @@ class CandidateMatchingEngine:
             candidate.get("location"),
         )
 
+        # Human-facing iron number. Falls back to the row id when a candidate
+        # has not been backfilled with a candidate_number yet (migration 020).
+        iron = candidate.get("candidate_number") or str(candidate.get("id"))
+
         return {
-            "candidate_number": candidate.get("id"),
+            "candidate_number": iron,
+            "candidate_id": str(candidate.get("id")),
             "match_score": round(composite_score, 1),
             "years_experience": float(candidate_years),
             "security_clearance": candidate.get("clearance_level", "unknown"),
             "location": candidate.get("location", ""),
-            "languages": candidate.get("languages", []),
+            "domain": self._infer_domain(candidate),
             "top_skills": self._get_top_skills(candidate_skills, 4),
-            "summary": candidate.get("cv_summary", "")[:200],  # Truncate for readability
+            "summary": self._capability_summary(candidate),
             "reasoning": reasoning,
         }
+
+    def _extracted_fields(self, candidate: dict) -> dict:
+        """Return candidates.extracted_from_cv.extracted_fields (or {})."""
+        ef = candidate.get("extracted_from_cv")
+        if isinstance(ef, dict):
+            inner = ef.get("extracted_fields")
+            if isinstance(inner, dict):
+                return inner
+        return {}
+
+    def _infer_domain(self, candidate: dict) -> str:
+        """Best-effort professional domain for display (no personal details)."""
+        ef = self._extracted_fields(candidate)
+        for k in ("primary_domain", "domain", "current_position", "title"):
+            v = ef.get(k)
+            if v:
+                return str(v)
+        return ""
+
+    def _capability_summary(self, candidate: dict) -> str:
+        """A short, anonymized capability description (no name/contact/company).
+
+        The raw CV summary frequently opens with the candidate's own name and
+        sometimes their email/phone — strip those before this text is ever shown
+        to a client (defense-in-depth on top of the prompt's no-identity rule).
+        """
+        ef = self._extracted_fields(candidate)
+        summary = str(ef.get("summary") or candidate.get("cv_summary") or "")
+        if not summary:
+            return ""
+
+        # Redact contact channels.
+        summary = re.sub(r"\S+@\S+", "", summary)  # emails
+        summary = re.sub(r"https?://\S+", "", summary)  # urls
+        summary = re.sub(r"[+]?\d[\d\s().-]{6,}\d", "", summary)  # phone-like
+
+        # Redact the candidate's own name (full string + individual tokens).
+        names = [
+            ef.get("name"), ef.get("name_he"), ef.get("name_en"),
+            candidate.get("name"),
+        ]
+        tokens: set[str] = set()
+        for n in names:
+            if not n:
+                continue
+            n = str(n).strip()
+            if len(n) >= 2:
+                tokens.add(n)
+                tokens.update(t for t in n.split() if len(t) >= 2)
+        for t in sorted(tokens, key=len, reverse=True):
+            summary = re.sub(re.escape(t), "", summary, flags=re.IGNORECASE)
+
+        summary = re.sub(r"\s{2,}", " ", summary).strip(" ,.-–—\n\t")
+        return summary[:280]
 
     def _extract_min_years(self, qualifications: str) -> float:
         """Extract minimum years of experience from qualifications text."""
