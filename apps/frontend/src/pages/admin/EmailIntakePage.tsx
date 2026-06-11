@@ -10,9 +10,15 @@ export function EmailIntakePage() {
     refetchInterval: 5000,
   });
 
+  const PAGE_SIZE = 50;
+  const [page, setPage] = useState(0);
+
   const { data: logs } = useQuery({
-    queryKey: ["email-logs"],
-    queryFn: () => fetch(`${env.API_BASE_URL}/admin/email/logs?limit=50`).then(r => r.json()),
+    queryKey: ["email-logs", page],
+    queryFn: () =>
+      fetch(
+        `${env.API_BASE_URL}/admin/email/logs?limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}`
+      ).then(r => r.json()),
     refetchInterval: 10000,
   });
 
@@ -284,6 +290,28 @@ export function EmailIntakePage() {
                 )}
               </tbody>
             </table>
+          </div>
+
+          {/* Pagination */}
+          <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-700">
+            <button
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              disabled={page === 0}
+              className="px-4 py-2 text-sm font-semibold rounded-lg border border-gray-600 text-gray-200 hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              → הקודם
+            </button>
+            <span className="text-xs text-gray-400">
+              עמוד {page + 1}
+              {logs?.data?.length ? ` · שורות ${page * PAGE_SIZE + 1}–${page * PAGE_SIZE + logs.data.length}` : ""}
+            </span>
+            <button
+              onClick={() => setPage((p) => p + 1)}
+              disabled={(logs?.data?.length ?? 0) < PAGE_SIZE}
+              className="px-4 py-2 text-sm font-semibold rounded-lg border border-gray-600 text-gray-200 hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              הבא ←
+            </button>
           </div>
         </div>
       </div>

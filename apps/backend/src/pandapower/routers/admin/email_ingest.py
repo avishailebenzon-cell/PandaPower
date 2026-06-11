@@ -502,7 +502,7 @@ async def get_logs(
         response = (
             await query.order("processing_started_at", desc=True, nullsfirst=False)
             .order("created_at", desc=True)
-            .range(offset, offset + limit)
+            .range(offset, offset + limit - 1)
             .execute()
         )
 
