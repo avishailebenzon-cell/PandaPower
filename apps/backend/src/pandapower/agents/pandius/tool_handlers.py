@@ -6,8 +6,34 @@ from uuid import UUID
 import structlog
 
 from pandapower.core.supabase import get_supabase_client
+from pandapower.core.phone import to_international, phones_match
 
 logger = structlog.get_logger(__name__)
+
+
+async def _find_contact_by_phone(supabase, phone: str) -> Optional[dict]:
+    """Find a contact matching ``phone`` tolerantly across number formats.
+
+    Tries an exact match on the canonical international form first (fast path),
+    then falls back to a tolerant national-tail comparison so "+972-58…",
+    "0586…" and "97258…" all resolve to the same contact."""
+    intl = to_international(phone)
+    if not intl:
+        return None
+    res = await supabase.table("contacts").select(
+        "id, full_name, email, contact_status, phone"
+    ).eq("phone", intl).limit(1).execute()
+    if res.data:
+        return res.data[0]
+    # Fallback: scan recent candidates and compare tolerantly. Bounded to keep
+    # this cheap; exact-match above handles the canonical-stored common case.
+    res2 = await supabase.table("contacts").select(
+        "id, full_name, email, contact_status, phone"
+    ).not_.is_("phone", "null").limit(2000).execute()
+    for c in (res2.data or []):
+        if phones_match(c.get("phone"), phone):
+            return c
+    return None
 
 
 async def handle_identify_candidate(
@@ -18,23 +44,28 @@ async def handle_identify_candidate(
     """Check if this phone already belongs to a known contact."""
     try:
         supabase = await get_supabase_client()
-        res = await supabase.table("contacts").select(
-            "id, full_name, email, contact_status"
-        ).eq("phone", phone).limit(1).execute()
+        contact = await _find_contact_by_phone(supabase, phone)
 
-        if res.data:
-            contact = res.data[0]
+        if contact:
             return {
                 "status": "found",
                 "candidate_exists": True,
                 "contact_id": contact["id"],
                 "full_name": contact.get("full_name"),
-                "message": f"שלום {contact.get('full_name', '')}! 👋 טוב לראות אותך שוב.",
+                "email": contact.get("email"),
+                # Internal guidance for the model — NOT shown to the candidate.
+                # Don't blindly greet by the stored name: if the person introduces
+                # themselves differently, trust what they say now and update.
+                "guidance": (
+                    "כבר קיים איש קשר עם המספר הזה. אם הפרטים תואמים — אפשר להמשיך "
+                    "בלי לבקש שוב שם/מייל. אם המועמד מציג את עצמו אחרת מהשם השמור, "
+                    "סמוך על מה שהוא אומר עכשיו ועדכן את הפרטים."
+                ),
             }
         return {
             "status": "not_found",
             "candidate_exists": False,
-            "message": "מועמד חדש — צריך לאסוף שם מלא ומייל.",
+            "guidance": "מועמד חדש — אסוף שם מלא ומייל, ואז קרא ל-save_candidate.",
         }
     except Exception as e:
         logger.error(f"identify_candidate failed: {e}", exc_info=True)
@@ -54,13 +85,28 @@ async def handle_save_candidate(
     try:
         supabase = await get_supabase_client()
         full_name = f"{first_name} {last_name}".strip()
+        # Store the canonical international form so future lookups match.
+        phone = to_international(phone) or phone
 
-        # Don't duplicate if a contact already exists for this phone.
-        existing = await supabase.table("contacts").select("id").eq(
-            "phone", phone
-        ).limit(1).execute()
-        if existing.data:
-            contact_id = existing.data[0]["id"]
+        # Don't duplicate if a contact already exists for this phone. Refresh the
+        # stored name/email with what the candidate just told us — the existing
+        # row may be stale (e.g. a contact saved under this number long ago), and
+        # the live conversation is the more authoritative source.
+        existing_contact = await _find_contact_by_phone(supabase, phone)
+        if existing_contact:
+            contact_id = existing_contact["id"]
+            updates = {}
+            if full_name and full_name != existing_contact.get("full_name"):
+                updates["full_name"] = full_name
+            if email and email != existing_contact.get("email"):
+                updates["email"] = email
+            if updates:
+                try:
+                    await supabase.table("contacts").update(updates).eq(
+                        "id", contact_id
+                    ).execute()
+                except Exception as e:
+                    logger.warning(f"Failed to refresh existing contact: {e}")
             await _link_contact(supabase, pandius_client_id, contact_id, full_name, email)
             return {
                 "status": "already_exists",
@@ -207,12 +253,20 @@ async def execute_tool(
     tool_input: dict,
     conversation_id: UUID,
     pandius_client_id: UUID,
+    phone: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Dispatch a tool call by name."""
+    """Dispatch a tool call by name.
+
+    ``phone`` is the candidate's real WhatsApp number, injected server-side. For
+    phone-bearing tools we OVERRIDE whatever the model passed (it doesn't know
+    the number and used to guess it, matching the wrong contact)."""
     handler = TOOL_HANDLERS.get(tool_name)
     if not handler:
         logger.error(f"Unknown Pandius tool: {tool_name}")
         return {"status": "error", "message": f"Unknown tool: {tool_name}"}
+    tool_input = dict(tool_input or {})
+    if tool_name in ("identify_candidate", "save_candidate") and phone:
+        tool_input["phone"] = phone
     try:
         return await handler(
             conversation_id=conversation_id,

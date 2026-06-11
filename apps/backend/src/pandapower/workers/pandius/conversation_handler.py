@@ -14,6 +14,7 @@ async def handle_candidate_message(
     pandius_client_id: UUID,
     incoming_text: str,
     chat_id: str,
+    phone: str = "",
 ) -> dict:
     """Generate Pandius's reply and send it to the candidate via WhatsApp."""
     engine = PandiusConversationEngine()
@@ -21,6 +22,7 @@ async def handle_candidate_message(
         conversation_id=conversation_id,
         pandius_client_id=pandius_client_id,
         incoming_text=incoming_text,
+        phone=phone,
     )
 
     response_text = (result or {}).get("text", "") if isinstance(result, dict) else ""

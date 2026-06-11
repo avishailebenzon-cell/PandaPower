@@ -23,6 +23,7 @@ MODEL = "claude-sonnet-4-6"
 MAX_TOKENS = 600
 MAX_HISTORY = 16            # recent messages fed to the model
 MAX_INBOUND_PER_CONVERSATION = 30  # hard ceiling; after this, hand off to humans
+MAX_TOOL_TURNS = 5         # max model<->tool round trips before forcing a reply
 
 
 class PandiusConversationEngine:
@@ -42,8 +43,15 @@ class PandiusConversationEngine:
         conversation_id: UUID,
         pandius_client_id: UUID,
         incoming_text: str,
+        phone: Optional[str] = None,
     ) -> Optional[dict]:
-        """Handle one inbound text message and produce Pandius's reply."""
+        """Handle one inbound text message and produce Pandius's reply.
+
+        ``phone`` is the candidate's WhatsApp number (canonical international
+        digits, e.g. "972586665248"). It is injected server-side into the tool
+        calls so the model never has to know or guess it — guessing was the root
+        cause of identify_candidate matching the wrong contact.
+        """
         supabase = await self._get_supabase()
 
         # Hard message ceiling — protects against runaway cost on a single thread.
@@ -80,8 +88,54 @@ class PandiusConversationEngine:
         if not messages or messages[-1] != {"role": "user", "content": incoming_text}:
             messages.append({"role": "user", "content": incoming_text})
 
+        # Agentic tool loop: call the model, run any tools it requests, feed the
+        # tool RESULTS back to the model, and let it write the final user-facing
+        # reply. Tool result strings are internal context for the model — they are
+        # NEVER shown to the candidate directly (that's what leaked "מועמד חדש —
+        # צריך לאסוף..." and a stale contact's greeting into the chat). The reply
+        # is only ever the model's text from the turn that requests no more tools.
+        from .tool_handlers import execute_tool
+        import json
+
+        response_text = ""
         try:
-            response = await self._call_claude(messages)
+            for _ in range(MAX_TOOL_TURNS):
+                response = await self._call_claude(messages)
+                content = response.get("content", [])
+                text = response.get("text", "")
+                tool_uses = [
+                    b for b in content
+                    if hasattr(b, "type") and b.type == "tool_use"
+                ]
+
+                if not tool_uses:
+                    # Final turn — no tools requested. This text is the reply.
+                    response_text = text
+                    break
+
+                # Record the assistant's tool-requesting turn, then run the tools
+                # and hand their results back so the model can respond to them.
+                messages.append({"role": "assistant", "content": content})
+                tool_result_blocks = []
+                for block in tool_uses:
+                    logger.info("pandius_tool", tool=block.name)
+                    result = await execute_tool(
+                        tool_name=block.name,
+                        tool_input=block.input,
+                        conversation_id=conversation_id,
+                        pandius_client_id=pandius_client_id,
+                        phone=phone,
+                    )
+                    tool_result_blocks.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": json.dumps(result, ensure_ascii=False),
+                    })
+                messages.append({"role": "user", "content": tool_result_blocks})
+            else:
+                # Ran out of tool turns without a clean text reply — fall back to
+                # whatever text the last turn produced.
+                response_text = response_text or text
         except Exception as e:
             logger.error("pandius_claude_failed", error=str(e))
             return {
@@ -89,22 +143,6 @@ class PandiusConversationEngine:
                 "blocked": False,
                 "reason": "llm_error",
             }
-
-        # Execute tool calls.
-        from .tool_handlers import execute_tool
-
-        response_text = response.get("text", "")
-        for block in response.get("content", []):
-            if hasattr(block, "type") and block.type == "tool_use":
-                logger.info("pandius_tool", tool=block.name)
-                result = await execute_tool(
-                    tool_name=block.name,
-                    tool_input=block.input,
-                    conversation_id=conversation_id,
-                    pandius_client_id=pandius_client_id,
-                )
-                if result.get("message"):
-                    response_text = (response_text + "\n\n" + result["message"]).strip()
 
         if response_text:
             # גילוי נאות — prepend the one-time AI disclosure on the first

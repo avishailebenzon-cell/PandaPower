@@ -12,6 +12,7 @@ from uuid import UUID
 
 from pandapower.workers.celery_app import app
 from pandapower.core.supabase import get_supabase_client
+from pandapower.core.phone import to_international
 from .conversation_handler import handle_candidate_message
 from .cv_ingest import ingest_whatsapp_cv
 
@@ -146,6 +147,9 @@ async def _process_pandius_incoming_message_async(payload: dict) -> dict:
             pandius_client_id=UUID(str(client_id)),
             incoming_text=incoming_for_engine,
             chat_id=chat_id or f"{phone.replace('+', '')}@c.us",
+            # Canonical international digits (e.g. "972586665248") — injected into
+            # the tool calls so the model never has to know/guess the phone.
+            phone=to_international(phone) or phone,
         )
         return {"status": "processed", "client_id": client_id, "reply": result}
 

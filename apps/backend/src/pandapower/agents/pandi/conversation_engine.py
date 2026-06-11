@@ -19,6 +19,8 @@ from .tools import get_pandi_tools
 
 logger = structlog.get_logger(__name__)
 
+MAX_TOOL_TURNS = 5  # max model<->tool round trips before forcing a reply
+
 
 class ConversationEngine:
     """Manages LLM-powered conversations with Pandi clients."""
@@ -174,14 +176,57 @@ class ConversationEngine:
         # Add current user message
         messages.append({"role": "user", "content": incoming_text})
 
+        # 6+7. Agentic tool loop: call the model, run any tools it requests, feed
+        # the tool RESULTS back to the model, and let it write the final reply.
+        # Tool result strings are internal context for the model — they are NEVER
+        # appended to the reply verbatim (that leaked internal notes to clients and
+        # left the model blind to what its own tools returned). The reply is only
+        # the model's text from the turn that requests no more tools.
+        from .tool_handlers import execute_tool
+        import json as _json
+
+        response = None
+        response_text = ""
         try:
-            response = await self._call_claude(
-                messages=messages,
-                tools=tools_list,
-                job_context=job_context,
-                model="claude-opus-4-7",
-                client_status=client_status,
-            )
+            for _ in range(MAX_TOOL_TURNS):
+                response = await self._call_claude(
+                    messages=messages,
+                    tools=tools_list,
+                    job_context=job_context,
+                    model="claude-opus-4-7",
+                    client_status=client_status,
+                )
+                content_blocks = response.get("content", [])
+                text = response.get("text", "")
+                tool_uses = [
+                    b for b in content_blocks
+                    if hasattr(b, "type") and b.type == "tool_use"
+                ]
+
+                if not tool_uses:
+                    response_text = text
+                    break
+
+                messages.append({"role": "assistant", "content": content_blocks})
+                tool_result_blocks = []
+                for block in tool_uses:
+                    logger.info(f"Executing tool: {block.name}")
+                    tool_result = await execute_tool(
+                        tool_name=block.name,
+                        tool_input=block.input,
+                        conversation_id=conversation_id,
+                        pandi_client_id=pandi_client_id,
+                    )
+                    logger.info(f"Tool result: {tool_result}")
+                    tool_result_blocks.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": _json.dumps(tool_result, ensure_ascii=False),
+                    })
+                messages.append({"role": "user", "content": tool_result_blocks})
+            else:
+                # Exhausted tool turns without a clean text reply.
+                response_text = response_text or (response.get("text", "") if response else "")
         except Exception as e:
             logger.error("claude_call_failed", error=str(e))
             return {
@@ -189,33 +234,6 @@ class ConversationEngine:
                 "blocked": False,
                 "reason": "llm_error",
             }
-
-        # 7. Execute any tool calls (Session 29)
-        from .tool_handlers import execute_tool
-
-        response_text = response.get("text", "")
-        content_blocks = response.get("content", [])
-        tool_results = []
-        for block in content_blocks:
-            if hasattr(block, "type") and block.type == "tool_use":
-                logger.info(f"Executing tool: {block.name}")
-                tool_result = await execute_tool(
-                    tool_name=block.name,
-                    tool_input=block.input,
-                    conversation_id=conversation_id,
-                    pandi_client_id=pandi_client_id,
-                )
-                tool_results.append({
-                    "tool": block.name,
-                    "result": tool_result,
-                })
-                logger.info(f"Tool result: {tool_result}")
-
-        # If tools were executed, append their results to text response
-        if tool_results:
-            for tool_result in tool_results:
-                if tool_result["result"].get("message"):
-                    response_text += "\n\n" + tool_result["result"]["message"]
 
         # 8. Send response to client
 

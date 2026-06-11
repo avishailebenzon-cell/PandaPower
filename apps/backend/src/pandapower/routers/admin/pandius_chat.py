@@ -327,11 +327,14 @@ async def generate_pandius_reply(conversation_id: UUID, supabase=Depends(get_sup
         )
         from pandapower.workers.pandius.conversation_handler import handle_candidate_message
 
+        from pandapower.core.phone import to_international
+
         result = await handle_candidate_message(
             conversation_id=conversation_id,
             pandius_client_id=UUID(str(conv["pandius_client_id"])),
             incoming_text=last_inbound.data[0]["text"],
             chat_id=chat_id or "",
+            phone=to_international(client.get("phone")) or (client.get("phone") or ""),
         )
         return SendMessageResponse(
             text=(result or {}).get("response_text", "") if isinstance(result, dict) else "",
