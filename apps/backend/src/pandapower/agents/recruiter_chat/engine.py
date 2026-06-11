@@ -443,16 +443,18 @@ class RecruiterChatEngine:
 
     async def _save_message(
         self, conversation_id: UUID, direction: str, text: str, supabase,
-        author: str = "agent",
+        author: str = "agent", message_type: str = "text", file_url: str = None,
     ) -> None:
         row = {
             "conversation_id": str(conversation_id),
             "recruiter": self.recruiter,
             "direction": direction,
-            "message_type": "text",
+            "message_type": message_type,
             "text": text,
             "author": author,
         }
+        if file_url:
+            row["file_url"] = file_url
         try:
             await supabase.table("recruiter_messages").insert(row).execute()
         except Exception as e:
@@ -502,6 +504,29 @@ class RecruiterChatEngine:
                         ).eq("id", str(conversation_id)).execute()
             except Exception as e:
                 logger.warning(f"{self.recruiter} could not resolve phone: {e}")
+        # Elad's counterpart is the CLIENT (the contact who opened the job), not
+        # the candidate. Resolve them from the job's organisation and cache the
+        # number + the chosen client contact on the match for next time.
+        if not phone and self.recruiter == "elad" and conv.get("match_id"):
+            try:
+                from pandapower.agents.recruiter_chat import elad_flow
+                client_phone, contact_id = await elad_flow.resolve_client_phone(
+                    self, conv["match_id"]
+                )
+                if client_phone:
+                    phone = client_phone.strip()
+                    await supabase.table("recruiter_conversations").update(
+                        {"candidate_phone": phone_utils.normalize_phone(phone)}
+                    ).eq("id", str(conversation_id)).execute()
+                    if contact_id:
+                        try:
+                            await supabase.table("matches").update(
+                                {"elad_sent_to_client_id": contact_id}
+                            ).eq("id", str(conv["match_id"])).execute()
+                        except Exception:
+                            pass
+            except Exception as e:
+                logger.warning(f"elad could not resolve client phone: {e}")
         return phone or None
 
     async def _send_whatsapp(self, conversation_id: UUID, text: str, supabase) -> dict:
@@ -509,7 +534,14 @@ class RecruiterChatEngine:
 
         Never raises — a delivery failure must not lose the saved message.
         Returns ``{"sent": bool, "reason": str | None}`` so callers can surface
-        *why* a message wasn't delivered instead of dropping it silently."""
+        *why* a message wasn't delivered instead of dropping it silently. The
+        outcome is also stamped on the conversation so the operator sees an
+        undelivered message in the UI instead of only in the logs."""
+        outcome = await self._attempt_whatsapp(conversation_id, text, supabase)
+        await self._record_delivery(conversation_id, outcome, supabase)
+        return outcome
+
+    async def _attempt_whatsapp(self, conversation_id: UUID, text: str, supabase) -> dict:
         try:
             raw_phone = await self._resolve_phone(conversation_id, supabase)
             if not raw_phone:
@@ -541,6 +573,20 @@ class RecruiterChatEngine:
         except Exception as e:
             logger.warning(f"{self.recruiter} WhatsApp send failed (message still saved): {e}")
             return {"sent": False, "reason": "exception"}
+
+    async def _record_delivery(self, conversation_id: UUID, outcome: dict, supabase) -> None:
+        """Stamp the last delivery result on the conversation (schema-defensive —
+        no-op if the columns aren't present yet)."""
+        try:
+            await supabase.table("recruiter_conversations").update({
+                "last_delivery_ok": bool(outcome.get("sent")),
+                "last_delivery_reason": outcome.get("reason"),
+                "last_delivery_at": datetime.utcnow().isoformat(),
+            }).eq("id", str(conversation_id)).execute()
+        except Exception as e:
+            msg = str(e).lower()
+            if not ("does not exist" in msg or "schema cache" in msg or "pgrst204" in msg):
+                logger.debug(f"{self.recruiter}: could not record delivery status: {e}")
 
     async def _load_green_api_creds(self, supabase) -> Optional[dict]:
         try:

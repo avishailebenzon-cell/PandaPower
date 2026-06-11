@@ -106,6 +106,56 @@ async def ensure_iron_number(engine, match_id) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# Client recipient resolution (real, non-test matches)
+# ---------------------------------------------------------------------------
+async def resolve_client_phone(engine, match_id) -> tuple[Optional[str], Optional[str]]:
+    """Resolve the CLIENT contact's phone for a real Elad match.
+
+    Elad's counterpart is the contact person at the company that opened the job
+    — NOT the candidate. We locate them via the job's Pipedrive organisation
+    (``jobs.org_id`` → ``contacts.pipedrive_org_id``), preferring the contact
+    whose name matches ``jobs.contact_person_name``, else the first org contact
+    that has a phone.
+
+    Returns ``(raw_phone, contact_id)`` or ``(None, None)``. Best-effort.
+    """
+    supabase = await engine._get_supabase()
+    try:
+        m = await supabase.table("matches").select(
+            "jobs(org_id, contact_person_name)"
+        ).eq("id", str(match_id)).limit(1).execute()
+        job = (m.data[0].get("jobs") if m.data else None) or {}
+    except Exception as e:
+        logger.warning(f"elad: client job lookup failed for {match_id}: {e}")
+        return None, None
+
+    org_id = job.get("org_id")
+    want_name = (job.get("contact_person_name") or "").strip()
+    if not org_id:
+        logger.info(f"elad: match {match_id} job has no org_id — cannot resolve client phone")
+        return None, None
+
+    try:
+        rows = await supabase.table("contacts").select(
+            "id, full_name, phone"
+        ).eq("pipedrive_org_id", org_id).execute()
+    except Exception as e:
+        logger.warning(f"elad: contacts lookup failed for org {org_id}: {e}")
+        return None, None
+
+    with_phone = [r for r in (rows.data or []) if (r.get("phone") or "").strip()]
+    if not with_phone:
+        logger.info(f"elad: no org-{org_id} contact has a phone for match {match_id}")
+        return None, None
+
+    if want_name:
+        for r in with_phone:
+            if (r.get("full_name") or "").strip() == want_name:
+                return r["phone"], r["id"]
+    return with_phone[0]["phone"], with_phone[0]["id"]
+
+
+# ---------------------------------------------------------------------------
 # Candidate dossier (anonymised — NO phone / email)
 # ---------------------------------------------------------------------------
 def _age_from_birthdate(raw) -> Optional[int]:
@@ -307,10 +357,21 @@ async def advance_after_turn(engine, conversation_id: UUID, conv: dict, history:
     stage = cur.get("elad_stage")
     rank = _STAGE_ORDER.get(stage, 0)
 
+    # Once we're awaiting the CV decision (or past it), there's nothing left to
+    # auto-advance — skip the classifier call entirely (saves an LLM round-trip
+    # on every subsequent Elad turn).
+    if rank >= _STAGE_ORDER[STAGE_AWAITING]:
+        return
+
+    # Don't mark "details_sent" off the opening alone — require that the client
+    # actually engaged (at least one inbound) so an enthusiastic opener doesn't
+    # jump the status before any real presentation happened.
+    has_client_inbound = any(m.get("direction") == "inbound" for m in history)
+
     signals = await _classify(engine, history)
 
     # details_sent — Elad has presented the candidate's profile.
-    if signals["presented_details"] and rank < _STAGE_ORDER[STAGE_DETAILS]:
+    if signals["presented_details"] and has_client_inbound and rank < _STAGE_ORDER[STAGE_DETAILS]:
         await _set_stage(engine, match_id, STAGE_DETAILS,
                          elad_details_sent_at=datetime.utcnow().isoformat())
         stage, rank = STAGE_DETAILS, _STAGE_ORDER[STAGE_DETAILS]
@@ -371,7 +432,11 @@ _DECLINE_TOKENS = ("לא לקבל", "לא כרגע", "לא תודה", "2", "2️
 
 
 def interpret_cv_decision(text: Optional[str], button_id: Optional[str]) -> Optional[str]:
-    """Map an inbound reply to 'approved' / 'declined' / None (not a CV answer)."""
+    """Map an inbound reply to 'approved' / 'declined' / None (not a CV answer).
+
+    Buttons are decisive. For *free text* we only interpret SHORT replies (a few
+    words) — a long sentence is left to the LLM so we don't mis-read phrases like
+    "אין סיבה לא לקבל, שלחו!" (which contains "לא לקבל") as a decline."""
     if button_id == CV_YES_ID:
         return "approved"
     if button_id == CV_NO_ID:
@@ -379,9 +444,20 @@ def interpret_cv_decision(text: Optional[str], button_id: Optional[str]) -> Opti
     t = (text or "").strip().lower()
     if not t:
         return None
-    if any(tok in t for tok in _DECLINE_TOKENS):
+    # Exact numeric choices are always decisive.
+    if t in ("1", "1️⃣"):
+        return "approved"
+    if t in ("2", "2️⃣"):
         return "declined"
-    if any(t == tok or t.startswith(tok) for tok in _APPROVE_TOKENS):
+    # Keyword matching only on short replies (≤ 4 words) to avoid false hits
+    # inside longer sentences.
+    if len(t.split()) > 4:
+        return None
+    # Decline wins only when the reply is explicitly negative; check it first so
+    # "לא לקבל"/"לא כרגע" aren't shadowed by the "קבל" inside them.
+    if t.startswith("לא") or any(tok in t for tok in _DECLINE_TOKENS):
+        return "declined"
+    if any(t == tok or t.startswith(tok) or tok in t for tok in _APPROVE_TOKENS):
         return "approved"
     return None
 

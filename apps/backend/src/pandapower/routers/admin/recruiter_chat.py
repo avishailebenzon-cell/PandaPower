@@ -54,6 +54,9 @@ class ConversationSummary(BaseModel):
     elad_stage: Optional[str] = None
     elad_stage_label: Optional[str] = None
     iron_number: Optional[str] = None
+    # Last WhatsApp delivery outcome (so the UI can flag undelivered messages).
+    last_delivery_ok: Optional[bool] = None
+    last_delivery_reason: Optional[str] = None
 
 
 class ChatMessage(BaseModel):
@@ -62,6 +65,8 @@ class ChatMessage(BaseModel):
     text: Optional[str] = None
     author: Optional[str] = None  # agent | human | candidate
     created_at: Optional[str] = None
+    message_type: Optional[str] = "text"  # text | file | image | audio
+    file_url: Optional[str] = None  # download/view URL for an attached file (e.g. a CV)
 
 
 class ConversationDetail(BaseModel):
@@ -133,6 +138,7 @@ def make_recruiter_chat_router(recruiter: str) -> APIRouter:
         try:
             res = await supabase.table("recruiter_conversations").select(
                 "id, match_id, status, auto_reply_paused, started_at, updated_at, "
+                "last_delivery_ok, last_delivery_reason, "
                 "matches(elad_stage, iron_number, candidates(name), jobs(job_title))"
             ).eq("recruiter", recruiter).order("updated_at", desc=True).limit(limit).execute()
 
@@ -176,6 +182,8 @@ def make_recruiter_chat_router(recruiter: str) -> APIRouter:
                     elad_stage=stage,
                     elad_stage_label=ELAD_STAGE_LABELS.get(stage),
                     iron_number=(match.get("iron_number") if isinstance(match, dict) else None),
+                    last_delivery_ok=conv.get("last_delivery_ok"),
+                    last_delivery_reason=conv.get("last_delivery_reason"),
                 ))
             return out
         except Exception as e:
@@ -197,7 +205,7 @@ def make_recruiter_chat_router(recruiter: str) -> APIRouter:
             job = (match.get("jobs") or {}) if isinstance(match, dict) else {}
 
             msg_res = await supabase.table("recruiter_messages").select(
-                "id, direction, text, author, created_at"
+                "id, direction, text, author, created_at, message_type, file_url"
             ).eq("conversation_id", str(conversation_id)).order(
                 "created_at", desc=False
             ).execute()
@@ -208,6 +216,8 @@ def make_recruiter_chat_router(recruiter: str) -> APIRouter:
                     text=m.get("text"),
                     author=m.get("author"),
                     created_at=m.get("created_at"),
+                    message_type=m.get("message_type") or "text",
+                    file_url=m.get("file_url"),
                 )
                 for m in (msg_res.data or [])
             ]
