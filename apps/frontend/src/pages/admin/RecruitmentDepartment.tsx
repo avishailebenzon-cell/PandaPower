@@ -481,6 +481,19 @@ export const RecruitmentDepartment: React.FC = () => {
                       )}
                     </div>
 
+                    {/* Overdue badge — the deal is still open and active, the
+                        target deadline has just passed. */}
+                    {dl !== null && dl < 0 && (
+                      <div className="mb-2 flex justify-end">
+                        <span
+                          className="text-xs font-bold px-2 py-1 rounded bg-red-600 text-white"
+                          title={`הדדליין עבר לפני ${Math.abs(dl)} ימים — המשרה עדיין פעילה`}
+                        >
+                          ⏰ באיחור
+                        </span>
+                      </div>
+                    )}
+
                     {/* Title + deal number */}
                     <div className="flex items-start justify-between gap-2">
                       <h3 className="font-bold text-white text-right flex-1">{job.job_title}</h3>
