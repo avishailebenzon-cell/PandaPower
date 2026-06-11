@@ -64,12 +64,21 @@ class PandiusConversationEngine:
         conversation = await self._load_conversation(conversation_id, supabase)
         recent = await self._load_recent_messages(conversation_id, supabase)
 
+        # Map our internal direction labels to Anthropic roles. The API only
+        # accepts "user"/"assistant"; passing "inbound"/"outbound" raises a 400.
         messages = [
-            {"role": m["direction"], "content": m["text"]}
+            {
+                "role": "assistant" if m["direction"] == "outbound" else "user",
+                "content": m["text"],
+            }
             for m in recent
             if m.get("text")
         ]
-        messages.append({"role": "user", "content": incoming_text})
+        # The current inbound message was already persisted by the handler, so it
+        # is the last history item. Append the engine's input only when it differs
+        # (e.g. the synthetic CV-received prompt) to avoid duplicating the turn.
+        if not messages or messages[-1] != {"role": "user", "content": incoming_text}:
+            messages.append({"role": "user", "content": incoming_text})
 
         try:
             response = await self._call_claude(messages)
