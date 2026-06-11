@@ -329,6 +329,15 @@ async def sync_pipedrive_deals(since: Optional[datetime] = None) -> Dict[str, An
                 f"Errors: {len(summary['errors'])}"
             )
 
+        # Reconcile deletions: deals removed in Pipedrive (status=deleted) are not
+        # returned by /v1/deals at all, so they never reach the loop above and would
+        # otherwise stay stuck as 'open' jobs forever. On a FULL sync we have the
+        # complete set of live deals, so any 'open' job missing from it was deleted
+        # in Pipedrive and should be closed. Skipped on delta sync (partial set).
+        if since is None:
+            fetched_ids = {deal.get("id") for deal in deals if deal.get("id") is not None}
+            summary["deleted_closed"] = await _close_deleted_jobs(db, fetched_ids)
+
         await pipedrive.close()
         await _log_sync_completion(db, "deals", summary, sync_start_time)
 
@@ -422,6 +431,54 @@ async def _sync_deal(db: Any, deal_data: Dict[str, Any]) -> None:
         raise
 
 
+async def _close_deleted_jobs(db: Any, fetched_ids: set) -> int:
+    """Mark jobs whose Pipedrive deal no longer exists (deleted) as closed.
+
+    Called on full sync only, where `fetched_ids` is the complete set of live
+    Pipedrive deal ids. Any job still flagged 'open' but absent from that set
+    had its deal deleted in Pipedrive; we set status='deleted' + is_active=False
+    so it stops surfacing to recruiters and matching.
+
+    Returns the number of jobs closed.
+    """
+    try:
+        open_jobs_resp = await db.table("jobs").select(
+            "id,pipedrive_deal_id"
+        ).eq("status", "open").execute()
+
+        open_jobs = open_jobs_resp.data or []
+        stale = [
+            j for j in open_jobs
+            if j.get("pipedrive_deal_id") not in fetched_ids
+        ]
+
+        if not stale:
+            return 0
+
+        now = datetime.utcnow().isoformat()
+        for job in stale:
+            try:
+                await db.table("jobs").update({
+                    "status": "deleted",
+                    "last_modified_by": "pipedrive_sync",
+                    "updated_at": now,
+                }).eq("id", job["id"]).execute()
+            except Exception as e:
+                logger.error(
+                    f"Failed to close deleted job {job.get('pipedrive_deal_id')}: {e}"
+                )
+
+        logger.info(
+            f"Closed {len(stale)} job(s) whose Pipedrive deal was deleted: "
+            f"{[j.get('pipedrive_deal_id') for j in stale]}"
+        )
+        return len(stale)
+
+    except Exception as e:
+        logger.error(f"Deleted-deal reconciliation failed: {e}")
+        return 0
+
+
 async def _log_sync_completion(
     db: Any, entity_type: str, summary: Dict[str, Any], sync_start_time: datetime
 ) -> None:
@@ -445,6 +502,7 @@ async def _log_sync_completion(
                 "synced": summary.get("synced", 0),
                 "skipped_wrong_status": summary.get("skipped_wrong_status", 0),
                 "skipped_no_job_title": summary.get("skipped_no_job_title", 0),
+                "deleted_closed": summary.get("deleted_closed", 0),
                 "errors": summary.get("errors", []),
             },
         }).execute()
