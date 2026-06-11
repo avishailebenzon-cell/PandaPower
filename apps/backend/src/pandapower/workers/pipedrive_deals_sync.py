@@ -62,6 +62,19 @@ def _extract_id(field_value: Any) -> Optional[int]:
         return None
 
 
+def _extract_embedded_name(field_value: Any) -> Optional[str]:
+    """Pipedrive returns linked person_id/org_id as a dict that includes 'name'.
+
+    Return that embedded name if present, so we can fill contact/org names even
+    when the entity isn't in our own synced tables yet.
+    """
+    if isinstance(field_value, dict):
+        name = field_value.get("name")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+    return None
+
+
 def _extract_text(field_value: Any) -> Optional[str]:
     """Extract text safely from a field that may be None / dict / str"""
     if field_value is None:
@@ -107,23 +120,23 @@ def _extract_opening_date(deal: Dict[str, Any]) -> Optional[str]:
     if not add_time:
         return None
 
-    # add_time is usually an ISO string or Unix timestamp
     if isinstance(add_time, str):
-        # If it's already an ISO string, return as-is
-        if "T" in add_time or "Z" in add_time:
+        add_time = add_time.strip()
+        # Already ISO (has the 'T' separator) - return as-is.
+        if "T" in add_time:
             return add_time
-        # If it's a timestamp, try to parse and convert
+        # Pipedrive's usual format is space-separated: "2026-05-15 04:04:25".
+        # Normalize to ISO so it stores cleanly in a timestamptz column.
+        if "-" in add_time and ":" in add_time:
+            return add_time.replace(" ", "T") + "Z"
+        # Otherwise it may be a Unix timestamp string.
         try:
-            timestamp = int(add_time)
-            from datetime import datetime
-            return datetime.utcfromtimestamp(timestamp).isoformat() + "Z"
+            return datetime.utcfromtimestamp(int(add_time)).isoformat() + "Z"
         except (ValueError, TypeError):
             return None
-    elif isinstance(add_time, int):
-        # Unix timestamp
-        from datetime import datetime
+    elif isinstance(add_time, (int, float)):
         try:
-            return datetime.utcfromtimestamp(add_time).isoformat() + "Z"
+            return datetime.utcfromtimestamp(int(add_time)).isoformat() + "Z"
         except (ValueError, OSError):
             return None
 
@@ -283,11 +296,18 @@ async def sync_pipedrive_deals(since: Optional[datetime] = None) -> Dict[str, An
                     pipedrive_person_id = _extract_id(deal.get("person_id"))
                     pipedrive_org_id = _extract_id(deal.get("org_id"))
 
-                    # Fetch contact person name from contacts table
-                    contact_name = await _fetch_contact_name(db, pipedrive_person_id)
-
-                    # Fetch organization name from organizations table
-                    organization_name = await _fetch_organization_name(db, pipedrive_org_id)
+                    # Resolve contact/org names. Prefer our synced tables, but fall
+                    # back to the name embedded in the deal payload (Pipedrive returns
+                    # person_id/org_id as dicts with a 'name'), so the field is filled
+                    # even when the org/person isn't in our tables yet.
+                    contact_name = (
+                        await _fetch_contact_name(db, pipedrive_person_id)
+                        or _extract_embedded_name(deal.get("person_id"))
+                    )
+                    organization_name = (
+                        await _fetch_organization_name(db, pipedrive_org_id)
+                        or _extract_embedded_name(deal.get("org_id"))
+                    )
 
                     # Build complete deal_data with all field mappings
                     deal_data = {
