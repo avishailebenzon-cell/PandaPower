@@ -6,8 +6,8 @@
  * detail panel with the complete extracted CV data.
  */
 
-import { useEffect, useState } from "react";
-import { useQuery, keepPreviousData } from "@tanstack/react-query";
+import { useEffect, useState, type MouseEvent } from "react";
+import { useQuery, keepPreviousData, useQueryClient } from "@tanstack/react-query";
 import { env } from "@/lib/env";
 import { CandidateDetailModal } from "@/components/CandidateDetailModal";
 
@@ -327,7 +327,7 @@ function CandidateRow({ c, onClick }: { c: CandidateRow; onClick: () => void }) 
         {c.phone || "—"}
       </td>
       <td className="py-2.5 px-3 text-slate-300 whitespace-nowrap">{c.location || "—"}</td>
-      <td className="py-2.5 px-3 text-slate-300 whitespace-nowrap">{c.clearance_level || "—"}</td>
+      <ClearanceCell c={c} />
       <td className="py-2.5 px-3 text-slate-300 text-center">
         {c.years_of_experience != null ? `${c.years_of_experience} שנים` : "—"}
       </td>
@@ -382,6 +382,103 @@ function CandidateRow({ c, onClick }: { c: CandidateRow; onClick: () => void }) 
         {fmtDate(c.created_at)}
       </td>
     </tr>
+  );
+}
+
+/**
+ * Editable security-clearance cell. Shows the current value with a small
+ * pencil; clicking it opens an inline editor so a recruiter who personally
+ * knows a candidate can correct the clearance extracted from the CV.
+ */
+function ClearanceCell({ c }: { c: CandidateRow }) {
+  const queryClient = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(c.clearance_level ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(false);
+
+  const stop = (e: MouseEvent) => e.stopPropagation();
+
+  const save = async () => {
+    setSaving(true);
+    setError(false);
+    try {
+      const r = await fetch(`${env.API_BASE_URL}/admin/candidates/${c.id}/clearance`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clearance_level: value.trim() || null }),
+      });
+      if (!r.ok) throw new Error("failed");
+      c.clearance_level = value.trim() || null;
+      setEditing(false);
+      // Refresh table, grouped rows and group counts.
+      queryClient.invalidateQueries({ queryKey: ["candidates-database"] });
+      queryClient.invalidateQueries({ queryKey: ["candidates-group-rows"] });
+      queryClient.invalidateQueries({ queryKey: ["candidates-groups"] });
+    } catch {
+      setError(true);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (editing) {
+    return (
+      <td className="py-2.5 px-3 whitespace-nowrap" onClick={stop}>
+        <div className="flex items-center gap-1">
+          <input
+            autoFocus
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") save();
+              if (e.key === "Escape") setEditing(false);
+            }}
+            placeholder="סיווג…"
+            className={`w-24 px-2 py-1 rounded bg-slate-800 border text-white text-xs focus:outline-none ${
+              error ? "border-red-600" : "border-slate-600 focus:border-indigo-500"
+            }`}
+          />
+          <button
+            onClick={save}
+            disabled={saving}
+            className="text-green-400 hover:text-green-300 text-xs px-1 disabled:opacity-40"
+            title="שמור"
+          >
+            {saving ? "…" : "✓"}
+          </button>
+          <button
+            onClick={() => {
+              setValue(c.clearance_level ?? "");
+              setEditing(false);
+              setError(false);
+            }}
+            className="text-slate-400 hover:text-slate-200 text-xs px-1"
+            title="ביטול"
+          >
+            ✕
+          </button>
+        </div>
+      </td>
+    );
+  }
+
+  return (
+    <td className="py-2.5 px-3 text-slate-300 whitespace-nowrap">
+      <span className="inline-flex items-center gap-1.5 group/clr">
+        {c.clearance_level || "—"}
+        <button
+          onClick={(e) => {
+            stop(e);
+            setEditing(true);
+          }}
+          className="text-slate-500 hover:text-indigo-400 opacity-0 group-hover/clr:opacity-100 transition text-xs"
+          title="ערוך סיווג"
+        >
+          ✎
+        </button>
+      </span>
+    </td>
   );
 }
 

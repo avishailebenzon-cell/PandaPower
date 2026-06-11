@@ -173,12 +173,37 @@ _DB_COLUMNS = (
 )
 
 
+# Clearance values that are really the SAME level but stored under different
+# labels. Each canonical key maps to the set of equivalent raw labels
+# (matched case-insensitively). רמה 1 הוא הסיווג הגבוה ביותר, ולכן
+# "1" / "Level 1" / "סיווג גבוה" הם אותו דבר בדיוק.
+_CLEARANCE_ALIASES = {
+    "1": {"1", "level 1", "סיווג גבוה"},
+}
+
+
+def _canonical_clearance(value) -> Optional[str]:
+    """Collapse equivalent clearance labels onto a single canonical key."""
+    if value is None or str(value).strip() == "":
+        return value
+    norm = str(value).strip().lower()
+    for canon, aliases in _CLEARANCE_ALIASES.items():
+        if norm in aliases:
+            return canon
+    return str(value).strip()
+
+
 def _apply_db_filters(q, *, search, language, clearance, location):
     """Apply the shared candidates-database filters to a query builder."""
     if language:
         q = q.eq("detected_language", language)
     if clearance:
-        q = q.eq("clearance_level", clearance)
+        aliases = _CLEARANCE_ALIASES.get(clearance)
+        if aliases:
+            # A consolidated group: match any of the equivalent raw labels.
+            q = q.or_(",".join(f"clearance_level.ilike.{a}" for a in aliases))
+        else:
+            q = q.eq("clearance_level", clearance)
     if location:
         q = q.eq("location", location)
     if search:
@@ -278,6 +303,9 @@ async def candidates_database_groups(
         counts: dict[str, int] = {}
         for row in response.data or []:
             key = row.get(field)
+            # Collapse equivalent clearance labels (1 / Level 1 / סיווג גבוה).
+            if field == "clearance_level":
+                key = _canonical_clearance(key)
             key = key if (key is not None and str(key).strip() != "") else "—"
             counts[key] = counts.get(key, 0) + 1
 
@@ -562,6 +590,51 @@ async def get_low_confidence_mappings(
 
     except Exception as e:
         logger.error(f"Failed to get low-confidence mappings: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ClearanceUpdate(BaseModel):
+    """Manual override of a candidate's security clearance."""
+
+    clearance_level: Optional[str] = None
+
+
+@router.post("/{candidate_id}/clearance")
+async def update_candidate_clearance(
+    candidate_id: str,
+    payload: ClearanceUpdate,
+    supabase=Depends(get_supabase_client),
+) -> dict:
+    """Manually set a candidate's security clearance.
+
+    Used when a recruiter personally knows a candidate's real clearance and
+    wants to correct the value extracted from the CV. An empty value clears it.
+    """
+    try:
+        from datetime import datetime
+
+        value = (payload.clearance_level or "").strip() or None
+        update_data = {
+            "clearance_level": value,
+            "last_updated_at": datetime.utcnow().isoformat(),
+        }
+
+        response = await (
+            supabase.table("candidates")
+            .update(update_data)
+            .eq("id", candidate_id)
+            .execute()
+        )
+
+        if response.data:
+            logger.info(f"Updated clearance for candidate {candidate_id} -> {value!r}")
+            return {"status": "updated", "candidate_id": candidate_id, "clearance_level": value}
+        raise HTTPException(status_code=404, detail="Candidate not found")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update candidate clearance: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
