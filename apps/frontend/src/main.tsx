@@ -55,6 +55,7 @@ import { EladConversationsPage } from '@/pages/admin/EladConversationsPage'
 import { PandiConversationsPage } from '@/pages/admin/PandiConversationsPage'
 import { PandiusClientRequestPage } from '@/pages/admin/PandiusClientRequestPage'
 import { PandiusConversationsPage } from '@/pages/admin/PandiusConversationsPage'
+import { WhatsAppConversationsPage } from '@/pages/admin/WhatsAppConversationsPage'
 import { TalTestPage } from '@/pages/admin/TalTestPage'
 import { EladTestPage } from '@/pages/admin/EladTestPage'
 import { MatchFlowDashboard } from '@/pages/admin/MatchFlowDashboard'
@@ -100,6 +101,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             <Route path="/admin/reingest" element={<ProtectedRoute><ReingestPage /></ProtectedRoute>} />
             <Route path="/admin/match-flow" element={<ProtectedRoute><MatchFlowDashboard /></ProtectedRoute>} />
             <Route path="/admin/whatsapp-agents" element={<ProtectedRoute><WhatsAppAgentsSettingsPage /></ProtectedRoute>} />
+            <Route path="/admin/whatsapp-conversations" element={<ProtectedRoute><WhatsAppConversationsPage /></ProtectedRoute>} />
           </Route>
 
           {/* WORK SECTION - Recruiting Department Operations */}
