@@ -352,10 +352,12 @@ async def _sync_deal(db: Any, deal_data: Dict[str, Any]) -> None:
     from pandapower.workers.agent_matching import AgentMatchingWorker
 
     try:
-        # First, check if this job already exists
+        # First, check if this job already exists.
+        # Use maybe_single(): .single() raises PGRST116 ("0 rows") for a brand-new
+        # deal not yet in the jobs table, which would abort the insert below.
         existing_response = await db.table("jobs").select("*").eq(
             "pipedrive_deal_id", deal_data["pipedrive_deal_id"]
-        ).single().execute()
+        ).maybe_single().execute()
 
         existing_job = existing_response.data if existing_response.data else None
 
