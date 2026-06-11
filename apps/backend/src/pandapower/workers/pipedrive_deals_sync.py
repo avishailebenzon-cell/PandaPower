@@ -292,15 +292,13 @@ async def sync_pipedrive_deals(since: Optional[datetime] = None) -> Dict[str, An
                         summary["skipped_wrong_status"] += 1
                         continue
 
-                    # Extract job_title. Prefer the custom field, but fall back to
-                    # the deal's own name (title) when it's empty — many open deals
-                    # leave the custom field blank yet carry the role in the deal
-                    # name (e.g. "יוסף עלמה, מהנדס שילובים, מלמ"). Without this they
-                    # were silently skipped as 'no job title' and never synced.
-                    job_title = (
-                        _extract_text(deal.get(FIELD_JOB_TITLE))
-                        or _extract_text(deal.get("title"))
-                    )
+                    # Extract job_title from the custom field ONLY. This field is
+                    # the recruiter-filled signal that "this deal is a real job
+                    # posting". Deals that leave it blank (sales/consulting/other
+                    # pipelines, or deal names that are just a contact note like
+                    # "עמוס בטיט - יועץ") are intentionally skipped — falling back
+                    # to the deal name surfaced non-job deals into the system.
+                    job_title = _extract_text(deal.get(FIELD_JOB_TITLE))
                     if not job_title:
                         summary["skipped_no_job_title"] += 1
                         continue
