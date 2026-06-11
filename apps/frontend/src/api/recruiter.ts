@@ -300,6 +300,28 @@ export async function rejectFormattedCv(
   return mapFormattedCv(await r.json());
 }
 
+export async function emailFormattedCv(
+  matchId: string,
+  to: string,
+  subject?: string,
+  message?: string
+): Promise<{ success: boolean; error?: string }> {
+  const r = await fetch(
+    `${API_BASE}/admin/recruiter/${matchId}/formatted-cv/email`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ to, subject: subject || null, message: message || null }),
+    }
+  );
+  if (!r.ok) {
+    let detail = r.statusText;
+    try { detail = (await r.json()).detail || detail; } catch { /* ignore */ }
+    throw new Error(detail);
+  }
+  return r.json();
+}
+
 /**
  * Get conversation details for a match
  */
