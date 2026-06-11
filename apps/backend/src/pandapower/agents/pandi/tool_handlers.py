@@ -68,7 +68,7 @@ async def handle_search_candidates(
     conversation_id: UUID,
     pandi_client_id: UUID,
     context_summary: str,
-    limit: int = 3,
+    limit: int = 5,
 ) -> dict[str, Any]:
     """Handle search_candidates tool call.
 
@@ -111,16 +111,10 @@ async def handle_search_candidates(
             formatted_candidates = []
 
             for candidate in candidates:
-                # Get candidate ID for referral creation
                 candidate_number = candidate.get("candidate_number")
-                _cand_res = await supabase.table("candidates").select(
-                    "id"
-                ).eq("candidate_number", candidate_number).limit(1).execute()
-                candidate_result = _cand_res.data[0] if _cand_res.data else None
+                candidate_id = candidate.get("candidate_id")
 
-                if candidate_result:
-                    candidate_id = candidate_result["id"]
-
+                if candidate_id:
                     # Create referral record (if not already in this conversation)
                     referral = await manager.create_referral(
                         candidate_id=UUID(candidate_id),
@@ -145,11 +139,15 @@ async def handle_search_candidates(
                             referral_id=referral.get("referral_id"),
                         )
 
-                # Format for LLM response
+                # Format for LLM response — anonymized: iron number + capabilities,
+                # NEVER name/phone/email/company.
                 formatted_candidates.append({
                     "number": candidate_number,
                     "score": candidate.get("match_score"),
                     "years_experience": candidate.get("years_experience"),
+                    "domain": candidate.get("domain"),
+                    "security_clearance": candidate.get("security_clearance"),
+                    "location": candidate.get("location"),
                     "skills": candidate.get("top_skills", []),
                     "summary": candidate.get("summary"),
                     "reasoning": candidate.get("reasoning"),
@@ -276,7 +274,11 @@ async def handle_mark_client_interested(
             return {
                 "status": "success",
                 "referral_number": referral_number,
-                "message": f"✅ המערכת קדמה את הפנייה שלך (מס' פנייה: {referral_number}) לצוות הגיוס. מנהל התחום יצור אתך קשר בתוך 48 שעות.",
+                # NOTE: this string is internal context for the model, not shown
+                # to the client verbatim. The choice is recorded; the next step is
+                # to ask the client to CONFIRM sending the full Panda-Tech CV, then
+                # call send_candidate_cv. Do NOT promise "a manager will call in 48h".
+                "message": f"רשמתי שהלקוח בחר ב-{candidate_number} (מס' פנייה: {referral_number}). עכשיו בקשי אישור מפורש לשליחת קורות החיים המלאים, ואז קראי ל-send_candidate_cv.",
             }
         else:
             return {
@@ -722,11 +724,206 @@ async def handle_create_client(
         }
 
 
+async def _resolve_candidate(supabase, candidate_number: str) -> Optional[dict]:
+    """Load a candidate by its iron number (candidate_number), falling back to id.
+
+    Returns the full set of fields ``build_cv_html`` consumes, or None.
+    """
+    cols = (
+        "id, candidate_number, name, years_of_experience, clearance_level, "
+        "extracted_from_cv, experiences, top_education, key_skills"
+    )
+    res = await supabase.table("candidates").select(cols).eq(
+        "candidate_number", candidate_number
+    ).limit(1).execute()
+    if res.data:
+        return res.data[0]
+    # Fallback: the value may be a raw row id (candidate not yet backfilled).
+    try:
+        res = await supabase.table("candidates").select(cols).eq(
+            "id", candidate_number
+        ).limit(1).execute()
+    except Exception:
+        return None
+    return res.data[0] if res.data else None
+
+
+async def handle_send_candidate_cv(
+    conversation_id: UUID,
+    pandi_client_id: UUID,
+    candidate_number: str,
+    confirmation_note: Optional[str] = None,
+) -> dict[str, Any]:
+    """Auto-send the chosen candidate's full CV in Panda-Tech format.
+
+    Called once the client has explicitly confirmed they want candidate
+    ``candidate_number``. Renders the branded Panda-Tech CV (never the raw
+    upload), delivers it to the client over WhatsApp, and records it on the
+    referral. No human-approval gate (Pandi auto-send, per product decision).
+    """
+    try:
+        supabase = await get_supabase_client()
+
+        cand = await _resolve_candidate(supabase, candidate_number)
+        if not cand:
+            return {
+                "status": "error",
+                "message": f"סליחה, לא מצאתי את המועמד {candidate_number}",
+            }
+        candidate_id = cand.get("id")
+        iron = cand.get("candidate_number") or str(candidate_id)
+
+        # GUARD: only ever send a candidate we actually presented to THIS client
+        # in THIS conversation. Without this, a hallucinated/typo'd number could
+        # push a real-name full CV of the wrong candidate to the client.
+        _guard = await supabase.table("candidate_referrals").select(
+            "id, status, full_cv_sent_at"
+        ).eq("conversation_id", str(conversation_id)).eq(
+            "candidate_id", str(candidate_id)
+        ).limit(1).execute()
+        referral_row = _guard.data[0] if _guard.data else None
+        if not referral_row:
+            logger.warning(
+                "send_cv_blocked_not_presented",
+                candidate_number=iron,
+                conversation_id=str(conversation_id),
+            )
+            return {
+                "status": "error",
+                "message": (
+                    "המועמד הזה לא הוצג בשיחה הזו, אז אי אפשר לשלוח את קורות החיים שלו. "
+                    "הצג/י את רשימת המועמדים ובקש/י מהלקוח לבחור מתוכה."
+                ),
+            }
+        # Idempotency: if already delivered, don't re-send the file.
+        if referral_row.get("full_cv_sent_at"):
+            return {
+                "status": "success",
+                "candidate_number": iron,
+                "message": f"כבר שלחתי ללקוח את קורות החיים של {iron} קודם לכן. ✅",
+            }
+
+        # 1. Render + upload the Panda-Tech formatted CV (shared with Elad).
+        from pandapower.agents.shared.cv_delivery import (
+            render_and_upload_cv,
+            send_cv_file_via,
+        )
+        rendered = await render_and_upload_cv(
+            supabase, cand, iron, folder=candidate_id
+        )
+        if not rendered.get("ok"):
+            logger.error(
+                "pandi_cv_render_failed",
+                candidate_number=iron,
+                error=rendered.get("error"),
+            )
+            return {
+                "status": "error",
+                "message": "סליחה, הייתה תקלה בהפקת קורות החיים. נסי שוב בעוד רגע.",
+            }
+        storage_path = rendered["path"]
+
+        # 2. Resolve the client's WhatsApp chat.
+        _pc = await supabase.table("pandi_clients").select(
+            "phone, whatsapp_chat_id"
+        ).eq("id", str(pandi_client_id)).limit(1).execute()
+        pc = _pc.data[0] if _pc.data else {}
+        chat_id = pc.get("whatsapp_chat_id")
+        if not chat_id:
+            from pandapower.core import phone as phone_utils
+            chat_id = phone_utils.to_chat_id(pc.get("phone"))
+        if not chat_id:
+            return {
+                "status": "error",
+                "message": "סליחה, לא הצלחתי לאתר את ערוץ השליחה. צוות הגיוס יחזור אליך.",
+            }
+
+        # 3. Send via Pandi's Green API instance.
+        from pandapower.integrations.green_api import get_green_api_client
+        green_api = await get_green_api_client("pandi")
+        if not green_api:
+            return {
+                "status": "error",
+                "message": "סליחה, שירות השליחה אינו זמין כרגע. צוות הגיוס יחזור אליך.",
+            }
+        filename = f"PandaTech_CV_{iron}.pdf"
+        try:
+            sent = await send_cv_file_via(
+                supabase, green_api, chat_id, storage_path, filename
+            )
+        finally:
+            await green_api.close()
+
+        if not sent:
+            return {
+                "status": "error",
+                "message": "סליחה, השליחה נכשלה. צוות הגיוס יחזור אליך בהקדם.",
+            }
+
+        # 3b. Record the file as a message so the conversations screen shows a
+        #     "CV sent" marker and we have a delivery record. Best-effort: the
+        #     pandi_messages schema may lack file columns — drop them on failure.
+        for _payload in (
+            {
+                "conversation_id": str(conversation_id),
+                "pandi_client_id": str(pandi_client_id),
+                "direction": "outbound",
+                "message_type": "file",
+                "text": filename,
+            },
+            {
+                "conversation_id": str(conversation_id),
+                "pandi_client_id": str(pandi_client_id),
+                "direction": "outbound",
+                "message_type": "text",
+                "text": f"📄 קורות חיים מלאים נשלחו: {iron}",
+            },
+        ):
+            try:
+                await supabase.table("pandi_messages").insert(_payload).execute()
+                break
+            except Exception:
+                continue
+
+        # 4. Record delivery on the referral (direct update — bypasses the strict
+        #    transition validator since auto-send skips the approval hops).
+        try:
+            await supabase.table("candidate_referrals").update({
+                "status": "full_cv_sent",
+                "formatted_cv_path": storage_path,
+                "full_cv_sent_at": datetime.utcnow().isoformat(),
+                "status_updated_at": datetime.utcnow().isoformat(),
+            }).eq("id", referral_row["id"]).execute()
+        except Exception as e:
+            logger.warning(f"could not stamp referral cv_sent for {iron}: {e}")
+
+        logger.info(
+            "pandi_cv_sent",
+            candidate_number=iron,
+            conversation_id=str(conversation_id),
+            path=storage_path,
+        )
+        return {
+            "status": "success",
+            "candidate_number": iron,
+            "message": f"📄 שלחתי לך כעת את קורות החיים המלאים של {iron} בפורמט פנדה-טק. אשמח לתאם איתך את ההמשך!",
+        }
+
+    except Exception as e:
+        logger.error(f"send_candidate_cv failed: {e}", exc_info=True)
+        return {
+            "status": "error",
+            "message": "סליחה, הייתה תקלה בשליחת קורות החיים",
+            "error": str(e),
+        }
+
+
 # Tool dispatcher
 TOOL_HANDLERS = {
     "update_job_context": handle_update_job_context,
     "search_candidates": handle_search_candidates,
     "mark_client_interested": handle_mark_client_interested,
+    "send_candidate_cv": handle_send_candidate_cv,
     "check_referral_history": handle_check_referral_history,
     "request_quota_increase": handle_request_quota_increase,
     "transfer_to_recruitment": handle_transfer_to_recruitment,

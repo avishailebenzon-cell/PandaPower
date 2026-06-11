@@ -576,25 +576,20 @@ Focus on: what the client is looking for (job type, requirements, preferences)."
     def _determine_mode(
         self, conversation_status: str, job_context: dict
     ) -> str:
-        """
-        Determine the conversation mode based on status and context.
+        """Determine the conversation mode for telemetry.
 
-        Session 31: Enhanced mode determination with partial context support.
+        Derived from job-context completeness (a signal we actually maintain
+        every turn) rather than ``conversation_status`` — that column is never
+        advanced past "open", so keying off it pinned the mode to "opening"
+        forever. Explicit terminal statuses are still honoured if ever set.
         """
-        if not conversation_status or conversation_status == "open":
-            return "opening"
-        elif conversation_status == "awaiting_job_definition":
-            # Check sufficiency with enhanced builder
-            if self.enhanced_context_builder.has_sufficient_context(job_context, allow_partial=True):
-                return "searching"
-            else:
-                return "job_context_building"
-        elif conversation_status == "presenting_candidates":
-            return "presenting"
-        elif conversation_status == "awaiting_selection":
-            return "awaiting_selection"
-        else:
+        if conversation_status in ("closed", "completed", "transferred_to_recruitment"):
             return "closing"
+        if not job_context:
+            return "opening"
+        if self.enhanced_context_builder.has_sufficient_context(job_context, allow_partial=True):
+            return "searching"
+        return "job_context_building"
 
     def _generate_context_guidance(self, job_context: dict) -> str:
         """

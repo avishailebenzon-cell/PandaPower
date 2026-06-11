@@ -127,13 +127,13 @@ class ReferralManager:
             supabase = await get_supabase_client()
 
             # Check if already offered in this conversation
-            existing = await supabase.table("candidate_referrals").select(
+            _existing_res = await supabase.table("candidate_referrals").select(
                 "id"
             ).eq("candidate_id", str(candidate_id)).eq(
                 "conversation_id", str(conversation_id)
-            ).single()
+            ).limit(1).execute()
 
-            if existing:
+            if _existing_res.data:
                 logger.warning(
                     "duplicate_referral_same_conversation",
                     candidate_id=str(candidate_id),
@@ -143,10 +143,11 @@ class ReferralManager:
                     "status": "error",
                     "message": f"Candidate {candidate_number} already offered in this conversation",
                     "error": "duplicate_offer_same_conversation",
+                    "referral_id": _existing_res.data[0]["id"],
                 }
 
             # Create referral record
-            referral = await supabase.table("candidate_referrals").insert(
+            _ref_res = await supabase.table("candidate_referrals").insert(
                 {
                     "candidate_id": str(candidate_id),
                     "candidate_number": candidate_number,
@@ -158,17 +159,27 @@ class ReferralManager:
                     "llm_match_reasoning": llm_match_reasoning,
                     "status": "presented",
                 }
-            ).single()
-
-            # Create history entry
-            await supabase.table("candidate_referral_history").insert(
-                {
-                    "referral_id": referral["id"],
-                    "from_status": None,
-                    "to_status": "presented",
-                    "reasoning": "Initial presentation to client",
+            ).execute()
+            referral = _ref_res.data[0] if _ref_res.data else None
+            if not referral:
+                return {
+                    "status": "error",
+                    "message": "Failed to record referral",
+                    "error": "insert_returned_no_row",
                 }
-            )
+
+            # Create history entry (best-effort — never fail the referral on this)
+            try:
+                await supabase.table("candidate_referral_history").insert(
+                    {
+                        "referral_id": referral["id"],
+                        "from_status": None,
+                        "to_status": "presented",
+                        "reasoning": "Initial presentation to client",
+                    }
+                ).execute()
+            except Exception as _he:
+                logger.warning(f"referral history insert failed: {_he}")
 
             logger.info(
                 "referral_created",
@@ -210,13 +221,13 @@ class ReferralManager:
             supabase = await get_supabase_client()
 
             # Query all referrals for this candidate-client pair
-            referrals = await supabase.table("candidate_referrals").select(
+            _ref_res = await supabase.table("candidate_referrals").select(
                 "id, status, presented_at, status_updated_at"
             ).eq("candidate_id", str(candidate_id)).eq(
                 "pandi_client_id", str(pandi_client_id)
-            ).order("presented_at", desc=True)
+            ).order("presented_at", desc=True).execute()
 
-            referrals = referrals if isinstance(referrals, list) else []
+            referrals = _ref_res.data or []
 
             if not referrals:
                 return {
@@ -283,9 +294,10 @@ class ReferralManager:
             supabase = await get_supabase_client()
 
             # Get current referral
-            referral = await supabase.table("candidate_referrals").select(
+            _cur_res = await supabase.table("candidate_referrals").select(
                 "status, candidate_number"
-            ).eq("id", str(referral_id)).single()
+            ).eq("id", str(referral_id)).limit(1).execute()
+            referral = _cur_res.data[0] if _cur_res.data else None
 
             if not referral:
                 return {
@@ -315,23 +327,26 @@ class ReferralManager:
                     else None,
                     "status_notes": status_notes,
                 }
-            ).eq("id", str(referral_id))
+            ).eq("id", str(referral_id)).execute()
 
-            # Create history entry
-            await supabase.table("candidate_referral_history").insert(
-                {
-                    "referral_id": str(referral_id),
-                    "from_status": current_status,
-                    "to_status": new_status,
-                    "triggered_by_pandi_client_id": str(triggered_by_pandi_client_id)
-                    if triggered_by_pandi_client_id
-                    else None,
-                    "triggered_by_user_id": str(triggered_by_user_id)
-                    if triggered_by_user_id
-                    else None,
-                    "reasoning": reasoning,
-                }
-            )
+            # Create history entry (best-effort)
+            try:
+                await supabase.table("candidate_referral_history").insert(
+                    {
+                        "referral_id": str(referral_id),
+                        "from_status": current_status,
+                        "to_status": new_status,
+                        "triggered_by_pandi_client_id": str(triggered_by_pandi_client_id)
+                        if triggered_by_pandi_client_id
+                        else None,
+                        "triggered_by_user_id": str(triggered_by_user_id)
+                        if triggered_by_user_id
+                        else None,
+                        "reasoning": reasoning,
+                    }
+                ).execute()
+            except Exception as _he:
+                logger.warning(f"referral history insert failed: {_he}")
 
             logger.info(
                 "referral_status_updated",
@@ -386,29 +401,15 @@ class ReferralManager:
         try:
             supabase = await get_supabase_client()
 
-            # Try to find referral (Session 34: handle missing table gracefully)
-            try:
-                referral = await supabase.table("candidate_referrals").select(
-                    "id, status"
-                ).eq("candidate_id", str(candidate_id)).eq(
-                    "conversation_id", str(conversation_id)
-                ).single()
-            except Exception as table_error:
-                # Table might not exist in production yet - log and provide mock response
-                logger.warning(
-                    "candidate_referrals_table_missing_or_error",
-                    error=str(table_error),
-                    candidate_number=candidate_number
-                )
-                # Return success with mock referral ID (temporary until migration runs)
-                return {
-                    "status": "success",
-                    "referral_id": str(UUID(int=0)),  # Mock UUID for now
-                    "message": f"✅ המערכת קדמה את הפנייה שלך לצוות הגיוס. מנהל התחום יצור אתך קשר בתוך 48 שעות.",
-                    "note": "System will sync with database when migrations run"
-                }
-
-            referral = None
+            # Find the referral created when this candidate was presented in this
+            # conversation. If the client picks a candidate we never presented
+            # (model hallucination / typo), there is nothing to mark.
+            _ref_res = await supabase.table("candidate_referrals").select(
+                "id, status"
+            ).eq("candidate_id", str(candidate_id)).eq(
+                "conversation_id", str(conversation_id)
+            ).order("presented_at", desc=True).limit(1).execute()
+            referral = _ref_res.data[0] if _ref_res.data else None
 
             if not referral:
                 logger.warning(
@@ -420,6 +421,14 @@ class ReferralManager:
                     "status": "error",
                     "message": f"No referral found for {candidate_number} in this conversation",
                     "error": "no_referral",
+                }
+
+            # Already past 'presented' (e.g. interested again) — idempotent success.
+            if referral.get("status") and referral["status"] != "presented":
+                return {
+                    "status": "success",
+                    "referral_id": referral["id"],
+                    "message": f"רשום שהלקוח מעוניין ב-{candidate_number}",
                 }
 
             # Update status
@@ -474,19 +483,20 @@ class ReferralManager:
             supabase = await get_supabase_client()
 
             # Get referral
-            referral = await supabase.table("candidate_referrals").select(
+            _ref_res = await supabase.table("candidate_referrals").select(
                 "*"
-            ).eq("id", str(referral_id)).single()
+            ).eq("id", str(referral_id)).limit(1).execute()
+            referral = _ref_res.data[0] if _ref_res.data else None
 
             if not referral:
                 return {"status": "error", "message": "Referral not found"}
 
             # Get history
-            history = await supabase.table("candidate_referral_history").select(
+            _hist_res = await supabase.table("candidate_referral_history").select(
                 "from_status, to_status, created_at, reasoning"
-            ).eq("referral_id", str(referral_id)).order("created_at", desc=False)
+            ).eq("referral_id", str(referral_id)).order("created_at", desc=False).execute()
 
-            history = history if isinstance(history, list) else []
+            history = _hist_res.data or []
 
             return {
                 "status": "success",
