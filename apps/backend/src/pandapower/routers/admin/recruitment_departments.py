@@ -225,28 +225,23 @@ async def get_assigned_jobs(
         if not jobs_result.data:
             return []
 
-        # First pass: keep only this department's open jobs (not expired).
+        # First pass: keep only this department's open jobs.
         # We do this so we can batch-load contact names by pipedrive_person_id below
         # (avoids an N+1 lookup per job).
         relevant_jobs = []
-        today = datetime.now().date()
         for job in jobs_result.data:
             agent_code = job.get("assigned_agent_code") or job.get("agent_code")
             if agent_code != department_code:
                 continue
             if job.get("status") != "open":
                 continue
-            # Skip jobs with passed deadlines
-            deadline_str = job.get("deadline")
-            if deadline_str:
-                try:
-                    deadline_date = datetime.fromisoformat(deadline_str.replace('Z', '+00:00')).date()
-                    if deadline_date < today:
-                        # Job deadline has passed — skip it (don't show to agent)
-                        continue
-                except (ValueError, AttributeError):
-                    # Invalid deadline format — include job anyway (let user deal with it)
-                    pass
+            # NOTE: We do NOT hide jobs whose deadline has passed. An open deal in
+            # Pipedrive is still active recruiting work (status='open' is the
+            # source of truth); the deadline is just a target date. Hiding overdue
+            # open jobs made real, actively-worked positions vanish from the
+            # agent's screen (e.g. deal 2244 — open, 21 candidates in Tal's queue,
+            # deadline 2026-05-07). The deadline is still returned so the UI can
+            # show/flag it as overdue.
             relevant_jobs.append(job)
 
         # Batch-resolve contact names: contacts.pipedrive_person_id BIGINT -> full_name.
