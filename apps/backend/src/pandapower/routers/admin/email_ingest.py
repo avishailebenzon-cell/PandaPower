@@ -493,7 +493,18 @@ async def get_logs(
         if status:
             query = query.eq("status", status)
 
-        response = await query.order("created_at", desc=True).range(offset, offset + limit).execute()
+        # Order by last processing activity, not row-insertion time. Historical
+        # ("backfill") emails are usually already present in the log from an
+        # earlier run, so re-processing them takes the duplicate-key UPDATE path
+        # which leaves created_at unchanged — they'd otherwise stay buried at the
+        # bottom and never show in the "היסטוריית קליטה" table. processing_started_at
+        # is bumped to now() on every (re)process, so sorting on it surfaces them.
+        response = (
+            await query.order("processing_started_at", desc=True, nullsfirst=False)
+            .order("created_at", desc=True)
+            .range(offset, offset + limit)
+            .execute()
+        )
 
         return {
             "total": len(response.data or []),
