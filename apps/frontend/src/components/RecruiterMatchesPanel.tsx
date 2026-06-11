@@ -19,7 +19,7 @@
  * Everything shown is REAL — no mock data. Empty state is explicit.
  */
 
-import { useState, useMemo, Fragment } from "react";
+import { useState, useMemo, useEffect, Fragment } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   fetchRecruiterMatches,
@@ -32,6 +32,7 @@ import {
   generateFormattedCv,
   approveFormattedCv,
   rejectFormattedCv,
+  emailFormattedCv,
   type Match,
   type MatchAction,
 } from "@/api/recruiter";
@@ -127,16 +128,24 @@ export function RecruiterMatchesPanel({
   const [candidateDetailId, setCandidateDetailId] = useState<string | null>(null);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [formattedCvMatch, setFormattedCvMatch] = useState<Match | null>(null);
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 100;
 
   const queryClient = useQueryClient();
   const tabParam = `${recruiter}-${subTab}`; // tal-queue, elad-history, etc.
+
+  // Whenever the filter context changes the result set, jump back to page 1 so
+  // we never sit on a now-out-of-range page (e.g. page 5 of a 2-page list).
+  useEffect(() => {
+    setPage(1);
+  }, [tabParam, favoritesOnly]);
 
   const recruiterName = recruiter === "carmit" ? "כרמית" : recruiter === "tal" ? "טל" : "אלעד";
   const counterparty = recruiter === "carmit" ? "התאמה" : recruiter === "tal" ? "מועמד" : "לקוח";
 
   const matchesQuery = useQuery({
-    queryKey: ["recruiter-matches", tabParam, favoritesOnly],
-    queryFn: () => fetchRecruiterMatches(tabParam, 100, 1, favoritesOnly),
+    queryKey: ["recruiter-matches", tabParam, favoritesOnly, page],
+    queryFn: () => fetchRecruiterMatches(tabParam, PAGE_SIZE, page, favoritesOnly),
     refetchInterval: 20000,
   });
 
@@ -178,6 +187,12 @@ export function RecruiterMatchesPanel({
   });
 
   const matches = matchesQuery.data?.matches ?? [];
+
+  // ---- Pagination derived state ----
+  const total = matchesQuery.data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const rangeStart = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
+  const rangeEnd = Math.min(page * PAGE_SIZE, total);
 
   // ---- Sorting & grouping (client-side, over the loaded page) ----
   const [sortKey, setSortKey] = useState<SortKey>("updated");
@@ -388,8 +403,8 @@ export function RecruiterMatchesPanel({
             tone="red"
           />
           <StatusCell
-            label={`סה״כ בתצוגה`}
-            value={matchesQuery.data?.total ?? 0}
+            label={total > 0 ? `מוצג ${rangeStart}–${rangeEnd} מתוך ${total}` : "סה״כ בתצוגה"}
+            value={total}
             tone="gray"
           />
         </div>
@@ -507,6 +522,35 @@ export function RecruiterMatchesPanel({
             </table>
           </div>
 
+          {/* Pagination — classic prev/next. The list can run to thousands of
+              matches; we load one PAGE_SIZE page at a time from the server. */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-gray-400">
+                מוצג {rangeStart}–{rangeEnd} מתוך {total}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={page <= 1 || matchesQuery.isFetching}
+                  className="px-3 py-1.5 rounded bg-gray-800 border border-gray-700 text-gray-200 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition"
+                >
+                  ▶ הקודם
+                </button>
+                <span className="text-gray-300 px-2">
+                  עמוד {page} מתוך {totalPages}
+                </span>
+                <button
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={page >= totalPages || matchesQuery.isFetching}
+                  className="px-3 py-1.5 rounded bg-gray-800 border border-gray-700 text-gray-200 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition"
+                >
+                  הבא ◀
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Conversation Modal */}
           {showConversationModal && selectedMatchId && (
             <ConversationModal
@@ -585,10 +629,19 @@ function FormattedCvModal({ match, onClose }: { match: Match; onClose: () => voi
     mutationFn: (reason?: string) => rejectFormattedCv(match.id, reason),
     onSuccess: invalidate,
   });
+  const emailMutation = useMutation({
+    mutationFn: (to: string) => emailFormattedCv(match.id, to),
+    onSuccess: (res) => {
+      if (res.success) window.alert("✓ קורות החיים נשלחו במייל");
+      else window.alert("שליחת המייל נכשלה: " + (res.error || "שגיאה לא ידועה"));
+    },
+    onError: (e: unknown) => window.alert("שליחת המייל נכשלה: " + (e as Error).message),
+  });
 
   const cv = cvQuery.data;
   const busy =
-    genMutation.isPending || approveMutation.isPending || rejectMutation.isPending;
+    genMutation.isPending || approveMutation.isPending ||
+    rejectMutation.isPending || emailMutation.isPending;
 
   const statusLabel: Record<string, string> = {
     generated: "נוצר — ממתין לאישור",
@@ -663,6 +716,28 @@ function FormattedCvModal({ match, onClose }: { match: Match; onClose: () => voi
               className="px-3 py-2 bg-red-900 hover:bg-red-800 text-red-100 rounded text-sm disabled:opacity-50"
             >
               ✕ דחה
+            </button>
+            {cv?.previewUrl && (
+              <a
+                href={cv.previewUrl}
+                download={`PandaTech_CV_${match.candidateName || match.id}.pdf`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded text-sm"
+              >
+                ⬇ הורד PDF
+              </a>
+            )}
+            <button
+              onClick={() => {
+                const to = window.prompt("כתובת מייל לשליחת קורות החיים:");
+                if (to && to.trim()) emailMutation.mutate(to.trim());
+              }}
+              disabled={busy || cv?.status !== "approved"}
+              title={cv?.status !== "approved" ? "יש לאשר את קורות החיים לפני שליחה במייל" : "שלח במייל עם קובץ מצורף"}
+              className="px-3 py-2 bg-blue-900 hover:bg-blue-800 text-blue-100 rounded text-sm disabled:opacity-50"
+            >
+              {emailMutation.isPending ? "שולח…" : "✉ שלח במייל"}
             </button>
           </div>
           <button
