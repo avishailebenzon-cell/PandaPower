@@ -276,6 +276,16 @@ async def sync_pipedrive_contacts(since: Optional[datetime] = None) -> Dict[str,
                 f"Potential: {summary['potential_clients']}"
             )
 
+        # Reconcile deletions: persons removed in Pipedrive are not returned by
+        # the API, so they'd otherwise linger forever as active contacts. On a
+        # FULL sync we have the complete live set, so any Pipedrive-sourced
+        # contact missing from it was deleted and is marked contact_status=
+        # 'deleted' (drops out of the type-filtered recruiter/candidate views,
+        # non-destructive — no row/FK removal). Skipped on delta (partial set).
+        if since is None:
+            fetched_ids = {p.get("id") for p in persons if p.get("id") is not None}
+            summary["deleted_closed"] = await _close_deleted_contacts(db, fetched_ids)
+
         # Close Pipedrive client
         await pipedrive.close()
 
@@ -429,6 +439,62 @@ async def _sync_contact(db: Any, person_data: Dict[str, Any]) -> None:
         raise
 
 
+async def _close_deleted_contacts(db: Any, fetched_ids: set) -> int:
+    """Mark Pipedrive-sourced contacts whose person was deleted as 'deleted'.
+
+    Called on full sync only, where `fetched_ids` is the complete set of live
+    Pipedrive person ids. Only contacts WITH a pipedrive_person_id are considered
+    (CV-pipeline contacts without one are never touched). Sets contact_status=
+    'deleted' so they drop out of the type-filtered views; non-destructive, so a
+    contact that reappears in Pipedrive gets re-categorized on the next sync.
+
+    Returns the number of contacts closed.
+    """
+    try:
+        # Page through ALL matching contacts (there are thousands; the client
+        # caps a single select at ~1000 rows, which would silently skip the rest).
+        rows: List[Dict[str, Any]] = []
+        page_size = 1000
+        start = 0
+        while True:
+            resp = await db.table("contacts").select(
+                "id,pipedrive_person_id"
+            ).not_.is_("pipedrive_person_id", "null").neq(
+                "contact_status", "deleted"
+            ).range(start, start + page_size - 1).execute()
+
+            page = resp.data or []
+            rows.extend(page)
+            if len(page) < page_size:
+                break
+            start += page_size
+
+        stale = [
+            c for c in rows
+            if c.get("pipedrive_person_id") not in fetched_ids
+        ]
+        if not stale:
+            return 0
+
+        now = datetime.utcnow().isoformat()
+        for c in stale:
+            try:
+                await db.table("contacts").update({
+                    "contact_status": "deleted",
+                    "updated_at": now,
+                }).eq("id", c["id"]).execute()
+            except Exception as e:
+                logger.error(
+                    f"Failed to close deleted contact {c.get('pipedrive_person_id')}: {e}"
+                )
+
+        logger.info(f"Closed {len(stale)} contact(s) whose Pipedrive person was deleted")
+        return len(stale)
+    except Exception as e:
+        logger.error(f"Deleted-contact reconciliation failed: {e}")
+        return 0
+
+
 async def _log_sync_completion(
     db: Any, entity_type: str, summary: Dict[str, Any], sync_start_time: datetime
 ) -> None:
@@ -446,6 +512,11 @@ async def _log_sync_completion(
                 summary.get("employees", 0)
                 + summary.get("clients", 0)
                 + summary.get("potential_clients", 0)
+                + summary.get("candidates", 0)
+                + summary.get("former_employees", 0)
+                + summary.get("subcontractors", 0)
+                + summary.get("business_partners", 0)
+                + summary.get("uncategorized", 0)
             ),
             "updated_count": 0,
             "failed_count": len(summary.get("errors", [])),
@@ -456,6 +527,12 @@ async def _log_sync_completion(
                 "employees": summary.get("employees", 0),
                 "clients": summary.get("clients", 0),
                 "potential_clients": summary.get("potential_clients", 0),
+                "candidates": summary.get("candidates", 0),
+                "former_employees": summary.get("former_employees", 0),
+                "subcontractors": summary.get("subcontractors", 0),
+                "business_partners": summary.get("business_partners", 0),
+                "uncategorized": summary.get("uncategorized", 0),
+                "deleted_closed": summary.get("deleted_closed", 0),
                 "errors": summary.get("errors", []),
             },
         }).execute()
