@@ -101,7 +101,6 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             <Route path="/admin/reingest" element={<ProtectedRoute><ReingestPage /></ProtectedRoute>} />
             <Route path="/admin/match-flow" element={<ProtectedRoute><MatchFlowDashboard /></ProtectedRoute>} />
             <Route path="/admin/whatsapp-agents" element={<ProtectedRoute><WhatsAppAgentsSettingsPage /></ProtectedRoute>} />
-            <Route path="/admin/whatsapp-conversations" element={<ProtectedRoute><WhatsAppConversationsPage /></ProtectedRoute>} />
           </Route>
 
           {/* WORK SECTION - Recruiting Department Operations */}
@@ -124,6 +123,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 
             {/* Conversations */}
             <Route path="/recruiting/conversations" element={<ProtectedRoute><ConversationsPage /></ProtectedRoute>} />
+            <Route path="/recruiting/whatsapp-conversations" element={<ProtectedRoute><WhatsAppConversationsPage /></ProtectedRoute>} />
 
             {/* Recruitment Manager (Carmit) - Part of Work Area */}
             <Route path="/admin/carmit" element={<ProtectedRoute><CarmitPage /></ProtectedRoute>} />

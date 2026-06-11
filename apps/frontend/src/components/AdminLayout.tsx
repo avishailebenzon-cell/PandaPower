@@ -16,20 +16,12 @@ export function AdminLayout() {
       <header className="h-14 border-b bg-slate-900 border-slate-700 px-6 flex items-center justify-between">
         <div className="text-sm text-slate-300">{user?.email || "לא מחובר"}</div>
         <div className="text-xl font-bold text-white">🔧 PandaPower - ניהול מערכת</div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => navigate("/admin/whatsapp-conversations")}
-            className="text-xs px-3 py-1 rounded bg-teal-600 hover:bg-teal-500 text-white transition"
-          >
-            💬 שיחות וואטסאפ
-          </button>
-          <button
-            onClick={() => navigate("/recruiting")}
-            className="text-xs px-3 py-1 rounded bg-indigo-700 hover:bg-indigo-600 text-white transition"
-          >
-            👥 חטיבת גיוס
-          </button>
-        </div>
+        <button
+          onClick={() => navigate("/recruiting")}
+          className="text-xs px-3 py-1 rounded bg-indigo-700 hover:bg-indigo-600 text-white transition"
+        >
+          👥 חטיבת גיוס
+        </button>
       </header>
 
       <div className="flex flex-1 overflow-hidden">

@@ -30,12 +30,20 @@ export function WorkLayout() {
           </h1>
           <p className="text-xs text-indigo-300 mt-1">מערכת ניהול גיוס משכללת</p>
         </div>
-        <button
-          onClick={() => navigate("/admin")}
-          className="text-xs px-3 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-200 transition"
-        >
-          ⚙️ הגדרות
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => navigate("/recruiting/whatsapp-conversations")}
+            className="text-xs px-3 py-1 rounded bg-teal-600 hover:bg-teal-500 text-white transition"
+          >
+            💬 שיחות וואטסאפ
+          </button>
+          <button
+            onClick={() => navigate("/admin")}
+            className="text-xs px-3 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-200 transition"
+          >
+            ⚙️ הגדרות
+          </button>
+        </div>
       </header>
 
       <div className="flex flex-1 overflow-hidden">
