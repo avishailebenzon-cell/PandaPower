@@ -184,11 +184,17 @@ async def _fetch_organization_name(db: Any, pipedrive_org_id: Optional[int]) -> 
         return None
 
     try:
-        org_response = await db.table("organizations").select("name").eq(
-            "pipedrive_org_id", pipedrive_org_id
-        ).single().execute()
+        # The organizations table is keyed by a deterministic UUID derived from
+        # the Pipedrive org id (there is NO pipedrive_org_id column), so look up
+        # by that UUID — matching how the rest of the app resolves org names.
+        from pandapower.workers.pipedrive_sync import pipedrive_org_id_to_uuid
 
-        if org_response.data:
+        org_uuid = pipedrive_org_id_to_uuid(pipedrive_org_id)
+        org_response = await db.table("organizations").select("name").eq(
+            "id", org_uuid
+        ).maybe_single().execute()
+
+        if org_response and org_response.data:
             return org_response.data.get("name")
     except Exception as e:
         # Organization not found or other error - just log and continue

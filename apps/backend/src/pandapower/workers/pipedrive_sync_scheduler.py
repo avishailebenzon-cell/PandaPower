@@ -50,10 +50,15 @@ def _compute_delta_cursor(schedule: Dict[str, Any]) -> Optional[datetime]:
     predating the last_successful_sync_at column.
     """
     last_ok = _parse_ts(schedule.get("last_successful_sync_at"))
-    if last_ok is None and schedule.get("last_sync_status") == "completed":
-        # Backward-compat: column not yet populated but last run did complete.
-        last_ok = _parse_ts(schedule.get("last_sync_at"))
     sync_count = int(schedule.get("sync_count") or 0)
+    if last_ok is None and sync_count > 0:
+        # No success cursor recorded, but this entity HAS synced before (e.g. the
+        # last_successful_sync_at column was added later, or recent runs failed
+        # transiently on a 429 leaving the status stuck). Fall back to last_sync_at
+        # so we retry a cheap delta instead of forcing an expensive full re-fetch
+        # that would just hit the same 429 again. A brand-new entity (sync_count 0)
+        # still gets a full sync to establish its baseline.
+        last_ok = _parse_ts(schedule.get("last_sync_at"))
 
     if last_ok is None:
         return None  # never succeeded -> full sync to establish a baseline
