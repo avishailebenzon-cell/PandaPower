@@ -440,14 +440,29 @@ async def _run_sync_task(sync_func, sync_log_id: Optional[str] = None):
         logger.info(f"Sync completed successfully: {result}")
 
         if sync_log_id:
+            # Map result keys that differ between workers. Deals use
+            # total_fetched/synced; persons use total_fetched + per-category
+            # counts. The old 'total'/employees keys (which the deals summary
+            # never has) made the run-now log row read total 0 / created 0 —
+            # looking as if the sync did nothing and "finished instantly".
+            total_records = result.get("total_fetched", result.get("total", 0))
+            created_count = result.get(
+                "synced",
+                result.get("employees", 0)
+                + result.get("clients", 0)
+                + result.get("potential_clients", 0)
+                + result.get("candidates", 0)
+                + result.get("former_employees", 0)
+                + result.get("subcontractors", 0)
+                + result.get("business_partners", 0)
+                + result.get("uncategorized", 0),
+            )
             update_data = {
                 "status": "completed",
                 "completed_at": datetime.utcnow().isoformat(),
-                "total_records": result.get("total", 0),
-                "created_count": (result.get("employees", 0) +
-                                 result.get("clients", 0) +
-                                 result.get("potential_clients", 0)),
-                "failed_count": len(result.get("errors", []))
+                "total_records": total_records,
+                "created_count": created_count,
+                "failed_count": len(result.get("errors", [])),
             }
             await db.table("pipedrive_sync_log").update(update_data).eq("id", sync_log_id).execute()
 
@@ -472,14 +487,29 @@ async def _run_incremental_sync_task(sync_func, minutes_back: int, sync_log_id: 
         logger.info(f"Incremental sync completed successfully: {result}")
 
         if sync_log_id:
+            # Map result keys that differ between workers. Deals use
+            # total_fetched/synced; persons use total_fetched + per-category
+            # counts. The old 'total'/employees keys (which the deals summary
+            # never has) made the run-now log row read total 0 / created 0 —
+            # looking as if the sync did nothing and "finished instantly".
+            total_records = result.get("total_fetched", result.get("total", 0))
+            created_count = result.get(
+                "synced",
+                result.get("employees", 0)
+                + result.get("clients", 0)
+                + result.get("potential_clients", 0)
+                + result.get("candidates", 0)
+                + result.get("former_employees", 0)
+                + result.get("subcontractors", 0)
+                + result.get("business_partners", 0)
+                + result.get("uncategorized", 0),
+            )
             update_data = {
                 "status": "completed",
                 "completed_at": datetime.utcnow().isoformat(),
-                "total_records": result.get("total", 0),
-                "created_count": (result.get("employees", 0) +
-                                 result.get("clients", 0) +
-                                 result.get("potential_clients", 0)),
-                "failed_count": len(result.get("errors", []))
+                "total_records": total_records,
+                "created_count": created_count,
+                "failed_count": len(result.get("errors", [])),
             }
             await db.table("pipedrive_sync_log").update(update_data).eq("id", sync_log_id).execute()
 
