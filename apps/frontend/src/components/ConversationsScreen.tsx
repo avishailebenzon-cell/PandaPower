@@ -363,6 +363,7 @@ export const ConversationsScreen: React.FC<ConversationsScreenProps> = ({
               <div className="flex-1 overflow-y-auto p-4 space-y-3">
                 {messages.map((m, i) => {
                   const isOutbound = m.direction === "outbound";
+                  const isFile = m.message_type === "file" || !!m.file_url;
                   return (
                     <div
                       key={m.id || i}
@@ -375,7 +376,29 @@ export const ConversationsScreen: React.FC<ConversationsScreenProps> = ({
                             : "bg-gray-700 text-gray-100 rounded-br-sm"
                         }`}
                       >
-                        {m.text}
+                        {isFile ? (
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2 font-semibold">
+                              <span>📄</span>
+                              <span>קובץ קורות חיים נשלח</span>
+                            </div>
+                            <div className="text-xs opacity-90 break-all">
+                              {m.text || "קובץ"}
+                            </div>
+                            {m.file_url && (
+                              <a
+                                href={m.file_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 mt-1 px-3 py-1 rounded-lg bg-white/15 hover:bg-white/25 text-white text-xs font-semibold transition"
+                              >
+                                👁️ צפייה בקובץ
+                              </a>
+                            )}
+                          </div>
+                        ) : (
+                          m.text
+                        )}
                         {isOutbound && m.author === "human" && (
                           <div className="text-[10px] text-teal-200/80 mt-1">
                             ✍️ נכתב על ידך (בשם {agentName})

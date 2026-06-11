@@ -14,6 +14,10 @@ export interface ChatMessage {
   text: string | null;
   author?: "agent" | "human" | "candidate" | null;
   created_at?: string;
+  /** "text" (default) | "file" | "image" | "audio" — "file" marks a transferred CV. */
+  message_type?: string | null;
+  /** view/download URL for an attached file (e.g. a CV sent to a client). */
+  file_url?: string | null;
 }
 
 /** Why a WhatsApp wasn't delivered (mirrors the backend codes). */

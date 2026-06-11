@@ -905,6 +905,67 @@ async def reject_formatted_cv(
     )
 
 
+class EmailFormattedCvRequest(BaseModel):
+    to: str
+    subject: Optional[str] = None
+    message: Optional[str] = None
+
+
+class EmailFormattedCvResponse(BaseModel):
+    success: bool
+    error: Optional[str] = None
+
+
+@router.post("/{match_id}/formatted-cv/email", response_model=EmailFormattedCvResponse)
+async def email_formatted_cv(
+    match_id: str,
+    body: EmailFormattedCvRequest,
+    supabase = Depends(get_supabase_client)
+) -> EmailFormattedCvResponse:
+    """Email the Panda-Tech CV PDF as an attachment (for sending outside WhatsApp).
+
+    Only an approved CV may be emailed — the same human-in-the-loop gate as the
+    WhatsApp delivery.
+    """
+    from pandapower.core.config import settings as _settings
+    row = await _load_formatted_cv_row(supabase, match_id)
+    if row.get("formatted_cv_status") != "approved" or not row.get("formatted_cv_path"):
+        raise HTTPException(status_code=400, detail="CV must be generated and approved before emailing")
+    if not _settings.RESEND_API_KEY:
+        raise HTTPException(status_code=400, detail="Email not configured (RESEND_API_KEY missing)")
+
+    storage_path = row["formatted_cv_path"]
+    try:
+        from pandapower.integrations.supabase_storage import SupabaseStorageManager
+        storage = SupabaseStorageManager(supabase)
+        pdf_bytes = await storage.download_file(storage_path)
+    except Exception as e:
+        logger.error(f"formatted-cv email: download failed for {storage_path}: {e}")
+        raise HTTPException(status_code=500, detail="Could not read the CV file")
+
+    import base64 as _b64
+    filename = storage_path.rsplit("/", 1)[-1]
+    subject = body.subject or "קורות חיים — PandaTech"
+    html = (body.message or "מצורפים קורות החיים בפורמט פנדה-טק.").replace("\n", "<br/>")
+
+    from pandapower.integrations.resend_client import ResendClient, ResendError
+    try:
+        async with ResendClient(api_key=_settings.RESEND_API_KEY) as client:
+            await client.send_email(
+                to=body.to,
+                subject=subject,
+                html=f"<div dir='rtl'>{html}</div>",
+                attachments=[{
+                    "filename": filename,
+                    "content": _b64.b64encode(pdf_bytes).decode("ascii"),
+                }],
+            )
+    except ResendError as e:
+        logger.error(f"formatted-cv email: send failed for {match_id}: {e}")
+        return EmailFormattedCvResponse(success=False, error=str(e))
+    return EmailFormattedCvResponse(success=True)
+
+
 async def _deliver_approved_cv(supabase, match_id: str) -> bool:
     """Send the approved Panda-Tech CV to the client over Elad's conversation,
     then advance the placement stage to cv_sent. Returns True if delivered."""

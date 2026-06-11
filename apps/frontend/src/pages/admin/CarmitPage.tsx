@@ -659,8 +659,9 @@ export const CarmitPage = () => {
             <div>
               <h2 className="text-2xl font-bold text-white">🎯 התאמות מסוכני הגיוס</h2>
               <p className="text-sm text-gray-400">
-                כל ההתאמות במצב תקף (≥70%) מ-8 הסוכנים (נעמה / אליק / דגנית / אופיר / איתי / ליאור / כללי / מני).
-                ממוין לפי ציון יורד.
+                תצוגה מסוננת: רק התאמות בציון ≥70% שנוצרו על־ידי אחד מ-8 סוכני הגיוס
+                (נעמה / אליק / דגנית / אופיר / איתי / ליאור / כללי / מני), בכל הסטטוסים. ממוין לפי ציון יורד.
+                לכן מספרים כאן נמוכים מהמסך "העברתי לטל", שמציג את כל ההתאמות בסטטוס ללא סף ציון וללא סינון סוכן.
               </p>
             </div>
             <div className="text-sm text-gray-400">
@@ -1224,6 +1225,7 @@ export const CarmitPage = () => {
                               <th className="text-right px-4 py-3 font-semibold">מספר משרה</th>
                               <th className="text-right px-4 py-3 font-semibold">עדיפות</th>
                               <th className="text-right px-4 py-3 font-semibold">ארגון</th>
+                              <th className="text-right px-4 py-3 font-semibold">איש קשר</th>
                               <th className="text-right px-4 py-3 font-semibold">סוכן מוקצה</th>
                               <th className="text-right px-4 py-3 font-semibold">סטטוס</th>
                               <th className="text-right px-4 py-3 font-semibold">תאריך יצירה</th>
@@ -1237,6 +1239,7 @@ export const CarmitPage = () => {
                                 <td className="px-4 py-3 text-gray-400 font-mono text-xs">{job.pipedrive_deal_id ?? '—'}</td>
                                 <td className="px-4 py-3"><span className={`px-2 py-1 rounded text-xs font-semibold ${job.priority === 1 ? 'bg-red-900 text-red-300' : job.priority <= 2 ? 'bg-orange-900 text-orange-300' : job.priority <= 3 ? 'bg-yellow-900 text-yellow-300' : 'bg-gray-700 text-gray-300'}`}>{job.priority}</span></td>
                                 <td className="px-4 py-3 text-gray-300 text-sm">{job.organization_name || '-'}</td>
+                                <td className="px-4 py-3 text-gray-300 text-sm">{job.contact_person_name || '-'}</td>
                                 <td className="px-4 py-3">{job.assigned_agent_name ? (<span className="px-2 py-1 bg-green-900 text-green-300 rounded text-xs font-semibold">{job.assigned_agent_name}</span>) : (<span className="text-gray-500 text-xs">לא הוקצה</span>)}</td>
                                 <td className="px-4 py-3"><span className={`px-2 py-1 rounded text-xs ${job.status === 'open' ? 'bg-blue-900 text-blue-300' : job.status === 'closed' ? 'bg-gray-700 text-gray-300' : 'bg-gray-600 text-gray-300'}`}>{job.status}</span></td>
                                 <td className="px-4 py-3 text-gray-400 text-sm">{new Date(job.created_at).toLocaleDateString('he-IL')}</td>
@@ -1267,7 +1270,8 @@ export const CarmitPage = () => {
           <div>
             <h2 className="text-2xl font-bold text-white">📤 העברתי לטל</h2>
             <p className="text-sm text-gray-400">
-              התאמות שכרמית העבירה לטל לסינון ראשוני (שיחה עם המועמד). מבוסס על מכונת המצבים.
+              כל ההתאמות בסטטוס "ממתינה לטל" (וכן בשיחה / נמסר לאדם) — ללא סף ציון וללא סינון לפי סוכן.
+              זהו המספר המלא של התאמות שעברו לטל. מבוסס על מכונת המצבים.
             </p>
           </div>
           <RecruiterMatchesPanel recruiter="tal" />

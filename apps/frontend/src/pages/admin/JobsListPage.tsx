@@ -17,6 +17,9 @@ export function JobsListPage() {
   const [status, setStatus] = useState('');
   const [sortBy, setSortBy] = useState('title');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [groupBy, setGroupBy] = useState<'' | 'company' | 'contact_person' | 'priority_label'>('');
+
+  const isGrouped = groupBy !== '';
 
   const { data, isLoading, error } = useQuery({
     queryKey: [
@@ -27,9 +30,18 @@ export function JobsListPage() {
       status,
       sortBy,
       sortOrder,
+      isGrouped,
     ],
+    // When grouping, pull a large page so groups span the whole dataset.
     queryFn: () =>
-      fetchJobs(page, limit, search || undefined, status || undefined, sortBy, sortOrder),
+      fetchJobs(
+        isGrouped ? 1 : page,
+        isGrouped ? 1000 : limit,
+        search || undefined,
+        status || undefined,
+        sortBy,
+        sortOrder,
+      ),
     staleTime: 5 * 60 * 1000,
   });
 
@@ -197,6 +209,24 @@ export function JobsListPage() {
         </div>
       )}
 
+      {/* Group By Control */}
+      <div className="mb-6 flex items-center gap-3">
+        <label className="text-gray-300 text-sm font-semibold">קבץ לפי:</label>
+        <select
+          value={groupBy}
+          onChange={(e) => {
+            setGroupBy(e.target.value as typeof groupBy);
+            setPage(1);
+          }}
+          className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:border-blue-500"
+        >
+          <option value="">ללא קיבוץ</option>
+          <option value="company">חברה</option>
+          <option value="contact_person">איש קשר</option>
+          <option value="priority_label">עדיפות</option>
+        </select>
+      </div>
+
       {/* Filters */}
       <div className="mb-6">
         <DataFilterPanel
@@ -215,25 +245,135 @@ export function JobsListPage() {
       </div>
 
       {/* Data Table */}
-      <PipedriveDataTable
-        columns={columns}
-        data={data?.data || []}
-        total={data?.total || 0}
-        page={page}
-        limit={limit}
-        totalPages={data?.total_pages || 0}
-        isLoading={isLoading}
-        searchPlaceholder="חיפוש לפי שם משרה או חברה..."
-        onSearch={setSearch}
-        onSort={(key, order) => {
-          setSortBy(key);
-          setSortOrder(order);
-          setPage(1);
-        }}
-        onPageChange={setPage}
-        onLimitChange={setLimit}
-        lastSync={data?.last_sync}
-      />
+      {isGrouped ? (
+        <GroupedJobsTable
+          columns={columns}
+          data={data?.data || []}
+          groupBy={groupBy as 'company' | 'contact_person' | 'priority_label'}
+          isLoading={isLoading}
+        />
+      ) : (
+        <PipedriveDataTable
+          columns={columns}
+          data={data?.data || []}
+          total={data?.total || 0}
+          page={page}
+          limit={limit}
+          totalPages={data?.total_pages || 0}
+          isLoading={isLoading}
+          searchPlaceholder="חיפוש לפי שם משרה או חברה..."
+          onSearch={setSearch}
+          onSort={(key, order) => {
+            setSortBy(key);
+            setSortOrder(order);
+            setPage(1);
+          }}
+          onPageChange={setPage}
+          onLimitChange={setLimit}
+          lastSync={data?.last_sync}
+        />
+      )}
+    </div>
+  );
+}
+
+interface GroupedJobsTableProps {
+  columns: Array<{ key: string; label: string; render?: (value: any, row: any) => React.ReactNode }>;
+  data: any[];
+  groupBy: 'company' | 'contact_person' | 'priority_label';
+  isLoading?: boolean;
+}
+
+function GroupedJobsTable({ columns, data, groupBy, isLoading }: GroupedJobsTableProps) {
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+
+  if (isLoading) {
+    return (
+      <div className="px-4 py-8 text-center text-gray-400 bg-gray-800 border border-gray-700 rounded-lg">
+        טוען...
+      </div>
+    );
+  }
+
+  if (data.length === 0) {
+    return (
+      <div className="px-4 py-8 text-center text-gray-400 bg-gray-800 border border-gray-700 rounded-lg">
+        אין נתונים להצגה
+      </div>
+    );
+  }
+
+  // Build groups preserving insertion order
+  const groups: Record<string, any[]> = {};
+  for (const row of data) {
+    const raw = row[groupBy];
+    const key = raw === null || raw === undefined || raw === '' ? 'ללא ערך' : String(raw);
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(row);
+  }
+  const groupKeys = Object.keys(groups).sort((a, b) => a.localeCompare(b, 'he'));
+
+  return (
+    <div className="space-y-3" dir="rtl">
+      {groupKeys.map((groupKey) => {
+        const rows = groups[groupKey];
+        const isCollapsed = collapsed[groupKey];
+        return (
+          <div
+            key={groupKey}
+            className="bg-gray-800 border border-gray-700 rounded-lg overflow-hidden"
+          >
+            <button
+              onClick={() =>
+                setCollapsed((prev) => ({ ...prev, [groupKey]: !prev[groupKey] }))
+              }
+              className="w-full flex items-center justify-between px-4 py-3 bg-gray-900 hover:bg-gray-700 transition-colors"
+            >
+              <span className="flex items-center gap-2 font-semibold text-white">
+                <span className="text-xs">{isCollapsed ? '▶' : '▼'}</span>
+                {groupKey}
+              </span>
+              <span className="px-2 py-1 rounded text-xs bg-blue-700 text-white">
+                {rows.length}
+              </span>
+            </button>
+            {!isCollapsed && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-right text-sm">
+                  <thead className="bg-gray-900 border-b border-gray-700">
+                    <tr>
+                      {columns.map((column) => (
+                        <th
+                          key={column.key}
+                          className="px-4 py-2 font-semibold text-gray-300 whitespace-nowrap"
+                        >
+                          {column.label}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row, idx) => (
+                      <tr
+                        key={row.id || idx}
+                        className="border-b border-gray-700 hover:bg-gray-700 transition-colors"
+                      >
+                        {columns.map((column) => (
+                          <td key={column.key} className="px-4 py-3 text-gray-300">
+                            {column.render
+                              ? column.render(row[column.key], row)
+                              : row[column.key] ?? '-'}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

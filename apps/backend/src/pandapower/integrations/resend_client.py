@@ -59,8 +59,13 @@ class ResendClient:
         from_addr: Optional[str] = None,
         reply_to: Optional[str] = None,
         text: Optional[str] = None,
+        attachments: Optional[list[dict]] = None,
     ) -> dict:
         """Send a single email via Resend.
+
+        ``attachments`` (optional) is a list of Resend attachment dicts, e.g.
+        ``[{"filename": "cv.pdf", "content": "<base64>"}]`` — used to attach the
+        Panda-Tech CV PDF when emailing a candidate to a client.
 
         Returns the parsed Resend response (includes the message `id`) on success.
         Raises ResendError on any non-2xx response so the caller can surface a
@@ -77,6 +82,8 @@ class ResendClient:
             payload["text"] = text
         if reply_to:
             payload["reply_to"] = reply_to
+        if attachments:
+            payload["attachments"] = attachments
 
         try:
             response = await self._http.post(
