@@ -10,7 +10,7 @@ import { RecruiterMatchesPanel } from '@/components/RecruiterMatchesPanel';
 import { CandidateDecisionMatrix } from '@/components/CandidateDecisionMatrix';
 import { MatchDetailModal } from '@/components/MatchDetailModal';
 import type { DepartmentMatch, ClearanceMatch } from '@/api/recruitment-departments';
-import { agentNameHe } from '@/data/agents';
+import { agentNameHe, agentAvatar, agentAvatarFallback } from '@/data/agents';
 
 // Shape of each row from GET /admin/carmit/agent-matches.
 // The backend returns enough candidate + match detail to populate both
@@ -345,9 +345,17 @@ export const CarmitPage = () => {
   return (
     <div className="min-h-screen bg-gray-900 p-8" dir="rtl">
       {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-4xl font-bold text-white mb-2">🎯 כרמית - מנהלת הגיוס</h1>
-        <p className="text-gray-400">ניהול ניתוב משרות וביקורת התאמות איכות</p>
+      <div className="mb-8 flex items-center gap-4">
+        <img
+          src={agentAvatar('carmit')}
+          alt="כרמית"
+          onError={(e) => { e.currentTarget.src = agentAvatarFallback('carmit')!; }}
+          className="w-20 h-20 rounded-full object-cover border-4 border-purple-500 shadow-lg flex-shrink-0"
+        />
+        <div>
+          <h1 className="text-4xl font-bold text-white mb-2">כרמית - מנהלת הגיוס</h1>
+          <p className="text-gray-400">ניהול ניתוב משרות וביקורת התאמות איכות</p>
+        </div>
       </div>
 
       {/* KPI Cards Grid */}
