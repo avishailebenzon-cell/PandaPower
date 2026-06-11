@@ -82,6 +82,11 @@ class PandiusConversationEngine:
             for m in recent
             if m.get("text")
         ]
+        # The Anthropic API requires the first message to be a "user" turn. When
+        # the recent-history window happens to start on an assistant message, drop
+        # leading assistant turns so we never send an invalid (400) request.
+        while messages and messages[0]["role"] == "assistant":
+            messages.pop(0)
         # The current inbound message was already persisted by the handler, so it
         # is the last history item. Append the engine's input only when it differs
         # (e.g. the synthetic CV-received prompt) to avoid duplicating the turn.
@@ -143,6 +148,11 @@ class PandiusConversationEngine:
                 "blocked": False,
                 "reason": "llm_error",
             }
+
+        # Guard against the model ending on an empty text turn (e.g. it ran a tool
+        # and produced no words) — never leave the candidate with silence.
+        if not (response_text or "").strip():
+            response_text = "סליחה, פספסתי משהו 🙏 אפשר לחזור על זה?"
 
         if response_text:
             # גילוי נאות — prepend the one-time AI disclosure on the first
@@ -244,12 +254,16 @@ class PandiusConversationEngine:
         return res.data[0] if res.data else {}
 
     async def _load_recent_messages(self, conversation_id: UUID, supabase) -> list:
+        # Fetch the MOST RECENT MAX_HISTORY messages (order desc + limit), then
+        # reverse back to chronological order for the model. Ordering ascending
+        # with a limit would return the OLDEST messages — freezing the model on
+        # the start of the conversation and dropping all recent context.
         res = await supabase.table("pandius_messages").select(
             "direction, text, sent_at"
         ).eq("conversation_id", str(conversation_id)).order(
-            "sent_at", desc=False
+            "sent_at", desc=True
         ).limit(MAX_HISTORY).execute()
-        return res.data or []
+        return list(reversed(res.data or []))
 
     async def _save_message(
         self,

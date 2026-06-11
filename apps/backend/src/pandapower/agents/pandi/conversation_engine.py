@@ -412,18 +412,22 @@ Respond with only: YES or NO"""
     async def _load_recent_messages(
         self, conversation_id: UUID, limit: int = 30, supabase=None
     ) -> list:
-        """Load recent messages from conversation."""
+        """Load the most recent `limit` messages, in chronological order.
+
+        Fetch newest-first with the limit, then reverse — ordering ascending with
+        a limit would return the OLDEST messages and freeze the model on the start
+        of the conversation, dropping all recent context."""
         if supabase is None:
             supabase = await self._get_supabase()
         result = (
             await supabase.table("pandi_messages")
             .select("direction, text, sent_at")
             .eq("conversation_id", str(conversation_id))
-            .order("sent_at", desc=False)
+            .order("sent_at", desc=True)
             .limit(limit)
             .execute()
         )
-        return result.data or []
+        return list(reversed(result.data or []))
 
     async def _save_message(
         self,

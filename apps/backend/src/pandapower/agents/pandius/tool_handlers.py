@@ -25,14 +25,17 @@ async def _find_contact_by_phone(supabase, phone: str) -> Optional[dict]:
     ).eq("phone", intl).limit(1).execute()
     if res.data:
         return res.data[0]
-    # Fallback: scan recent candidates and compare tolerantly. Bounded to keep
-    # this cheap; exact-match above handles the canonical-stored common case.
-    res2 = await supabase.table("contacts").select(
-        "id, full_name, email, contact_status, phone"
-    ).not_.is_("phone", "null").limit(2000).execute()
-    for c in (res2.data or []):
-        if phones_match(c.get("phone"), phone):
-            return c
+    # Fallback for contacts stored in a non-canonical format ("0586…", "+972…",
+    # with spaces/dashes): match on the 9-digit national tail via a targeted
+    # ilike, then confirm with the tolerant comparator. Bounded — no full scan.
+    tail = intl[-9:]
+    if len(tail) >= 7:
+        res2 = await supabase.table("contacts").select(
+            "id, full_name, email, contact_status, phone"
+        ).ilike("phone", f"%{tail}%").limit(20).execute()
+        for c in (res2.data or []):
+            if phones_match(c.get("phone"), phone):
+                return c
     return None
 
 
