@@ -177,7 +177,8 @@ export const WorkDashboard: React.FC = () => {
                       <img
                         src={agent.avatar}
                         alt={agent.name}
-                        className={`w-12 h-12 rounded-full flex-shrink-0 group-hover:scale-110 transition border-2 border-gray-700`}
+                        onError={(e) => { e.currentTarget.src = agent.avatarFallback; }}
+                        className={`w-12 h-12 rounded-full flex-shrink-0 group-hover:scale-110 transition border-2 border-gray-700 object-cover`}
                       />
                       <div className="flex-1">
                         <h3 className="font-semibold text-white text-sm">{agent.name}</h3>
@@ -245,7 +246,8 @@ export const WorkDashboard: React.FC = () => {
                       <img
                         src={recruiter.avatar}
                         alt={recruiter.name}
-                        className="w-12 h-12 rounded-full flex-shrink-0 group-hover:scale-110 transition border-2 border-gray-700"
+                        onError={(e) => { e.currentTarget.src = recruiter.avatarFallback; }}
+                        className="w-12 h-12 rounded-full flex-shrink-0 group-hover:scale-110 transition border-2 border-gray-700 object-cover"
                       />
                       <div className="flex-1">
                         <h3 className="font-semibold text-white text-sm">{recruiter.name}</h3>
@@ -263,45 +265,6 @@ export const WorkDashboard: React.FC = () => {
               </div>
             </div>
           </div>
-        </div>
-
-        {/* Bottom Section - Quick Actions */}
-        <div className="mt-8 grid grid-cols-1 md:grid-cols-4 gap-4">
-          <button
-            onClick={() => navigate("/recruiting/departments/naama")}
-            className="p-4 rounded-lg bg-gradient-to-br from-blue-900 to-blue-800 hover:from-blue-800 hover:to-blue-700 text-white transition text-center"
-          >
-            <div className="text-2xl mb-2">📋</div>
-            <div className="font-semibold">הצג את הניסיון שלי</div>
-            <div className="text-sm text-blue-200 mt-1">נעמה - תוכנה</div>
-          </button>
-
-          <button
-            onClick={() => navigate("/recruiting/tal")}
-            className="p-4 rounded-lg bg-gradient-to-br from-purple-900 to-purple-800 hover:from-purple-800 hover:to-purple-700 text-white transition text-center"
-          >
-            <div className="text-2xl mb-2">🎯</div>
-            <div className="font-semibold">התאמות בהמתנה</div>
-            <div className="text-sm text-purple-200 mt-1">לסקירה שלי</div>
-          </button>
-
-          <button
-            onClick={() => navigate("/recruiting/conversations")}
-            className="p-4 rounded-lg bg-gradient-to-br from-emerald-900 to-emerald-800 hover:from-emerald-800 hover:to-emerald-700 text-white transition text-center"
-          >
-            <div className="text-2xl mb-2">💬</div>
-            <div className="font-semibold">שיחות</div>
-            <div className="text-sm text-emerald-200 mt-1">כל השיחות</div>
-          </button>
-
-          <button
-            onClick={() => navigate("/admin")}
-            className="p-4 rounded-lg bg-gradient-to-br from-slate-700 to-slate-800 hover:from-slate-600 hover:to-slate-700 text-white transition text-center"
-          >
-            <div className="text-2xl mb-2">⚙️</div>
-            <div className="font-semibold">הגדרות מערכת</div>
-            <div className="text-sm text-slate-300 mt-1">לניהול בלבד</div>
-          </button>
         </div>
 
         {/* CSS Animations for Working Agent Pulse */}

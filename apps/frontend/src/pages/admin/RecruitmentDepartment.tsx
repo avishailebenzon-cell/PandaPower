@@ -289,7 +289,8 @@ export const RecruitmentDepartment: React.FC = () => {
                 <img
                   src={agent.avatar}
                   alt={agent.name}
-                  className="w-32 h-32 rounded-full border-4 border-white shadow-lg"
+                  onError={(e) => { e.currentTarget.src = agent.avatarFallback; }}
+                  className="w-32 h-32 rounded-full border-4 border-white shadow-lg object-cover"
                 />
               </div>
 

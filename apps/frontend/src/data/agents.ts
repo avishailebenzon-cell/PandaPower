@@ -1,7 +1,24 @@
 /**
  * Recruitment Agents Data with Avatars
- * Each agent has full profile information including avatar
+ * Each agent has full profile information including avatar.
+ *
+ * Avatars are real AI-generated photos served from /public/avatars/<code>.jpg.
+ * `avatarFallback` keeps the original initial-in-a-circle SVG so the UI never
+ * shows a broken image if a photo file is missing — wire it via onError, e.g.
+ *   <img src={agent.avatar} onError={e => { e.currentTarget.src = agent.avatarFallback; }} />
  */
+
+// Build the legacy "initial in a colored circle" SVG data-URI used as a fallback.
+function initialsAvatar(letter: string, hexColor: string): string {
+  const fill = hexColor.replace("#", "%23");
+  return (
+    "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='" +
+    fill +
+    "'/%3E%3Ctext x='50' y='60' text-anchor='middle' font-size='40' font-weight='bold' fill='white'%3E" +
+    encodeURIComponent(letter) +
+    "%3C/text%3E%3C/svg%3E"
+  );
+}
 
 export interface Agent {
   code: string;
@@ -10,6 +27,7 @@ export interface Agent {
   department: string;
   emoji: string;
   avatar: string;
+  avatarFallback: string;
   color: string;
   description: string;
   specialization: string[];
@@ -25,7 +43,8 @@ export const RECRUITMENT_AGENTS: Record<string, Agent> = {
     title: "ראשית תוכנה",
     department: "תוכנה",
     emoji: "👩‍💼",
-    avatar: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%231e40af'/%3E%3Ctext x='50' y='60' text-anchor='middle' font-size='40' font-weight='bold' fill='white'%3E נ%3C/text%3E%3C/svg%3E",
+    avatar: "/avatars/naama.jpg",
+    avatarFallback: initialsAvatar("נ", "#1e40af"),
     color: "from-blue-600 to-blue-800",
     description: "מנהלת חטיבת תוכנה עם ניסיון 15 שנה בגיוס מהנדסים",
     specialization: ["Backend", "Frontend", "Full Stack", "DevOps", "Cloud"],
@@ -38,7 +57,8 @@ export const RECRUITMENT_AGENTS: Record<string, Agent> = {
     title: "ראש אלקטרוניקה",
     department: "אלקטרוניקה",
     emoji: "👨‍💼",
-    avatar: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%23ca8a04'/%3E%3Ctext x='50' y='60' text-anchor='middle' font-size='40' font-weight='bold' fill='white'%3E א%3C/text%3E%3C/svg%3E",
+    avatar: "/avatars/alik.jpg",
+    avatarFallback: initialsAvatar("א", "#ca8a04"),
     color: "from-yellow-600 to-yellow-800",
     description: "מומחה בגיוס מהנדסי אלקטרוניקה ותכן חומרה",
     specialization: ["FPGA", "VHDL", "PCB Design", "RF Engineering", "Analog"],
@@ -51,7 +71,8 @@ export const RECRUITMENT_AGENTS: Record<string, Agent> = {
     title: "מנהלת QA",
     department: "בדיקות",
     emoji: "👩‍💼",
-    avatar: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%23be185d'/%3E%3Ctext x='50' y='60' text-anchor='middle' font-size='40' font-weight='bold' fill='white'%3E ד%3C/text%3E%3C/svg%3E",
+    avatar: "/avatars/dganit.jpg",
+    avatarFallback: initialsAvatar("ד", "#be185d"),
     color: "from-pink-600 to-pink-800",
     description: "מובילה בגיוס מומחי בדיקות אוטומציה ובקרה איכות",
     specialization: ["Automation", "Selenium", "LoadRunner", "Manual Testing", "Test Management"],
@@ -64,7 +85,8 @@ export const RECRUITMENT_AGENTS: Record<string, Agent> = {
     title: "ראש מערכות",
     department: "מערכות",
     emoji: "👨‍💼",
-    avatar: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%23059669'/%3E%3Ctext x='50' y='60' text-anchor='middle' font-size='40' font-weight='bold' fill='white'%3E א%3C/text%3E%3C/svg%3E",
+    avatar: "/avatars/ofir.jpg",
+    avatarFallback: initialsAvatar("א", "#059669"),
     color: "from-green-600 to-green-800",
     description: "מומחה בגיוס מנהלי מערכות והנדסת תשתית",
     specialization: ["Linux", "Networking", "DevOps", "Container", "Kubernetes"],
@@ -77,7 +99,8 @@ export const RECRUITMENT_AGENTS: Record<string, Agent> = {
     title: "מנהל IT",
     department: "IT",
     emoji: "👨‍💼",
-    avatar: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%239333ea'/%3E%3Ctext x='50' y='60' text-anchor='middle' font-size='40' font-weight='bold' fill='white'%3E א%3C/text%3E%3C/svg%3E",
+    avatar: "/avatars/itai.jpg",
+    avatarFallback: initialsAvatar("א", "#9333ea"),
     color: "from-purple-600 to-purple-800",
     description: "מנהל מחלקת IT המתמחה בגיוס אנשי תשתיות",
     specialization: ["Windows", "Infrastructure", "Helpdesk", "Network Management", "Security"],
@@ -90,7 +113,8 @@ export const RECRUITMENT_AGENTS: Record<string, Agent> = {
     title: "ראש מכני",
     department: "מכני",
     emoji: "👨‍💼",
-    avatar: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%23dc2626'/%3E%3Ctext x='50' y='60' text-anchor='middle' font-size='40' font-weight='bold' fill='white'%3E ל%3C/text%3E%3C/svg%3E",
+    avatar: "/avatars/lior.jpg",
+    avatarFallback: initialsAvatar("ל", "#dc2626"),
     color: "from-red-600 to-red-800",
     description: "מוביל בגיוס מהנדסים מכניים וגיוס תיב\"ם",
     specialization: ["CAD", "SOLIDWORKS", "FEA", "Manufacturing", "Mechanical Design"],
@@ -103,7 +127,8 @@ export const RECRUITMENT_AGENTS: Record<string, Agent> = {
     title: "מנהל משרות שונות",
     department: "כללי",
     emoji: "👥",
-    avatar: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%23475569'/%3E%3Ctext x='50' y='60' text-anchor='middle' font-size='40' font-weight='bold' fill='white'%3E כ%3C/text%3E%3C/svg%3E",
+    avatar: "/avatars/gc.jpg",
+    avatarFallback: initialsAvatar("כ", "#475569"),
     color: "from-gray-600 to-gray-800",
     description: "טיפול במשרות שלא מתאימות לחטיבה מסוימת",
     specialization: ["General", "HR", "Management", "Admin", "Finance"],
@@ -116,7 +141,8 @@ export const RECRUITMENT_AGENTS: Record<string, Agent> = {
     title: "סיווג ביטחוני רמה 1",
     department: "סיווג",
     emoji: "🔒",
-    avatar: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%230891b2'/%3E%3Ctext x='50' y='60' text-anchor='middle' font-size='40' font-weight='bold' fill='white'%3E מ%3C/text%3E%3C/svg%3E",
+    avatar: "/avatars/mani.jpg",
+    avatarFallback: initialsAvatar("מ", "#0891b2"),
     color: "from-cyan-600 to-cyan-800",
     description: "סוכן עצמאי — עובד מחוץ לתזמורת של כרמית. בכל פעם שמגיע מועמד רמה 1 ו/או משרה רמה 1, מני מתאים אוטומטית.",
     specialization: ["רמה 1", "סיווג ביטחוני", "Level 1 Clearance", "Independent"],
@@ -132,6 +158,7 @@ export interface Recruiter {
   role: string;
   emoji: string;
   avatar: string;
+  avatarFallback: string;
   color: string;
   description: string;
   stage: string;
@@ -145,7 +172,8 @@ export const RECRUITERS: Record<string, Recruiter> = {
     title: "מנהלת גיוס — סינון ראשוני",
     role: "Talent Screener",
     emoji: "🎯",
-    avatar: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%234f46e5'/%3E%3Ctext x='50' y='60' text-anchor='middle' font-size='40' font-weight='bold' fill='white'%3E ט%3C/text%3E%3C/svg%3E",
+    avatar: "/avatars/tal.jpg",
+    avatarFallback: initialsAvatar("ט", "#4f46e5"),
     color: "from-indigo-600 to-indigo-800",
     description: "סינון ראשוני של מועמדים בוואטסאפ. טל מנהלת שיחות וואטסאפ עם מועמדים בחלק הראשון של תהליך הגיוס לאחר הנחיה של מנהל הגיוס כרמית.",
     stage: "Initial Screening",
@@ -157,7 +185,8 @@ export const RECRUITERS: Record<string, Recruiter> = {
     title: "מנהל מגייסים - מיקום",
     role: "Placement Manager",
     emoji: "🎖️",
-    avatar: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%231e40af'/%3E%3Ctext x='50' y='60' text-anchor='middle' font-size='40' font-weight='bold' fill='white'%3E א%3C/text%3E%3C/svg%3E",
+    avatar: "/avatars/elad.jpg",
+    avatarFallback: initialsAvatar("א", "#1e40af"),
     color: "from-blue-600 to-blue-800",
     description: "מנהל מגייסים בשלב הסיום - סגירת עסקאות והצבה",
     stage: "Final Placement",
@@ -169,7 +198,8 @@ export const RECRUITERS: Record<string, Recruiter> = {
     title: "סוכן פניות מועמדים",
     role: "Candidate Intake Agent",
     emoji: "🐼",
-    avatar: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%230f766e'/%3E%3Ctext x='50' y='60' text-anchor='middle' font-size='40' font-weight='bold' fill='white'%3E פ%3C/text%3E%3C/svg%3E",
+    avatar: "/avatars/pandius.jpg",
+    avatarFallback: initialsAvatar("פ", "#0f766e"),
     color: "from-teal-600 to-teal-800",
     description: "סוכן WhatsApp נכנס שעונה למועמדים המחפשים עבודה: אוסף פרטים, קולט קורות חיים ומנסה לאתר משרה מתאימה. עונה לפניות בלבד.",
     stage: "Candidate Intake",
@@ -185,7 +215,8 @@ export const SALES_AGENTS: Record<string, Agent> = {
     title: "סוכנת הזנת משרות",
     department: "מכירות",
     emoji: "💼",
-    avatar: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%230d9488'/%3E%3Ctext x='50' y='60' text-anchor='middle' font-size='40' font-weight='bold' fill='white'%3E ד%3C/text%3E%3C/svg%3E",
+    avatar: "/avatars/dana.jpg",
+    avatarFallback: initialsAvatar("ד", "#0d9488"),
     color: "from-teal-600 to-teal-800",
     description: "מקבלת תיאור של דיל חדש, אוספת את פרטי המשרה ופותחת דיל בפייפדרייב",
     specialization: ["Deal Intake", "Pipedrive", "File Parsing", "Sales"],
@@ -204,6 +235,41 @@ export function getRecruiter(code: string): Recruiter | undefined {
 
 export function getAllAgents(): Agent[] {
   return Object.values(RECRUITMENT_AGENTS);
+}
+
+/**
+ * Avatar + fallback for agents that don't have a full Agent/Recruiter record
+ * but still appear in the UI by code: כרמית (manager) and פנדי (client agent).
+ */
+const EXTRA_AVATARS: Record<string, { avatar: string; avatarFallback: string }> = {
+  carmit: { avatar: "/avatars/carmit.jpg", avatarFallback: initialsAvatar("כ", "#9333ea") },
+  pandi: { avatar: "/avatars/pandi.jpg", avatarFallback: initialsAvatar("פ", "#0f766e") },
+};
+
+/**
+ * Resolve any agent/recruiter code to its photo URL. Covers the 8 recruitment
+ * agents, the 3 recruiters, the sales agent (דנה), plus כרמית and פנדי.
+ * Returns undefined for unknown codes.
+ */
+export function agentAvatar(code: string | null | undefined): string | undefined {
+  if (!code) return undefined;
+  return (
+    RECRUITMENT_AGENTS[code]?.avatar ||
+    RECRUITERS[code]?.avatar ||
+    SALES_AGENTS[code]?.avatar ||
+    EXTRA_AVATARS[code]?.avatar
+  );
+}
+
+/** Fallback (initials SVG) for any agent/recruiter code — use in img onError. */
+export function agentAvatarFallback(code: string | null | undefined): string | undefined {
+  if (!code) return undefined;
+  return (
+    RECRUITMENT_AGENTS[code]?.avatarFallback ||
+    RECRUITERS[code]?.avatarFallback ||
+    SALES_AGENTS[code]?.avatarFallback ||
+    EXTRA_AVATARS[code]?.avatarFallback
+  );
 }
 
 /**

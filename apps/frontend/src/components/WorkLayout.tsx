@@ -109,7 +109,8 @@ export function WorkLayout() {
                       <img
                         src={agent.avatar}
                         alt={agent.name}
-                        className="w-8 h-8 rounded-full flex-shrink-0"
+                        onError={(e) => { e.currentTarget.src = agent.avatarFallback; }}
+                        className="w-8 h-8 rounded-full flex-shrink-0 object-cover"
                       />
                       <div className="flex-1">
                         <div className="font-semibold text-sm">{agent.name}</div>
@@ -143,7 +144,8 @@ export function WorkLayout() {
                       <img
                         src={recruiter.avatar}
                         alt={recruiter.name}
-                        className="w-8 h-8 rounded-full flex-shrink-0"
+                        onError={(e) => { e.currentTarget.src = recruiter.avatarFallback; }}
+                        className="w-8 h-8 rounded-full flex-shrink-0 object-cover"
                       />
                       <div className="flex-1">
                         <div className="font-semibold text-sm">{recruiter.name}</div>
