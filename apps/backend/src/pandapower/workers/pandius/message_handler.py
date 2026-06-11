@@ -121,6 +121,7 @@ async def _process_pandius_incoming_message_async(payload: dict) -> dict:
                 mime_type=message.get("mime_type") or "application/pdf",
                 phone=phone,
                 green_api_message_id=green_api_message_id,
+                pandius_client_id=client_id,
             )
             if cv_id:
                 try:

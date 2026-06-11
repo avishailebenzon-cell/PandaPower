@@ -103,7 +103,7 @@ class CandidateCreationWorker:
     # Columns we need from cv_files for candidate creation.
     _CV_SELECT = (
         "id, original_filename, llm_analysis, source_email_from, "
-        "source_email_received_at, candidate_email, is_latest"
+        "source_email_received_at, candidate_email, is_latest, source"
     )
 
     async def _fetch_unprocessed_cvs(self, limit: int) -> list[dict]:
@@ -229,6 +229,16 @@ class CandidateCreationWorker:
                 f"(it's an intermediary mailbox). Will store NULL instead."
             )
         phone = (extracted_fields.get("phone") or "").strip() or None
+        # WhatsApp CVs (Pandius intake) often don't carry a phone/email inside
+        # the CV text — but we DO know the sender's WhatsApp number, which was
+        # stored on the cv_files row at ingest (source_email_from / candidate_email
+        # both hold the phone). Fall back to it so phone-based dedup and the
+        # candidate<->contact link below have a key to work with.
+        if not phone and (cv.get("source") == "whatsapp"):
+            from pandapower.core.phone import to_international
+
+            wa_phone = cv.get("source_email_from") or cv.get("candidate_email")
+            phone = to_international(wa_phone) or (wa_phone or None)
         candidate_data = {
             "name": extracted_fields.get("name"),
             "email": email,
@@ -262,7 +272,9 @@ class CandidateCreationWorker:
         # ── Find existing candidate ───────────────────────────────────────
         existing = await self._find_existing_candidate(email=email, phone=phone)
         if existing:
-            return await self._update_existing_candidate(existing, candidate_data, cv_id, filename)
+            outcome = await self._update_existing_candidate(existing, candidate_data, cv_id, filename)
+            await self._link_candidate_to_pandius_contact(cv, existing["id"])
+            return outcome
 
         # ── No match → INSERT new ─────────────────────────────────────────
         logger.debug(f"Creating new candidate from CV {cv_id}: {filename}")
@@ -276,7 +288,9 @@ class CandidateCreationWorker:
                 logger.info(f"INSERT raced; retrying as UPDATE for CV {cv_id}")
                 existing = await self._find_existing_candidate(email=email, phone=phone)
                 if existing:
-                    return await self._update_existing_candidate(existing, candidate_data, cv_id, filename)
+                    outcome = await self._update_existing_candidate(existing, candidate_data, cv_id, filename)
+                    await self._link_candidate_to_pandius_contact(cv, existing["id"])
+                    return outcome
             raise
 
         if response.data:
@@ -285,8 +299,50 @@ class CandidateCreationWorker:
                 f"Candidate created (NEW): {candidate_data['name']!r} "
                 f"(id={candidate_id}, email={email}, cv={filename})"
             )
+            await self._link_candidate_to_pandius_contact(cv, candidate_id)
             return "created"
         raise ValueError(f"Failed to insert candidate record")
+
+    async def _link_candidate_to_pandius_contact(self, cv: dict, candidate_id: str) -> None:
+        """Stamp candidates.contact_id from the Pandius intake bridge.
+
+        For a WhatsApp CV, cv_files.pandius_client_id points at the intake row,
+        which carries contact_id once Pandius's save_candidate has run. Walking
+        CV -> pandius_client -> contact links the candidate to the Pandius
+        contact even when the CV text held no usable email/phone. Handles the
+        details-then-CV ordering (contact already exists when the CV arrives);
+        the CV-then-details ordering is closed from save_candidate's side.
+
+        Best-effort and fully back-compatible: a missing column (migration 021
+        not applied) or a not-yet-identified client is a silent no-op.
+        """
+        try:
+            # pandius_client_id lives on cv_files but isn't in the batch select
+            # (kept out so the column-missing case can't break the batch fetch).
+            r = await self.supabase.table("cv_files").select(
+                "pandius_client_id"
+            ).eq("id", cv["id"]).limit(1).execute()
+            client_id = (r.data[0].get("pandius_client_id") if r.data else None)
+            if not client_id:
+                return
+
+            pc = await self.supabase.table("pandius_clients").select(
+                "contact_id"
+            ).eq("id", client_id).limit(1).execute()
+            contact_id = (pc.data[0].get("contact_id") if pc.data else None)
+            if not contact_id:
+                return
+
+            await self.supabase.table("candidates").update(
+                {"contact_id": contact_id}
+            ).eq("id", candidate_id).execute()
+            logger.info(
+                f"Linked candidate {candidate_id} to Pandius contact {contact_id}"
+            )
+        except Exception as e:
+            msg = str(e).lower()
+            if "pandius_client_id" not in msg and "contact_id" not in msg and "column" not in msg:
+                logger.debug(f"Pandius contact link skipped for {candidate_id}: {e}")
 
     async def _find_existing_candidate(
         self, email: Optional[str], phone: Optional[str]

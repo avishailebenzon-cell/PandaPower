@@ -173,9 +173,18 @@ async def handle_save_candidate(
 
 
 async def _link_contact(supabase, pandius_client_id, contact_id, full_name, email) -> None:
-    """Attach the created/found contact to the pandius_client and mark intake done."""
+    """Attach the created/found contact to the pandius_client and mark intake done.
+
+    If the candidate already sent a CV before giving their details (the
+    CV-then-details ordering), the pandius_client already has a cv_file_id. In
+    that case we also (a) backfill the CV row's email — it was stored as the
+    phone at ingest, since the real email wasn't known yet — and (b) stamp
+    contact_id onto any candidate already created from that CV, so the parsed
+    candidate and this contact are one linked record. The details-then-CV
+    ordering is closed from the candidate-creation worker's side.
+    """
     try:
-        await supabase.table("pandius_clients").update({
+        res = await supabase.table("pandius_clients").update({
             "contact_id": contact_id,
             "identified_at": "now()",
             "identification_method": "manual_intake_via_bot",
@@ -185,6 +194,50 @@ async def _link_contact(supabase, pandius_client_id, contact_id, full_name, emai
         }).eq("id", str(pandius_client_id)).execute()
     except Exception as e:
         logger.warning(f"Failed to link contact to pandius_client: {e}")
+        return
+
+    # Was a CV already received for this intake? If so, backfill + link it.
+    cv_file_id = None
+    try:
+        row = (res.data[0] if getattr(res, "data", None) else None)
+        cv_file_id = row.get("cv_file_id") if row else None
+        if not cv_file_id:
+            got = await supabase.table("pandius_clients").select(
+                "cv_file_id"
+            ).eq("id", str(pandius_client_id)).limit(1).execute()
+            cv_file_id = got.data[0].get("cv_file_id") if got.data else None
+    except Exception as e:
+        logger.debug(f"Could not resolve cv_file_id for pandius_client: {e}")
+
+    if not cv_file_id:
+        return
+
+    # (a) Backfill the real email onto the CV row (was the phone at ingest).
+    if email:
+        try:
+            await supabase.table("cv_files").update(
+                {"candidate_email": email, "source_email_from": email}
+            ).eq("id", cv_file_id).execute()
+        except Exception as e:
+            logger.debug(f"Failed to backfill CV email for {cv_file_id}: {e}")
+
+    # (b) Link any candidate already created from this CV to the contact.
+    try:
+        cand = await supabase.table("candidates").select("id").eq(
+            "cv_file_id", cv_file_id
+        ).limit(1).execute()
+        if cand.data:
+            await supabase.table("candidates").update(
+                {"contact_id": contact_id}
+            ).eq("id", cand.data[0]["id"]).execute()
+            logger.info(
+                f"Linked candidate {cand.data[0]['id']} to contact {contact_id} "
+                f"via cv_file {cv_file_id}"
+            )
+    except Exception as e:
+        msg = str(e).lower()
+        if "contact_id" not in msg and "column" not in msg:
+            logger.debug(f"Failed to link candidate to contact: {e}")
 
 
 async def handle_search_open_jobs(

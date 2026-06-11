@@ -22,6 +22,7 @@ async def ingest_whatsapp_cv(
     mime_type: str,
     phone: str,
     green_api_message_id: Optional[str] = None,
+    pandius_client_id: Optional[str] = None,
 ) -> Optional[str]:
     """Download + store a WhatsApp CV and queue it for parsing.
 
@@ -61,7 +62,7 @@ async def ingest_whatsapp_cv(
         except Exception as e:
             logger.warning(f"Pandius CV storage upload failed: {e}")
 
-        row = await supabase.table("cv_files").insert({
+        cv_row = {
             "file_hash": file_hash,
             "original_filename": safe_filename,
             "storage_path": storage_path,
@@ -72,10 +73,28 @@ async def ingest_whatsapp_cv(
             "source_email_from": phone,
             "source_email_received_at": now.isoformat(),
             "candidate_email": phone,  # no email yet — phone is the identifier
+            # Stable bridge back to the intake row (and from there the contact),
+            # so candidate-creation can link the candidate to the Pandius contact
+            # even before the real email is collected. NULL for emailed CVs.
+            "pandius_client_id": pandius_client_id,
             "version_number": 1,
             "is_latest": True,
             "parse_status": "pending",
-        }).execute()
+        }
+        try:
+            row = await supabase.table("cv_files").insert(cv_row).execute()
+        except Exception as e:
+            # Column missing → migration 021 not applied yet. Don't let that
+            # block CV ingestion entirely; retry without the bridge column.
+            msg = str(e).lower()
+            if "pandius_client_id" not in msg and "column" not in msg:
+                raise
+            logger.warning(
+                "cv_files.pandius_client_id not found — ingesting without the "
+                "bridge column (apply migration 021 for direct contact linkage)"
+            )
+            cv_row.pop("pandius_client_id", None)
+            row = await supabase.table("cv_files").insert(cv_row).execute()
 
         cv_id = row.data[0]["id"] if row.data else None
         logger.info(f"Pandius CV ingested: cv_id={cv_id} phone={phone}")
