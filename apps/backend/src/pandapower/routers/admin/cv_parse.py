@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 
 from pandapower.core.config import settings
 from pandapower.core.supabase import get_supabase_client
+from pandapower.core.ttl_cache import cached
 from pandapower.integrations.claude_api import AnthropicClient
 from pandapower.integrations.supabase_storage import SupabaseStorageManager
 from pandapower.workers.cv_parse import CVParseWorker
@@ -63,6 +64,7 @@ class CVParseResult(BaseModel):
 
 
 @router.get("/status", response_model=CVParseStatusResponse)
+@cached(ttl=20)
 async def get_cv_parse_status() -> CVParseStatusResponse:
     """Get current CV parsing status."""
     try:

@@ -8,6 +8,7 @@ from enum import Enum
 
 from pydantic import BaseModel
 from pandapower.core.supabase import get_supabase_client
+from pandapower.core.ttl_cache import cached
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin/recruiter", tags=["admin", "recruiter"])
@@ -198,6 +199,7 @@ class ConversationInfo(BaseModel):
 # ============================================================================
 
 @router.get("/status", response_model=StatusMetrics)
+@cached(ttl=20)
 async def get_recruiter_status(
     supabase = Depends(get_supabase_client)
 ) -> StatusMetrics:

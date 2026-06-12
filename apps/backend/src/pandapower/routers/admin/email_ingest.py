@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from pandapower.core.config import Settings
 from pandapower.core.supabase import get_supabase_client
+from pandapower.core.ttl_cache import cached
 from pandapower.integrations.azure import AzureGraphClient
 from pandapower.integrations.supabase_storage import SupabaseStorageManager
 from pandapower.workers.email_ingest import EmailIngestWorker
@@ -232,6 +233,7 @@ async def reingest_auto(request: ReingestAutoRequest, supabase_client=Depends(ge
 
 
 @router.get("/reingest-status")
+@cached(ttl=30)
 async def reingest_status(supabase_client=Depends(get_supabase_client)) -> dict:
     """Counts of remaining recoverable emails + capture totals."""
     async def _count(table, **eq):
@@ -263,6 +265,7 @@ async def reingest_status(supabase_client=Depends(get_supabase_client)) -> dict:
 
 
 @router.get("/status", response_model=EmailStatusResponse)
+@cached(ttl=20)
 async def get_status(
     supabase_client=Depends(get_supabase_client),
 ) -> EmailStatusResponse:

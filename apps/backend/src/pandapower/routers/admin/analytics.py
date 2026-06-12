@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from pandapower.core.supabase import get_supabase_client
+from pandapower.core.ttl_cache import cached
 
 logger = logging.getLogger(__name__)
 
@@ -244,6 +245,7 @@ def _days_between(start: Optional[datetime], end: Optional[datetime]) -> Optiona
 # ============================================================================
 
 @router.get("/admin/analytics/kpi-summary", response_model=KPISummaryResponse)
+@cached(ttl=30)
 async def get_kpi_summary(
     period: str = Query("month", description="Time period: week, month, quarter, year"),
     supabase: Any = Depends(get_supabase_client),
