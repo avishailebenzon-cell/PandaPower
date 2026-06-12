@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import logging
 import re
+import time
 import unicodedata
 from datetime import datetime, timedelta
 from typing import Any, Optional
@@ -94,6 +95,11 @@ class EmailIngestWorker:
         self.azure = azure_client
         self.storage = storage_manager
         self.is_backfill = is_backfill
+        # Throttle the cosmetic "currently scanning: <file>" UI write so it
+        # fires at most once every few seconds instead of once per message.
+        # That write was hitting system_settings ~130K times and was a top-10
+        # DB-CPU consumer for a label nobody needs sub-second.
+        self._last_current_file_write = 0.0
 
         # Set concurrency limits based on backfill mode
         if is_backfill:
@@ -457,17 +463,22 @@ class EmailIngestWorker:
 
             logger.debug(f"Message {subject}: {len(attachments)} attachments, {len(cv_attachments)} CV files")
 
-            # Update current scanning status for UI
-            if cv_attachments:
-                current_file = cv_attachments[0].get("name", "Unknown")
-                await self.supabase.table("system_settings").upsert(
-                    {
-                        "setting_key": "email.current_file_scanning",
-                        "setting_value": f'"{current_file}"',
-                        "updated_at": datetime.utcnow().isoformat(),
-                    },
-                    on_conflict="setting_key",
-                ).execute()
+            # Update current scanning status for UI — throttled to ≤1 write per
+            # 5s, and skipped entirely during backfill (the label is meaningless
+            # while bulk-draining history). Saves ~130K system_settings writes.
+            if cv_attachments and not self.is_backfill:
+                now = time.monotonic()
+                if now - self._last_current_file_write >= 5.0:
+                    self._last_current_file_write = now
+                    current_file = cv_attachments[0].get("name", "Unknown")
+                    await self.supabase.table("system_settings").upsert(
+                        {
+                            "setting_key": "email.current_file_scanning",
+                            "setting_value": f'"{current_file}"',
+                            "updated_at": datetime.utcnow().isoformat(),
+                        },
+                        on_conflict="setting_key",
+                    ).execute()
             if len(attachments) > 0:
                 for a in attachments:
                     name = a.get('name', 'unknown')

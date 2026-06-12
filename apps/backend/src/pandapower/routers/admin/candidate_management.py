@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from pandapower.core.config import settings
 from pandapower.core.supabase import get_supabase_client
+from pandapower.core.ttl_cache import cached
 
 import structlog as _structlog
 logger = _structlog.get_logger(__name__)
@@ -48,11 +49,16 @@ class CandidateProfile(BaseModel):
 
 
 @router.get("/stats")
+@cached(ttl=60)
 async def get_candidate_stats(supabase=Depends(get_supabase_client)) -> CandidateStats:
     """Get candidate statistics and summary."""
     try:
-        # Get all candidates
-        response = await supabase.table("candidates").select("*").is_("deleted_at", "null").execute()
+        # Pull ONLY the columns the stats aggregation reads. The previous
+        # select("*") dragged the heavy extracted_from_cv JSONB across all
+        # ~7K rows on every call (~3s/query) — one of the top DB-CPU costs.
+        response = await supabase.table("candidates").select(
+            "detected_language, location, overall_confidence_score, email, phone"
+        ).is_("deleted_at", "null").execute()
         candidates = response.data or []
 
         if not candidates:
