@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from datetime import datetime
 from typing import Any
 
@@ -421,7 +422,16 @@ async def _match_candidate_jobs_async(candidate_id: str, agent_code: str) -> dic
 
 
 # Routed jobs scored per scheduler run (each → hybrid: Claude on top-N only).
-MATCH_JOBS_PER_RUN = 3
+# Env-tunable so matching throughput (and therefore Anthropic spend) can be
+# dialed down during a historical backfill, when a flood of new candidates would
+# otherwise drive agent_match to its full ~$185/day ceiling.
+MATCH_JOBS_PER_RUN = int(os.getenv("MATCH_JOBS_PER_RUN", "3"))
+
+# Master switch: set MATCHING_ENABLED=false to fully pause agent matching (e.g.
+# while backfilling) without touching the rest of the pipeline. Matches simply
+# form later when it's re-enabled — nothing is lost.
+def _matching_enabled() -> bool:
+    return os.getenv("MATCHING_ENABLED", "true").lower() != "false"
 
 
 async def _run_matching_async() -> dict[str, Any]:
@@ -433,6 +443,8 @@ async def _run_matching_async() -> dict[str, Any]:
     only on the top-N. Respects the Anthropic circuit breaker.
     """
     try:
+        if not _matching_enabled():
+            return {"status": "skipped", "reason": "matching paused (MATCHING_ENABLED=false)"}
         if not settings.ANTHROPIC_API_KEY:
             return {"status": "skipped", "reason": "no anthropic key"}
         supabase_client = await get_supabase_client()
@@ -504,7 +516,7 @@ async def _run_matching_async() -> dict[str, Any]:
 # pairs that already have a Mani match are skipped, so it advances across runs.
 # ---------------------------------------------------------------------------
 MANI_AGENT_CODE = "mani"
-MANI_PAIRS_PER_RUN = 5
+MANI_PAIRS_PER_RUN = int(os.getenv("MANI_PAIRS_PER_RUN", "5"))
 _MANI_LEVEL_1_CAND_VALUES = {"רמה 1", "level 1", "1"}
 _MANI_LEVEL_1_JOB_VALUES = {"רמה 1", "רמה 1 + שוס", "level 1", "1"}
 
@@ -520,6 +532,8 @@ async def _mani_matching_async() -> dict[str, Any]:
     matches (in 'found' state) that then go through the normal Carmit→Tal flow.
     """
     try:
+        if not _matching_enabled():
+            return {"status": "skipped", "reason": "matching paused (MATCHING_ENABLED=false)"}
         if not settings.ANTHROPIC_API_KEY:
             return {"status": "skipped", "reason": "no anthropic key"}
         supabase_client = await get_supabase_client()

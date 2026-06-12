@@ -809,7 +809,19 @@ Return ONLY valid JSON (no extra text):
                 "geographic_mismatch_reason": geographic_mismatch_reason,
             }
 
-            result = await self.supabase.table("matches").insert(match_data).execute()
+            # Upsert (not plain insert) on the (candidate_id, job_id) unique
+            # constraint from migration 023. ignore_duplicates=True → ON CONFLICT
+            # DO NOTHING: if this pair was already scored, we don't overwrite it
+            # and (crucially) we don't raise, so a re-score can never loop.
+            result = (
+                await self.supabase.table("matches")
+                .upsert(
+                    match_data,
+                    on_conflict="candidate_id,job_id",
+                    ignore_duplicates=True,
+                )
+                .execute()
+            )
             match_id = result.data[0]["id"] if result.data else None
 
             # Log to agent_logs.

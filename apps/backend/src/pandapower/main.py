@@ -244,10 +244,13 @@ async def _pipeline_scheduler_loop():
         # Agent matching (candidate × job, hybrid: Claude on top-N). Runs the
         # actual matching so matches grow as candidates/jobs arrive. Every 5 min,
         # a rotating batch of routed jobs; cost-bounded by MATCH_JOBS_PER_RUN.
-        "matching":              (_run_matching_async,             300.0,    45.0),
+        # Interval env-tunable (MATCH_INTERVAL_SEC) so cadence — and therefore
+        # Anthropic spend — can be slowed during a historical backfill without a
+        # code change. Pair with MATCH_JOBS_PER_RUN / MATCHING_ENABLED.
+        "matching":              (_run_matching_async,             float(os.getenv("MATCH_INTERVAL_SEC", "300")),    45.0),
         # Mani: independent Level-1 sweep — produces matches that then flow
         # through the same Carmit review + Tal handoff as every other agent.
-        "mani_matching":         (_mani_matching_async,            300.0,    48.0),
+        "mani_matching":         (_mani_matching_async,            float(os.getenv("MANI_INTERVAL_SEC", "300")),    48.0),
         "carmit_route_jobs":     (_carmit_route_jobs_async,        600.0,    50.0),
         "carmit_review_matches": (_carmit_review_matches_async,    900.0,    65.0),
         "carmit_handoff_to_tal": (_carmit_handoff_to_tal_async,    600.0,    80.0),
