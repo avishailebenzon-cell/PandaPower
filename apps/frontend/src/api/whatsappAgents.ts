@@ -53,6 +53,34 @@ export async function saveWhatsAppAgent(
   return r.json();
 }
 
+export interface ProfilePictureResult {
+  agent_code: string;
+  success: boolean;
+  detail: string;
+  url_avatar: string | null;
+}
+
+/** Push ONE agent's bundled avatar photo to its WhatsApp profile picture. */
+export async function syncAgentProfilePicture(
+  agentCode: WhatsAppAgentCode,
+): Promise<ProfilePictureResult> {
+  const r = await fetch(
+    `${API_BASE}/admin/whatsapp-agents/${agentCode}/profile-picture/sync`,
+    { method: "POST" },
+  );
+  if (!r.ok) throw new Error(`Failed to sync ${agentCode} profile picture: ${r.statusText}`);
+  return r.json();
+}
+
+/** Push every configured WhatsApp agent's avatar to its WhatsApp profile. */
+export async function syncAllProfilePictures(): Promise<ProfilePictureResult[]> {
+  const r = await fetch(`${API_BASE}/admin/whatsapp-agents/profile-pictures/sync-all`, {
+    method: "POST",
+  });
+  if (!r.ok) throw new Error(`Failed to sync profile pictures: ${r.statusText}`);
+  return r.json();
+}
+
 // ============================================================================
 // Per-bot CONVERSATIONS / DASHBOARD / BEHAVIOR / PLAYGROUND
 // All scoped by agent_code in the URL — never share data across bots.

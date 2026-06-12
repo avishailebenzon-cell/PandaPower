@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -33,6 +34,11 @@ from pydantic import BaseModel, Field
 from pandapower.core.config import settings
 from pandapower.core.supabase import get_supabase_client
 from pandapower.integrations.claude_api import AnthropicClient
+from pandapower.integrations.green_api import get_green_api_client
+
+# Bundled agent profile photos (square JPEGs) pushed to WhatsApp via Green API.
+# Kept in the backend package so the sync works regardless of the frontend deploy.
+AVATARS_DIR = Path(__file__).resolve().parents[2] / "assets" / "avatars"
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin/whatsapp-agents", tags=["admin", "whatsapp"])
@@ -270,6 +276,68 @@ async def save_whatsapp_agent_config(
     # Return the freshly-saved state so the UI can re-render confidently.
     settings, last_updated = await _fetch_settings_dict(supabase, agent_code)
     return _build_config(agent_code, settings, last_updated, request)
+
+
+# ============================================================================
+#  PROFILE PICTURES — push the bundled agent photo to the WhatsApp account
+# ----------------------------------------------------------------------------
+#  Sets each agent's WhatsApp profile picture to its real avatar photo, so the
+#  bot presents a believable human face to candidates/clients. Idempotent —
+#  safe to re-run. Requires the agent's Green-API credentials to be configured.
+# ============================================================================
+
+
+class ProfilePictureResult(BaseModel):
+    agent_code: str
+    success: bool
+    detail: str
+    url_avatar: Optional[str] = None
+
+
+async def _sync_one_profile_picture(agent_code: str) -> ProfilePictureResult:
+    """Push the bundled photo for one agent to its WhatsApp profile."""
+    photo = AVATARS_DIR / f"{agent_code}.jpg"
+    if not photo.is_file():
+        return ProfilePictureResult(
+            agent_code=agent_code, success=False, detail="missing bundled photo"
+        )
+
+    client = await get_green_api_client(agent_code)  # type: ignore[arg-type]
+    if client is None:
+        return ProfilePictureResult(
+            agent_code=agent_code, success=False, detail="Green API not configured"
+        )
+
+    try:
+        result = await client.set_profile_picture(photo.read_bytes(), f"{agent_code}.jpg")
+    finally:
+        await client.close()
+
+    if result.get("success"):
+        return ProfilePictureResult(
+            agent_code=agent_code, success=True, detail="updated",
+            url_avatar=result.get("urlAvatar"),
+        )
+    return ProfilePictureResult(
+        agent_code=agent_code, success=False, detail=result.get("error", "failed")
+    )
+
+
+@router.post("/{agent_code}/profile-picture/sync", response_model=ProfilePictureResult)
+async def sync_agent_profile_picture(agent_code: str) -> ProfilePictureResult:
+    """Set ONE agent's WhatsApp profile picture to its bundled avatar photo."""
+    if agent_code not in SUPPORTED_AGENTS:
+        raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_code}")
+    return await _sync_one_profile_picture(agent_code)
+
+
+@router.post("/profile-pictures/sync-all", response_model=list[ProfilePictureResult])
+async def sync_all_profile_pictures() -> list[ProfilePictureResult]:
+    """Set every configured WhatsApp agent's profile picture in one shot."""
+    results = []
+    for agent_code in SUPPORTED_AGENTS:
+        results.append(await _sync_one_profile_picture(agent_code))
+    return results
 
 
 # ============================================================================

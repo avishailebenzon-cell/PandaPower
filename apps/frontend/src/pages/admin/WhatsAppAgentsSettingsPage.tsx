@@ -25,6 +25,7 @@ import {
   fetchBehavior,
   saveBehavior,
   runPlayground,
+  syncAgentProfilePicture,
   type WhatsAppAgentConfig,
   type WhatsAppAgentConfigUpdate,
   type WhatsAppAgentCode,
@@ -35,6 +36,7 @@ import {
   type QAPair,
   type PlaygroundResult,
 } from "@/api/whatsappAgents";
+import { agentAvatar, agentAvatarFallback } from "@/data/agents";
 
 type TabId = "settings" | "conversations" | "behavior" | "dashboard" | "playground";
 
@@ -248,6 +250,8 @@ function SettingsTab({ bot }: { bot: WhatsAppAgentConfig }) {
     <div className="space-y-4">
       <WebhookUrlPanel bot={bot} />
 
+      <ProfilePicturePanel bot={bot} />
+
       <section className="bg-gray-800 border border-gray-700 rounded-lg p-5 space-y-4">
         <div className="text-sm text-gray-400">
           עודכן: {formatWhen(bot.last_updated_at)}
@@ -352,6 +356,62 @@ function WebhookUrlPanel({ bot }: { bot: WhatsAppAgentConfig }) {
           קריאות נכנסות יופיעו בטאב "💬 שיחות" ובדאשבורד תוך שניות.
         </li>
       </ul>
+    </section>
+  );
+}
+
+// ============================================================================
+// Profile-picture panel — pushes the agent's real avatar photo to its
+// WhatsApp account via Green API, so the bot shows a believable human face.
+// ============================================================================
+function ProfilePicturePanel({ bot }: { bot: WhatsAppAgentConfig }) {
+  const photo = agentAvatar(bot.agent_code);
+  const fallback = agentAvatarFallback(bot.agent_code);
+  const [statusMsg, setStatusMsg] = useState<string | null>(null);
+
+  const sync = useMutation({
+    mutationFn: () => syncAgentProfilePicture(bot.agent_code),
+    onSuccess: (r) =>
+      setStatusMsg(r.success ? "✅ תמונת הפרופיל עודכנה ב-WhatsApp" : `❌ ${r.detail}`),
+    onError: (e: Error) => setStatusMsg(`❌ ${e.message}`),
+  });
+
+  // Clear the status line when switching bot.
+  useEffect(() => setStatusMsg(null), [bot.agent_code]);
+
+  const c = BOT_COLORS[bot.agent_code];
+  return (
+    <section className="bg-gray-800 border border-gray-700 rounded-lg p-5">
+      <div className="flex items-center gap-4">
+        <img
+          src={photo}
+          alt={bot.name}
+          onError={(e) => { if (fallback) e.currentTarget.src = fallback; }}
+          className={`w-16 h-16 rounded-full object-cover border-2 ${c.border} flex-shrink-0`}
+        />
+        <div className="flex-1">
+          <h3 className="font-bold text-white">🖼️ תמונת פרופיל ב-WhatsApp</h3>
+          <p className="text-sm text-gray-400 mt-1">
+            דחיפת התמונה הריאליסטית של {bot.name} כתמונת הפרופיל של חשבון ה-WhatsApp שלו.
+            מוסיף אמינות לשיחות מול מועמדים ולקוחות. אפשר להריץ שוב בכל עת.
+          </p>
+        </div>
+        <div className="flex flex-col items-end gap-2">
+          <button
+            onClick={() => sync.mutate()}
+            disabled={!bot.is_configured || sync.isPending}
+            title={!bot.is_configured ? "יש להגדיר Green API קודם" : undefined}
+            className={`px-4 py-2 rounded font-semibold text-sm transition whitespace-nowrap ${
+              !bot.is_configured || sync.isPending
+                ? "bg-gray-700 text-gray-500 cursor-not-allowed"
+                : "bg-emerald-600 hover:bg-emerald-700 text-white"
+            }`}
+          >
+            {sync.isPending ? "מעדכן…" : "עדכן תמונת פרופיל"}
+          </button>
+          {statusMsg && <span className="text-xs text-gray-300">{statusMsg}</span>}
+        </div>
+      </div>
     </section>
   );
 }

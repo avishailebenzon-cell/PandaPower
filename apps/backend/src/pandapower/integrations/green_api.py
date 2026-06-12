@@ -187,6 +187,45 @@ class GreenAPIClient:
             logger.error(f"Green API request failed: {e}")
             return {"success": False, "error": str(e)}
 
+    async def set_profile_picture(
+        self, image_bytes: bytes, filename: str = "profile.jpg"
+    ) -> dict:
+        """Set the instance's WhatsApp profile picture.
+
+        Green API's ``setProfilePicture`` takes a multipart/form-data upload
+        with a single ``file`` field (a square JPEG/PNG). On success it echoes
+        back the new ``urlAvatar``; a non-200 (or a ``reason``) means WhatsApp
+        rejected the image (too small, wrong format, rate-limited, …).
+
+        Args:
+            image_bytes: Raw image bytes (square, JPEG/PNG, ideally >=192px).
+            filename: Filename hint sent with the upload.
+
+        Returns:
+            ``{"success": True, "urlAvatar": ...}`` or ``{"success": False, "error": ...}``.
+        """
+        session = await self._get_session()
+        url = f"{self.base_url}/setProfilePicture/{self.token}"
+
+        form = aiohttp.FormData()
+        form.add_field(
+            "file", image_bytes, filename=filename, content_type="image/jpeg"
+        )
+
+        try:
+            async with session.post(url, data=form) as response:
+                data = await response.json(content_type=None)
+                if response.status == 200 and not data.get("reason"):
+                    return {"success": True, "urlAvatar": data.get("urlAvatar")}
+                logger.error(f"Green API setProfilePicture failed ({response.status}): {data}")
+                return {
+                    "success": False,
+                    "error": data.get("reason") or data.get("message", "Unknown error"),
+                }
+        except Exception as e:
+            logger.error(f"Green API setProfilePicture request failed: {e}")
+            return {"success": False, "error": str(e)}
+
     async def get_me(self) -> dict:
         """Get account information including WhatsApp number.
 
