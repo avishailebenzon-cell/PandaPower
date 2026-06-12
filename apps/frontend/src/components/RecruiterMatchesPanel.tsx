@@ -288,6 +288,14 @@ export function RecruiterMatchesPanel({
           >
             {m.candidateName}
           </button>
+          {m.isCompanyEmployee && (
+            <span
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold bg-orange-500 text-white ring-1 ring-orange-300 whitespace-nowrap"
+              title="מועמד זה הוא עובד חברה — מוצג לבקרה בלבד, לא יועבר לטל"
+            >
+              🏢 עובד חברה
+            </span>
+          )}
         </div>
       </td>
       <td className="px-4 py-3 text-gray-300">

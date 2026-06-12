@@ -1076,6 +1076,9 @@ async def _carmit_handoff_to_tal_async(batch_size: int = 20) -> dict[str, Any]:
             .select("id, candidate_id, job_id, matched_by_agent_code, match_score")
             .eq("current_state", "carmit_approved")
             .eq("is_valid", True)
+            # Already-known company employees are excluded here so they never
+            # starve the batch; the gate below still catches not-yet-flagged ones.
+            .eq("is_company_employee", False)
             .order("updated_at", desc=False)  # oldest first
             .limit(batch_size)
             .execute()
@@ -1083,6 +1086,48 @@ async def _carmit_handoff_to_tal_async(batch_size: int = 20) -> dict[str, Any]:
         matches = resp.data or []
         if not matches:
             return {"status": "success", "handed_off": 0}
+
+        # ── Company-employee gate ──────────────────────────────────────────
+        # A candidate who is a CURRENT company employee must never be forwarded
+        # to Tal. We detect them in real time (the weekly flag-sync may not have
+        # run since this match was created) and divert: stamp the flag and leave
+        # the match in carmit_approved so it stays visible/tagged in Carmit but
+        # never reaches Tal's queue.
+        from pandapower.workers.company_employees import get_employee_candidate_ids
+        try:
+            cand_ids = [str(m["candidate_id"]) for m in matches if m.get("candidate_id")]
+            employee_cand_ids = await get_employee_candidate_ids(supabase_client, cand_ids)
+        except Exception as gate_err:
+            logger.warning(f"company-employee gate failed (fail-open): {gate_err}")
+            employee_cand_ids = set()
+
+        skipped_employees = 0
+        if employee_cand_ids:
+            employee_match_ids = [
+                str(m["id"]) for m in matches
+                if str(m.get("candidate_id")) in employee_cand_ids
+            ]
+            # Tag them so the UI shows the "עובד חברה" badge.
+            try:
+                for chunk_start in range(0, len(employee_match_ids), 150):
+                    chunk = employee_match_ids[chunk_start:chunk_start + 150]
+                    await supabase_client.table("matches").update(
+                        {"is_company_employee": True}
+                    ).in_("id", chunk).execute()
+            except Exception as tag_err:
+                logger.warning(f"tagging employee matches failed: {tag_err}")
+            # Drop them from this handoff batch — they stay in carmit_approved.
+            matches = [
+                m for m in matches
+                if str(m.get("candidate_id")) not in employee_cand_ids
+            ]
+            skipped_employees = len(employee_match_ids)
+            if not matches:
+                return {
+                    "status": "success",
+                    "handed_off": 0,
+                    "skipped_employees": skipped_employees,
+                }
 
         # Reuse Carmit's defensive history writer so the audit row schema
         # matches what _carmit_review_matches_async already produces.
@@ -1142,8 +1187,16 @@ async def _carmit_handoff_to_tal_async(batch_size: int = 20) -> dict[str, Any]:
                 errors.append(f"{mid}: {str(e)[:200]}")
                 logger.warning(f"Handoff failed for match {mid}: {e}")
 
-        logger.info(f"Carmit→Tal handoff: handed_off={handed_off} errors={len(errors)}")
-        return {"status": "success", "handed_off": handed_off, "errors": errors}
+        logger.info(
+            f"Carmit→Tal handoff: handed_off={handed_off} "
+            f"skipped_employees={skipped_employees} errors={len(errors)}"
+        )
+        return {
+            "status": "success",
+            "handed_off": handed_off,
+            "skipped_employees": skipped_employees,
+            "errors": errors,
+        }
 
     except Exception as e:
         logger.error(f"Carmit→Tal handoff async failed: {str(e)}", exc_info=True)
@@ -1170,6 +1223,64 @@ def carmit_handoff_to_tal_task(self) -> dict[str, Any]:
             loop.close()
     except Exception as e:
         logger.error(f"Carmit → Tal handoff task wrapper failed: {e}", exc_info=True)
+        return {"status": "failed", "error": str(e)}
+
+
+# ============================================================================
+# Weekly company-employee sync
+# ----------------------------------------------------------------------------
+# Once a week (Sunday morning) refresh which candidates are CURRENT company
+# employees from Pipedrive and re-stamp matches.is_company_employee so:
+#   * employee matches stay visible in Carmit (tagged) but never reach Tal,
+#   * status changes in Pipedrive (someone left / joined) propagate.
+# This is intentionally low-cadence — employment status changes slowly, and the
+# real-time handoff gate already protects against any mid-week drift. We combine
+# the existing contacts sync (to get fresh contact_status) with the flag recompute.
+# ============================================================================
+
+async def _company_employee_sync_async() -> dict[str, Any]:
+    """Sunday-morning job: refresh employee contacts, then re-flag matches.
+
+    Self-guards on day-of-week + a once-per-day marker so it runs at most once
+    each Sunday regardless of how often the scheduler ticks it.
+    """
+    try:
+        now = datetime.utcnow()
+        # Sunday = weekday() 6. (Sunday morning Israel time ≈ Sun 03:00–07:00 UTC,
+        # so a plain UTC Sunday check comfortably covers "Sunday morning".)
+        if now.weekday() != 6:
+            return {"status": "skipped", "reason": "not Sunday"}
+
+        supabase_client = await get_supabase_client()
+        today = now.date().isoformat()
+        last_run = await _get_setting(supabase_client, "company_employee_sync_last_run")
+        if last_run == today:
+            return {"status": "skipped", "reason": "already ran today"}
+
+        # 1) Refresh contact_status from Pipedrive (delta sync — cheap). The
+        #    contacts table is the source of truth for "employee".
+        contacts_synced = None
+        try:
+            from pandapower.workers.pipedrive_sync import sync_pipedrive_contacts
+            from datetime import timedelta
+            sync_res = await sync_pipedrive_contacts(since=now - timedelta(days=8))
+            contacts_synced = sync_res.get("synced") if isinstance(sync_res, dict) else None
+        except Exception as e:
+            logger.warning(f"company_employee_sync: contacts sync failed (continuing): {e}")
+
+        # 2) Recompute the flag across all matches.
+        from pandapower.workers.company_employees import sync_company_employee_flags
+        flag_res = await sync_company_employee_flags(supabase_client)
+
+        await _set_setting(supabase_client, "company_employee_sync_last_run", today)
+
+        return {
+            "status": "success",
+            "contacts_synced": contacts_synced,
+            **{k: v for k, v in flag_res.items() if k != "status"},
+        }
+    except Exception as e:
+        logger.error(f"company_employee_sync failed: {e}", exc_info=True)
         return {"status": "failed", "error": str(e)}
 
 

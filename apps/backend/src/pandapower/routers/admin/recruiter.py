@@ -93,6 +93,10 @@ class MatchInfo(BaseModel):
     # match state machine. Starred matches show an orange star and can be
     # filtered in every agent queue.
     is_starred: bool = False
+    # Candidate is a CURRENT company employee (Pipedrive contact_status =
+    # "עובד חברה"). Such matches are shown in Carmit (tagged) but never sent to
+    # Tal — we don't approach our own staff about company jobs.
+    is_company_employee: bool = False
 
 
 class MatchDetailInfo(BaseModel):
@@ -312,7 +316,7 @@ async def get_recruiter_matches(
         # note we filter by is_valid so Phase-4 invalidations don't show up.
         query = supabase.table("matches").select(
             "id, candidate_id, job_id, current_state, match_score, created_at, updated_at, "
-            "geographic_mismatch, geographic_mismatch_reason, is_starred, "
+            "geographic_mismatch, geographic_mismatch_reason, is_starred, is_company_employee, "
             "candidates(name), jobs(job_title, organization_name, pipedrive_deal_id)"
         ).in_("current_state", states).eq("is_valid", True)
         if favorites_only:
@@ -391,6 +395,7 @@ async def get_recruiter_matches(
                     geographic_mismatch=bool(row.get("geographic_mismatch")),
                     geographic_mismatch_reason=row.get("geographic_mismatch_reason"),
                     is_starred=bool(row.get("is_starred")),
+                    is_company_employee=bool(row.get("is_company_employee")),
                 )
                 matches.append(match_info)
 
@@ -1366,3 +1371,19 @@ async def get_all_candidate_matches(
     except Exception as e:
         logger.error(f"Error getting all candidate matches: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to get candidate matches")
+
+
+@router.post("/sync-company-employees")
+async def sync_company_employees(supabase = Depends(get_supabase_client)) -> dict:
+    """Manually run the company-employee flag sync (backfill / verification).
+
+    Recomputes matches.is_company_employee from the contacts table and recalls
+    any employee match that already slipped into Tal's queue. Idempotent — the
+    weekly Sunday job runs the same logic automatically.
+    """
+    try:
+        from pandapower.workers.company_employees import sync_company_employee_flags
+        return await sync_company_employee_flags(supabase)
+    except Exception as e:
+        logger.error(f"Manual company-employee sync failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to sync company employees")

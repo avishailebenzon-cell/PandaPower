@@ -222,6 +222,7 @@ async def _pipeline_scheduler_loop():
         _reingest_missed_scheduled_async,
         _health_check_async,
         _run_matching_async,
+        _company_employee_sync_async,
     )
 
     # Each stage: (async factory, interval seconds, initial stagger offset).
@@ -265,6 +266,10 @@ async def _pipeline_scheduler_loop():
         # once the daily budget recovers. Runs hourly so backlog clears soon
         # after a 429 window; each run fails fast if still throttled.
         "pandi_pipedrive_backfill": (_pandi_pipedrive_backfill_async, 3600.0, 135.0),
+        # Weekly (Sunday-morning) company-employee refresh: re-flag matches whose
+        # candidate is a current company employee so they never reach Tal. Ticks
+        # hourly but self-guards to run at most once each Sunday.
+        "company_employee_sync": (_company_employee_sync_async,      3600.0,   150.0),
         # Telegram (Carmit bot): notify match→Tal / hires, and a once-a-day digest.
         "notify_telegram":       (_notify_telegram_async,          120.0,    55.0),
         "telegram_daily_summary": (_telegram_daily_summary_async,  900.0,    140.0),

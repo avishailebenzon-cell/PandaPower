@@ -22,6 +22,8 @@ export interface Match {
   geographicMismatch?: boolean;
   geographicMismatchReason?: string;
   isStarred?: boolean;
+  /** Candidate is a current company employee — shown tagged, never sent to Tal. */
+  isCompanyEmployee?: boolean;
 }
 
 export interface StatusMetrics {
@@ -158,6 +160,7 @@ export async function fetchRecruiterMatches(
       geographicMismatch: match.geographic_mismatch ?? false,
       geographicMismatchReason: match.geographic_mismatch_reason ?? undefined,
       isStarred: match.is_starred ?? false,
+      isCompanyEmployee: match.is_company_employee ?? false,
     })),
     total: data.total,
     page: data.page,
