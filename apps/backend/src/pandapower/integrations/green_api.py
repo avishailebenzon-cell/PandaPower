@@ -253,32 +253,34 @@ class GreenAPIClient:
             logger.error(f"Green API getAvatar request failed: {e}")
             return {"success": False, "error": str(e)}
 
-    async def get_my_avatar(self) -> dict:
-        """Fetch THIS instance's own current WhatsApp profile picture URL.
-
-        Uses Green API ``getWaSettings``, which returns the authorized
-        account's own ``avatar`` URL (and ``phone``) directly — so the UI can
-        show what the account actually presents right now, bypassing any
-        WhatsApp client-side cache. (``getMe`` is unreliable on these
-        instances and can return an HTML error page.)
-        """
+    async def get_wa_phone(self) -> Optional[str]:
+        """Resolve THIS instance's own WhatsApp phone number via getWaSettings."""
         session = await self._get_session()
         url = f"{self.base_url}/getWaSettings/{self.token}"
         try:
             async with session.get(url) as response:
                 data = await response.json(content_type=None)
                 if response.status == 200:
-                    return {
-                        "success": True,
-                        "url_avatar": data.get("avatar") or None,
-                        "phone": data.get("phone"),
-                        "available": True,
-                    }
+                    return data.get("phone")
                 logger.error(f"Green API getWaSettings failed ({response.status}): {data}")
-                return {"success": False, "error": data.get("message", "Unknown error")}
         except Exception as e:
             logger.error(f"Green API getWaSettings request failed: {e}")
-            return {"success": False, "error": str(e)}
+        return None
+
+    async def get_my_avatar(self) -> dict:
+        """Fetch THIS instance's own *current* WhatsApp profile picture URL.
+
+        Resolves the instance's own number via ``getWaSettings`` and then does
+        a LIVE ``getAvatar`` query on that number. We deliberately do NOT use
+        the ``avatar`` field of ``getWaSettings`` — Green API caches it and it
+        can lag far behind reality (showing a previous picture). ``getAvatar``
+        reflects what the account actually presents right now, so the UI can
+        tell a real problem apart from WhatsApp client-side cache.
+        """
+        phone = await self.get_wa_phone()
+        if not phone:
+            return {"success": False, "error": "could not resolve own WhatsApp number"}
+        return await self.get_avatar(f"{phone}@c.us")
 
     async def get_me(self) -> dict:
         """Get account information including WhatsApp number.
