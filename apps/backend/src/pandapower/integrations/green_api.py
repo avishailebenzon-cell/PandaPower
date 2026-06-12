@@ -256,14 +256,29 @@ class GreenAPIClient:
     async def get_my_avatar(self) -> dict:
         """Fetch THIS instance's own current WhatsApp profile picture URL.
 
-        Resolves the instance's own number via ``getMe`` and then asks
-        ``getAvatar`` for that number, so the UI can show what the account
-        actually presents right now (bypassing any client-side cache).
+        Uses Green API ``getWaSettings``, which returns the authorized
+        account's own ``avatar`` URL (and ``phone``) directly — so the UI can
+        show what the account actually presents right now, bypassing any
+        WhatsApp client-side cache. (``getMe`` is unreliable on these
+        instances and can return an HTML error page.)
         """
-        me = await self.get_me()
-        if not me.get("success") or not me.get("phone"):
-            return {"success": False, "error": me.get("error", "could not resolve own number")}
-        return await self.get_avatar(f"{me['phone']}@c.us")
+        session = await self._get_session()
+        url = f"{self.base_url}/getWaSettings/{self.token}"
+        try:
+            async with session.get(url) as response:
+                data = await response.json(content_type=None)
+                if response.status == 200:
+                    return {
+                        "success": True,
+                        "url_avatar": data.get("avatar") or None,
+                        "phone": data.get("phone"),
+                        "available": True,
+                    }
+                logger.error(f"Green API getWaSettings failed ({response.status}): {data}")
+                return {"success": False, "error": data.get("message", "Unknown error")}
+        except Exception as e:
+            logger.error(f"Green API getWaSettings request failed: {e}")
+            return {"success": False, "error": str(e)}
 
     async def get_me(self) -> dict:
         """Get account information including WhatsApp number.
