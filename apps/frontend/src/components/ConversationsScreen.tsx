@@ -20,6 +20,7 @@ import type {
   ConversationSummary,
 } from "@/api/conversationsApi";
 import { deliveryReasonText } from "@/api/conversationsApi";
+import { agentAvatar, agentAvatarFallback } from "@/data/agents";
 
 // A conversation is "live" when its last message is recent (mirrors the bottom
 // status-bar logic), so the green dot reflects real activity rather than just a
@@ -45,6 +46,9 @@ export interface ConversationsScreenProps {
   agentName: string;
   /** grammatical gender of the agent — drives Hebrew agreement ("f" = נקבה). */
   agentGender: "f" | "m";
+  /** agent code (tal/elad/pandi/pandius) — when set, shows the agent's real
+   *  WhatsApp profile photo next to the title instead of an emoji. */
+  agentCode?: string;
 }
 
 export const ConversationsScreen: React.FC<ConversationsScreenProps> = ({
@@ -55,6 +59,7 @@ export const ConversationsScreen: React.FC<ConversationsScreenProps> = ({
   contactsLabel,
   agentName,
   agentGender,
+  agentCode,
 }) => {
   const navigate = useNavigate();
   // Hebrew gender agreement for the agent's own state/actions.
@@ -207,9 +212,22 @@ export const ConversationsScreen: React.FC<ConversationsScreenProps> = ({
   return (
     <div className="p-6 space-y-4" dir="rtl">
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-white flex items-center gap-2">{title}</h1>
-          <p className="text-gray-400 mt-1">{subtitle}</p>
+        <div className="flex items-center gap-4">
+          {agentCode && agentAvatar(agentCode) && (
+            <img
+              src={agentAvatar(agentCode)}
+              alt={agentName}
+              onError={(e) => {
+                const fb = agentAvatarFallback(agentCode);
+                if (fb) e.currentTarget.src = fb;
+              }}
+              className="w-14 h-14 rounded-full object-cover border-2 border-teal-500 shadow-lg flex-shrink-0"
+            />
+          )}
+          <div>
+            <h1 className="text-3xl font-bold text-white flex items-center gap-2">{title}</h1>
+            <p className="text-gray-400 mt-1">{subtitle}</p>
+          </div>
         </div>
         <button
           onClick={() => navigate(backTo)}

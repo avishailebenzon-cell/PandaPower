@@ -14,64 +14,65 @@ import {
   pandiConversationsApi,
   pandiusConversationsApi,
 } from "@/api/conversationsApi";
+import { agentAvatar, agentAvatarFallback } from "@/data/agents";
 
 type AgentKey = "tal" | "elad" | "pandi" | "pandius";
 
-const AGENTS: Record<AgentKey, { emoji: string; label: string; props: ConversationsScreenProps }> = {
+const AGENTS: Record<AgentKey, { label: string; props: ConversationsScreenProps }> = {
   tal: {
-    emoji: "👩‍💼",
     label: "טל",
     props: {
       api: talConversationsApi,
-      title: "👩‍💼 שיחות של טל",
+      title: "שיחות של טל",
       subtitle:
         "כל השיחות של טל עם המועמדים. אפשר להתערב ולכתוב בשם טל, ולהשבית זמנית את התגובה האוטומטית.",
       backTo: "/recruiting/tal",
       contactsLabel: "מועמדים",
       agentName: "טל",
       agentGender: "f",
+      agentCode: "tal",
     },
   },
   elad: {
-    emoji: "👨‍💼",
     label: "אלעד",
     props: {
       api: eladConversationsApi,
-      title: "👨‍💼 שיחות של אלעד",
+      title: "שיחות של אלעד",
       subtitle:
         "כל השיחות של אלעד עם הלקוחות. אפשר להתערב ולכתוב בשם אלעד, ולהשבית זמנית את התגובה האוטומטית.",
       backTo: "/recruiting/elad",
       contactsLabel: "לקוחות",
       agentName: "אלעד",
       agentGender: "m",
+      agentCode: "elad",
     },
   },
   pandi: {
-    emoji: "💬",
     label: "פנדי",
     props: {
       api: pandiConversationsApi,
-      title: "💬 שיחות של פנדי",
+      title: "שיחות של פנדי",
       subtitle:
         "כל השיחות של פנדי עם הלקוחות. אפשר להתערב ולכתוב בשם פנדי, ולהשבית זמנית את התגובה האוטומטית.",
       backTo: "/recruiting/pandi",
       contactsLabel: "לקוחות",
       agentName: "פנדי",
       agentGender: "f",
+      agentCode: "pandi",
     },
   },
   pandius: {
-    emoji: "🐼",
     label: "פנדיוס",
     props: {
       api: pandiusConversationsApi,
-      title: "🐼 שיחות של פנדיוס",
+      title: "שיחות של פנדיוס",
       subtitle:
         "כל השיחות של פנדיוס עם המועמדים. אפשר להתערב ולכתוב בשם פנדיוס, ולהשבית זמנית את התגובה האוטומטית.",
       backTo: "/recruiting/pandius",
       contactsLabel: "מועמדים",
       agentName: "פנדיוס",
       agentGender: "m",
+      agentCode: "pandius",
     },
   },
 };
@@ -97,13 +98,24 @@ export const WhatsAppConversationsPage: React.FC = () => {
             <button
               key={key}
               onClick={() => setSelected(key)}
-              className={`px-5 py-2 rounded-lg font-semibold text-sm transition ${
+              className={`flex items-center gap-2 pl-4 pr-2 py-1.5 rounded-lg font-semibold text-sm transition ${
                 active
                   ? "bg-teal-600 text-white shadow"
                   : "bg-slate-800 text-slate-300 hover:bg-slate-700"
               }`}
             >
-              {agent.emoji} {agent.label}
+              <img
+                src={agentAvatar(key)}
+                alt={agent.label}
+                onError={(e) => {
+                  const fb = agentAvatarFallback(key);
+                  if (fb) e.currentTarget.src = fb;
+                }}
+                className={`w-7 h-7 rounded-full object-cover border ${
+                  active ? "border-white/70" : "border-slate-600"
+                }`}
+              />
+              {agent.label}
             </button>
           );
         })}

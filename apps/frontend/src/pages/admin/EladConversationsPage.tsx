@@ -7,12 +7,13 @@ import { eladConversationsApi } from "@/api/conversationsApi";
 export const EladConversationsPage: React.FC = () => (
   <ConversationsScreen
     api={eladConversationsApi}
-    title="🤝 שיחות של אלעד"
+    title="שיחות של אלעד"
     subtitle="כל השיחות של אלעד עם הלקוחות. אפשר להתערב ולכתוב בשם אלעד, ולהשבית זמנית את התגובה האוטומטית."
     backTo="/recruiting/elad"
     contactsLabel="לקוחות"
     agentName="אלעד"
     agentGender="m"
+    agentCode="elad"
   />
 );
 

@@ -5,12 +5,13 @@ import { pandiusConversationsApi } from "@/api/conversationsApi";
 export const PandiusConversationsPage: React.FC = () => (
   <ConversationsScreen
     api={pandiusConversationsApi}
-    title="🐼 שיחות של פנדיוס"
+    title="שיחות של פנדיוס"
     subtitle="כל השיחות של פנדיוס עם המועמדים. אפשר להתערב ולכתוב בשם פנדיוס, ולהשבית זמנית את התגובה האוטומטית."
     backTo="/recruiting/pandius"
     contactsLabel="מועמדים"
     agentName="פנדיוס"
     agentGender="m"
+    agentCode="pandius"
   />
 );
 
