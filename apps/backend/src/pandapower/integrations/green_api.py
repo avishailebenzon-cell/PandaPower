@@ -226,6 +226,45 @@ class GreenAPIClient:
             logger.error(f"Green API setProfilePicture request failed: {e}")
             return {"success": False, "error": str(e)}
 
+    async def get_avatar(self, chat_id: str) -> dict:
+        """Fetch the current WhatsApp avatar URL for a chat/number.
+
+        Green API ``getAvatar`` returns ``urlAvatar`` (empty when none is set)
+        and ``available`` (whether the number is on WhatsApp).
+        """
+        normalized = normalize_chat_id(chat_id)
+        if not normalized:
+            return {"success": False, "error": f"invalid phone/chatId: {chat_id}"}
+
+        session = await self._get_session()
+        url = f"{self.base_url}/getAvatar/{self.token}"
+        try:
+            async with session.post(url, json={"chatId": normalized}) as response:
+                data = await response.json(content_type=None)
+                if response.status == 200:
+                    return {
+                        "success": True,
+                        "url_avatar": data.get("urlAvatar") or None,
+                        "available": data.get("available", False),
+                    }
+                logger.error(f"Green API getAvatar failed ({response.status}): {data}")
+                return {"success": False, "error": data.get("message", "Unknown error")}
+        except Exception as e:
+            logger.error(f"Green API getAvatar request failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def get_my_avatar(self) -> dict:
+        """Fetch THIS instance's own current WhatsApp profile picture URL.
+
+        Resolves the instance's own number via ``getMe`` and then asks
+        ``getAvatar`` for that number, so the UI can show what the account
+        actually presents right now (bypassing any client-side cache).
+        """
+        me = await self.get_me()
+        if not me.get("success") or not me.get("phone"):
+            return {"success": False, "error": me.get("error", "could not resolve own number")}
+        return await self.get_avatar(f"{me['phone']}@c.us")
+
     async def get_me(self) -> dict:
         """Get account information including WhatsApp number.
 

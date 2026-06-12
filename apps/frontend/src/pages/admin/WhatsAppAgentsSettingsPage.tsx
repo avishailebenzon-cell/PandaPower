@@ -26,6 +26,7 @@ import {
   saveBehavior,
   runPlayground,
   syncAgentProfilePicture,
+  fetchAgentProfilePicture,
   type WhatsAppAgentConfig,
   type WhatsAppAgentConfigUpdate,
   type WhatsAppAgentCode,
@@ -365,14 +366,26 @@ function WebhookUrlPanel({ bot }: { bot: WhatsAppAgentConfig }) {
 // WhatsApp account via Green API, so the bot shows a believable human face.
 // ============================================================================
 function ProfilePicturePanel({ bot }: { bot: WhatsAppAgentConfig }) {
+  const qc = useQueryClient();
   const photo = agentAvatar(bot.agent_code);
   const fallback = agentAvatarFallback(bot.agent_code);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
+  // The LIVE profile picture currently set on the WhatsApp account (Green API).
+  const liveQ = useQuery({
+    queryKey: ["whatsapp-avatar", bot.agent_code],
+    queryFn: () => fetchAgentProfilePicture(bot.agent_code),
+    enabled: bot.is_configured,
+    staleTime: 30_000,
+  });
+
   const sync = useMutation({
     mutationFn: () => syncAgentProfilePicture(bot.agent_code),
-    onSuccess: (r) =>
-      setStatusMsg(r.success ? "✅ תמונת הפרופיל עודכנה ב-WhatsApp" : `❌ ${r.detail}`),
+    onSuccess: (r) => {
+      setStatusMsg(r.success ? "✅ תמונת הפרופיל עודכנה ב-WhatsApp" : `❌ ${r.detail}`);
+      // Re-pull the live picture so the "current" preview reflects the change.
+      qc.invalidateQueries({ queryKey: ["whatsapp-avatar", bot.agent_code] });
+    },
     onError: (e: Error) => setStatusMsg(`❌ ${e.message}`),
   });
 
@@ -380,8 +393,10 @@ function ProfilePicturePanel({ bot }: { bot: WhatsAppAgentConfig }) {
   useEffect(() => setStatusMsg(null), [bot.agent_code]);
 
   const c = BOT_COLORS[bot.agent_code];
+  const liveUrl = liveQ.data?.url_avatar || null;
+
   return (
-    <section className="bg-gray-800 border border-gray-700 rounded-lg p-5">
+    <section className="bg-gray-800 border border-gray-700 rounded-lg p-5 space-y-4">
       <div className="flex items-center gap-4">
         <img
           src={photo}
@@ -412,6 +427,38 @@ function ProfilePicturePanel({ bot }: { bot: WhatsAppAgentConfig }) {
           {statusMsg && <span className="text-xs text-gray-300">{statusMsg}</span>}
         </div>
       </div>
+
+      {/* Live "what WhatsApp actually shows right now" preview, straight from
+          Green API — bypasses any WhatsApp client-side cache. */}
+      {bot.is_configured && (
+        <div className="flex items-center gap-3 border-t border-gray-700 pt-4">
+          <div className="w-14 h-14 rounded-full overflow-hidden bg-gray-900 border border-gray-600 flex items-center justify-center flex-shrink-0">
+            {liveQ.isFetching ? (
+              <span className="text-xs text-gray-500">טוען…</span>
+            ) : liveUrl ? (
+              <img src={liveUrl} alt={`תמונת WhatsApp נוכחית של ${bot.name}`} className="w-full h-full object-cover" />
+            ) : (
+              <span className="text-2xl">🚫</span>
+            )}
+          </div>
+          <div className="flex-1 text-sm">
+            <div className="text-gray-300 font-semibold">התמונה שמוגדרת כרגע ב-WhatsApp</div>
+            <div className="text-xs text-gray-500 mt-0.5">
+              {liveQ.isError
+                ? `שגיאה במשיכה מ-Green API: ${(liveQ.error as Error).message}`
+                : liveUrl
+                ? "זו התמונה שכל מי שמתכתב עם הסוכן רואה. אם היא שונה ממה שאתה רואה ב-WhatsApp — זה cache בצד שלך, לא המערכת."
+                : "לא מוגדרת תמונת פרופיל בחשבון הזה כרגע. לחץ \"עדכן תמונת פרופיל\"."}
+            </div>
+          </div>
+          <button
+            onClick={() => qc.invalidateQueries({ queryKey: ["whatsapp-avatar", bot.agent_code] })}
+            className="px-3 py-1.5 text-xs font-semibold bg-gray-700 hover:bg-gray-600 text-white rounded transition whitespace-nowrap"
+          >
+            🔄 רענן
+          </button>
+        </div>
+      )}
     </section>
   );
 }

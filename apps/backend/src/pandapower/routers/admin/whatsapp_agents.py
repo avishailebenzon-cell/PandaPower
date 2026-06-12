@@ -323,6 +323,41 @@ async def _sync_one_profile_picture(agent_code: str) -> ProfilePictureResult:
     )
 
 
+class CurrentAvatar(BaseModel):
+    agent_code: str
+    configured: bool
+    url_avatar: Optional[str] = None
+    detail: str
+
+
+@router.get("/{agent_code}/profile-picture", response_model=CurrentAvatar)
+async def get_agent_profile_picture(agent_code: str) -> CurrentAvatar:
+    """Fetch the agent's CURRENT WhatsApp profile picture URL, live from Green
+    API — so the admin can see what the account actually shows, bypassing any
+    WhatsApp client-side cache."""
+    if agent_code not in SUPPORTED_AGENTS:
+        raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_code}")
+
+    client = await get_green_api_client(agent_code)  # type: ignore[arg-type]
+    if client is None:
+        return CurrentAvatar(agent_code=agent_code, configured=False, detail="Green API not configured")
+
+    try:
+        result = await client.get_my_avatar()
+    finally:
+        await client.close()
+
+    if result.get("success"):
+        url = result.get("url_avatar")
+        return CurrentAvatar(
+            agent_code=agent_code, configured=True, url_avatar=url,
+            detail="has avatar" if url else "no avatar set",
+        )
+    return CurrentAvatar(
+        agent_code=agent_code, configured=True, detail=result.get("error", "failed")
+    )
+
+
 @router.post("/{agent_code}/profile-picture/sync", response_model=ProfilePictureResult)
 async def sync_agent_profile_picture(agent_code: str) -> ProfilePictureResult:
     """Set ONE agent's WhatsApp profile picture to its bundled avatar photo."""

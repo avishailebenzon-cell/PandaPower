@@ -60,6 +60,24 @@ export interface ProfilePictureResult {
   url_avatar: string | null;
 }
 
+export interface CurrentAvatar {
+  agent_code: string;
+  configured: boolean;
+  url_avatar: string | null;
+  detail: string;
+}
+
+/** Fetch the agent's CURRENT WhatsApp profile picture, live from Green API. */
+export async function fetchAgentProfilePicture(
+  agentCode: WhatsAppAgentCode,
+): Promise<CurrentAvatar> {
+  const r = await fetch(
+    `${API_BASE}/admin/whatsapp-agents/${agentCode}/profile-picture`,
+  );
+  if (!r.ok) throw new Error(`Failed to fetch ${agentCode} avatar: ${r.statusText}`);
+  return r.json();
+}
+
 /** Push ONE agent's bundled avatar photo to its WhatsApp profile picture. */
 export async function syncAgentProfilePicture(
   agentCode: WhatsAppAgentCode,
