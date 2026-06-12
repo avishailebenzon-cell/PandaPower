@@ -146,6 +146,34 @@ class ConversationEngine:
             supabase=supabase,
         )
 
+        # 4b. Terminal-state guard. Once a job has been handed off to the
+        # recruitment team the conversation is closed. If the client writes
+        # again we must NOT run the full intake LLM cycle — that restarts from
+        # "tell me about the job" even though everything was already collected
+        # and handed off. Acknowledge briefly instead.
+        TERMINAL_STATUSES = {"transferred_to_recruitment", "closed", "completed"}
+        if conversation.get("status") in TERMINAL_STATUSES:
+            logger.info(
+                "conversation_terminal_skip",
+                conversation_id=str(conversation_id),
+                status=conversation.get("status"),
+            )
+            ack = (
+                "הפנייה שלך כבר הועברה לצוות הגיוס שלנו והם יחזרו אליך בהקדם 🤝\n"
+                "אם תרצה לפתוח משרה *חדשה*, ספר לי על התפקיד ונתחיל 😊"
+            )
+            await self._save_message(
+                conversation_id=conversation_id,
+                pandi_client_id=pandi_client_id,
+                direction="outbound",
+                text=ack,
+                llm_model="none",
+                llm_input_tokens=0,
+                llm_output_tokens=0,
+                supabase=supabase,
+            )
+            return {"text": ack, "blocked": False, "reason": "conversation_closed"}
+
         # 5. Determine LLM mode (uses enhanced context)
         mode = self._determine_mode(
             conversation.get("status"), job_context
@@ -209,6 +237,7 @@ class ConversationEngine:
 
                 messages.append({"role": "assistant", "content": content_blocks})
                 tool_result_blocks = []
+                terminal_reply = None
                 for block in tool_uses:
                     logger.info(f"Executing tool: {block.name}")
                     tool_result = await execute_tool(
@@ -223,6 +252,24 @@ class ConversationEngine:
                         "tool_use_id": block.id,
                         "content": _json.dumps(tool_result, ensure_ascii=False),
                     })
+                    # Terminal tool: once the job is handed off to recruitment the
+                    # conversation is DONE. We must NOT loop back to the model —
+                    # it would re-call Claude with no memory of the handoff and
+                    # restart from "tell me about the job" (and emit a duplicate
+                    # message on top of the handoff confirmation). Use the tool's
+                    # confirmation text as the final reply and stop.
+                    if (
+                        block.name == "transfer_to_recruitment"
+                        and tool_result.get("status") == "success"
+                    ):
+                        terminal_reply = tool_result.get("message") or (
+                            "העברתי את הטיפול לצוות הגיוס שלנו. הם יצרו אתך קשר בקרוב! 🤝"
+                        )
+
+                if terminal_reply is not None:
+                    response_text = terminal_reply
+                    break
+
                 messages.append({"role": "user", "content": tool_result_blocks})
             else:
                 # Exhausted tool turns without a clean text reply.
