@@ -70,6 +70,18 @@ class PandiusConversationEngine:
 
         # Load light context.
         conversation = await self._load_conversation(conversation_id, supabase)
+
+        # Terminal-state guard. Once the pitch is handed off to recruitment the
+        # conversation is closed; if the candidate writes again we must NOT run
+        # the full intake LLM cycle (it restarts from scratch). Acknowledge.
+        TERMINAL_STATUSES = {"transferred_to_recruitment", "closed", "completed"}
+        if conversation.get("status") in TERMINAL_STATUSES:
+            ack = "הפנייה שלך כבר הועברה לצוות הגיוס שלנו והם יחזרו אליך בהקדם 🙏"
+            await self._save_message(
+                conversation_id, pandius_client_id, "outbound", ack, supabase=supabase
+            )
+            return {"text": ack, "blocked": False, "reason": "conversation_closed"}
+
         recent = await self._load_recent_messages(conversation_id, supabase)
 
         # Map our internal direction labels to Anthropic roles. The API only
@@ -122,6 +134,7 @@ class PandiusConversationEngine:
                 # and hand their results back so the model can respond to them.
                 messages.append({"role": "assistant", "content": content})
                 tool_result_blocks = []
+                terminal_reply = None
                 for block in tool_uses:
                     logger.info("pandius_tool", tool=block.name)
                     result = await execute_tool(
@@ -136,6 +149,23 @@ class PandiusConversationEngine:
                         "tool_use_id": block.id,
                         "content": json.dumps(result, ensure_ascii=False),
                     })
+                    # Terminal tool: once handed off to recruitment the
+                    # conversation is DONE. Looping back to the model would
+                    # restart intake from scratch and emit a duplicate message
+                    # on top of the handoff confirmation. Use the tool's
+                    # confirmation as the final reply and stop.
+                    if (
+                        block.name == "transfer_to_recruitment"
+                        and result.get("status") == "success"
+                    ):
+                        terminal_reply = result.get("message") or (
+                            "העברתי את הפנייה לצוות הגיוס שלנו. הם יחזרו אליך בהקדם 🤝"
+                        )
+
+                if terminal_reply is not None:
+                    response_text = terminal_reply
+                    break
+
                 messages.append({"role": "user", "content": tool_result_blocks})
             else:
                 # Ran out of tool turns without a clean text reply — fall back to

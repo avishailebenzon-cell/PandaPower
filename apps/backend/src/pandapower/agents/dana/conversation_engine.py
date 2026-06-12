@@ -85,6 +85,7 @@ class DanaConversationEngine:
                 # Echo assistant turn (with tool_use) then run each tool.
                 messages.append({"role": "assistant", "content": response.content})
                 tool_results = []
+                terminal_reply = None
                 for tu in tool_uses:
                     result = await execute_tool(
                         tool_name=tu.name,
@@ -101,6 +102,17 @@ class DanaConversationEngine:
                     if tu.name in ("update_job_context", "create_deal"):
                         job_context = await self._load_job_context(conversation_id, supabase)
                         system_prompt = get_system_prompt(self._context_guidance(job_context), company_extra)
+                    # Terminal tool: the deal is created. Looping back to the
+                    # model risks a confusing restart + a duplicate confirmation
+                    # in the same turn. The create_deal result already carries
+                    # the user-facing "✅ …" confirmation — use it and stop.
+                    if tu.name == "create_deal" and result.get("status") == "success":
+                        terminal_reply = result.get("message") or "✅ הדיל נוצר בהצלחה."
+
+                if terminal_reply is not None:
+                    reply_text = terminal_reply
+                    break
+
                 messages.append({"role": "user", "content": tool_results})
             else:
                 logger.warning("dana_tool_loop_exhausted", conversation_id=str(conversation_id))
