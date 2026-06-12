@@ -207,7 +207,25 @@ async def _fetch_matches(
     """Fetch all valid matches (paginated) with the columns analytics needs.
 
     When start/end are provided, filters by created_at within the range.
+
+    Cached: every analytics endpoint (kpi-summary, recruiter-performance,
+    match-funnel, ...) funnels through here and each call paginates the whole
+    matches table (~29 round-trips for 28K rows). These dashboards poll every
+    10-30s, so this single helper was the #1 DB-CPU consumer. Cache the result
+    for 30s keyed on the ISO date range — collapses every poller into one
+    pagination sweep per window.
     """
+    start_iso = start_date.isoformat() if start_date is not None else None
+    end_iso = end_date.isoformat() if end_date is not None else None
+    return await _fetch_matches_cached(supabase, start_iso, end_iso)
+
+
+@cached(ttl=30)
+async def _fetch_matches_cached(
+    supabase: Any,
+    start_iso: Optional[str] = None,
+    end_iso: Optional[str] = None,
+) -> list[dict]:
     columns = (
         "id, current_state, match_score, matched_by_agent_code, created_at, "
         "state_updated_at, evaluated_score_raw, carmit_blocked_reason, "
@@ -218,10 +236,10 @@ async def _fetch_matches(
     offset = 0
     while True:
         query = supabase.table("matches").select(columns).eq("is_valid", True)
-        if start_date is not None:
-            query = query.gte("created_at", start_date.isoformat())
-        if end_date is not None:
-            query = query.lte("created_at", end_date.isoformat())
+        if start_iso is not None:
+            query = query.gte("created_at", start_iso)
+        if end_iso is not None:
+            query = query.lte("created_at", end_iso)
         result = await query.order("created_at", desc=True).range(
             offset, offset + page_size - 1
         ).execute()
