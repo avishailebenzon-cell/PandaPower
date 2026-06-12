@@ -79,7 +79,7 @@ MAX_ATTACHMENT_SIZE_MB = 50
 # Batch processing limits. Smaller backfill batch = lower peak memory (the run
 # holds message metadata + in-flight attachments). 400/run × 60s ≈ 24k/hr —
 # plenty for the ~15-20k 24-month backlog, without OOM.
-MAX_EMAILS_PER_RUN_INCREMENTAL = 200
+MAX_EMAILS_PER_RUN_INCREMENTAL = 100
 MAX_EMAILS_PER_RUN_BACKFILL = 400
 
 

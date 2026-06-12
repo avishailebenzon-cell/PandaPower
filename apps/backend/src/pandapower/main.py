@@ -230,8 +230,13 @@ async def _pipeline_scheduler_loop():
     # firing of each stage across the first couple of minutes.
     stages: dict[str, tuple] = {
         # name                    factory                          interval  stagger
-        "ingest":                (_ingest_emails_async,            60.0,     0.0),
-        "parse":                 (_parse_cvs_async,                120.0,    10.0),
+        # Steady-state intervals (the 60s/120s values were a one-time backfill
+        # acceleration). The historical backfill is done (reingest.enabled=false),
+        # so polling Outlook every minute only generated sustained email_intake_log
+        # write churn that exhausted the compute's disk-IO budget. 5 min is plenty
+        # for a live inbox and lets the IO burst balance recover.
+        "ingest":                (_ingest_emails_async,            300.0,    0.0),
+        "parse":                 (_parse_cvs_async,                300.0,    10.0),
         "candidates":            (_create_candidates_async,        240.0,    20.0),
         "skills":                (_normalize_skills_async,         600.0,    30.0),
         "score":                 (_score_candidates_async,         3600.0,   40.0),
@@ -264,7 +269,7 @@ async def _pipeline_scheduler_loop():
         "notify_telegram":       (_notify_telegram_async,          120.0,    55.0),
         "telegram_daily_summary": (_telegram_daily_summary_async,  900.0,    140.0),
         # Recover CVs the original backfill dropped (gated by reingest.enabled).
-        "reingest_missed":       (_reingest_missed_scheduled_async, 120.0,   70.0),
+        "reingest_missed":       (_reingest_missed_scheduled_async, 600.0,   70.0),
         # Integration health (Azure/Pipedrive/Supabase/Anthropic/ConvertAPI).
         # Runs every 10 min; emails the admin on ConvertAPI near/over limit and
         # other integration failures (cooldown-protected in alert_service).
