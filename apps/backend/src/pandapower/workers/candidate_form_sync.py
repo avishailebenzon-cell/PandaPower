@@ -38,6 +38,7 @@ from typing import Any, Optional
 import httpx
 import structlog
 
+from pandapower.agents.company_profile import DANA_NOTE_PREFIX
 from pandapower.core.config import settings
 from pandapower.core.phone import to_international, is_valid
 from pandapower.core.supabase import get_supabase_client
@@ -99,7 +100,7 @@ def _extract_contact(row: dict[str, str]) -> tuple[str, Optional[str], Optional[
 
 def _build_note(row: dict[str, str]) -> str:
     """All form columns as a Pipedrive note (HTML), one 'header: value' per line."""
-    lines = ["🐼 <b>טופס מועמד — נקלט אוטומטית ממערכת PandaPower</b>", ""]
+    lines = [f"<b>{DANA_NOTE_PREFIX}</b>", "טופס מועמד.", ""]
     for header, value in row.items():
         v = (value or "").strip()
         if not header:

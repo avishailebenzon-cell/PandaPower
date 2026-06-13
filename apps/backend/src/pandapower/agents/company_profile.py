@@ -110,3 +110,8 @@ async def load_company_extra(supabase) -> str:
     except Exception:
         pass
     return ""
+
+
+# Attribution line that must open EVERY note Dana (and the PandaPower system)
+# writes into Pipedrive — deal notes, candidate-form notes, any other write.
+DANA_NOTE_PREFIX = "המידע הוכנס על ידי דנה- סוכנת בינה מלאכותית מצוות PandaPower."

@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 import structlog
 
 from pandapower.core.config import settings
+from pandapower.agents.company_profile import DANA_NOTE_PREFIX
 from pandapower.integrations.pipedrive_client import PipedriveClient
 
 logger = structlog.get_logger(__name__)
@@ -258,7 +259,7 @@ async def create_job_deal(ctx: Dict[str, Any]) -> Dict[str, Any]:
             try:
                 await client.create_deal_note(
                     deal_id,
-                    "🐼 דיל זה נוצר על ידי הסוכנת דנה ממערכת PandaPower",
+                    f"{DANA_NOTE_PREFIX}\nדיל זה נוצר על ידי דנה.",
                 )
             except Exception as e:
                 logger.warning(f"Failed to add Dana audit note to deal {deal_id}: {e}")
