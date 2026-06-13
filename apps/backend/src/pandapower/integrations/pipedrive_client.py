@@ -528,6 +528,26 @@ class PipedriveClient:
             return response.get("data", {})
         raise Exception(f"Pipedrive API error (create note): {response.get('error')}")
 
+    async def create_person_note(self, person_id: int, content: str) -> Dict[str, Any]:
+        """
+        Add a note to a person (contact).
+
+        Args:
+            person_id: Pipedrive person id
+            content: Note text (supports basic HTML)
+
+        Returns:
+            Created note data.
+        """
+        payload = {"person_id": person_id, "content": content}
+        response = await self._make_request_with_retry(
+            "POST", "/v1/notes", json=payload
+        )
+        if response.get("success"):
+            logger.info("Added note to Pipedrive person", pipedrive_person_id=person_id)
+            return response.get("data", {})
+        raise Exception(f"Pipedrive API error (create note): {response.get('error')}")
+
     async def close(self):
         """Close the httpx client"""
         if self.client:

@@ -223,6 +223,7 @@ async def _pipeline_scheduler_loop():
         _health_check_async,
         _run_matching_async,
         _company_employee_sync_async,
+        _candidate_form_sync_async,
     )
 
     # Each stage: (async factory, interval seconds, initial stagger offset).
@@ -273,6 +274,11 @@ async def _pipeline_scheduler_loop():
         # candidate is a current company employee so they never reach Tal. Ticks
         # hourly but self-guards to run at most once each Sunday.
         "company_employee_sync": (_company_employee_sync_async,      3600.0,   150.0),
+        # Candidate intake form (Google Sheet) → Pipedrive contact notes. Ticks
+        # hourly but self-gates to run at most once per ~2 days during the
+        # Israeli night (see candidate_form_sync.py). Skips quietly until
+        # candidate_form.csv_url is set in system_settings.
+        "candidate_form_sync":   (_candidate_form_sync_async,        3600.0,   155.0),
         # Telegram (Carmit bot): notify match→Tal / hires, and a once-a-day digest.
         "notify_telegram":       (_notify_telegram_async,          120.0,    55.0),
         "telegram_daily_summary": (_telegram_daily_summary_async,  900.0,    140.0),

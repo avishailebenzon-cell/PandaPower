@@ -2023,3 +2023,17 @@ def health_check_task(self) -> dict[str, Any]:
         logger.error(f"Health check task failed: {e}", exc_info=True)
         retry_in = 2 ** self.request.retries
         raise self.retry(exc=e, countdown=retry_in)
+
+
+async def _candidate_form_sync_async() -> dict[str, Any]:
+    """Pull new candidate-form (Google Sheet) rows into Pipedrive contact notes.
+
+    Lazy import to avoid a circular import (candidate_form_sync imports the
+    _get_setting/_set_setting helpers from this module). Self-gates to the
+    night / 2-day cadence internally."""
+    try:
+        from pandapower.workers.candidate_form_sync import sync_candidate_form
+        return await sync_candidate_form()
+    except Exception as e:
+        logger.error(f"Candidate-form sync failed: {e}", exc_info=True)
+        return {"status": "failed", "error": str(e)}
