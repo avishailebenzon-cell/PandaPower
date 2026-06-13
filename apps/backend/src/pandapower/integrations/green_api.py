@@ -215,6 +215,15 @@ class GreenAPIClient:
         try:
             async with session.post(url, data=form) as response:
                 data = await response.json(content_type=None)
+                # An unauthorized/not-logged-in instance can return a bare
+                # string (or other non-dict) body instead of the documented
+                # JSON object — guard so we surface a clean error, not a crash.
+                if not isinstance(data, dict):
+                    logger.error(f"Green API setProfilePicture non-dict response ({response.status}): {data!r}")
+                    return {
+                        "success": False,
+                        "error": f"unexpected response: {data!r} (instance may not be authorized)",
+                    }
                 if response.status == 200 and not data.get("reason"):
                     return {"success": True, "urlAvatar": data.get("urlAvatar")}
                 logger.error(f"Green API setProfilePicture failed ({response.status}): {data}")
