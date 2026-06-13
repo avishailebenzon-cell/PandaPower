@@ -253,6 +253,16 @@ async def create_job_deal(ctx: Dict[str, Any]) -> Dict[str, Any]:
         deal_id = deal.get("id")
         notes.append(f"נפתח דיל חדש בפייפדרייב: '{title}' (#{deal_id}).")
 
+        # Audit note: mark every Dana-created deal so it's traceable in Pipedrive
+        if deal_id:
+            try:
+                await client.create_deal_note(
+                    deal_id,
+                    "🐼 דיל זה נוצר על ידי הסוכנת דנה ממערכת PandaPower",
+                )
+            except Exception as e:
+                logger.warning(f"Failed to add Dana audit note to deal {deal_id}: {e}")
+
         return {
             "status": "success",
             "deal_id": deal_id,
