@@ -78,6 +78,7 @@ class MatchInfo(BaseModel):
     candidate_name: str
     job_title: str
     company: str
+    contact_person_name: Optional[str] = None  # איש קשר לקוח — Pipedrive person on the deal
     pipedrive_deal_id: Optional[int] = None  # 4-digit Pipedrive job number
     match_score: float  # 0-1
     status: str  # e.g., "sent_to_tal", "tal_conversation", etc.
@@ -317,7 +318,7 @@ async def get_recruiter_matches(
         query = supabase.table("matches").select(
             "id, candidate_id, job_id, current_state, match_score, created_at, updated_at, "
             "geographic_mismatch, geographic_mismatch_reason, is_starred, is_company_employee, "
-            "candidates(name), jobs(job_title, organization_name, pipedrive_deal_id)"
+            "candidates(name), jobs(job_title, organization_name, contact_person_name, pipedrive_deal_id)"
         ).in_("current_state", states).eq("is_valid", True)
         if favorites_only:
             query = query.eq("is_starred", True)
@@ -383,6 +384,9 @@ async def get_recruiter_matches(
                     company=(job.get("organization_name") if isinstance(job, dict) else None)
                     or test_meta.get("organization_name", "")
                     or "",
+                    contact_person_name=(job.get("contact_person_name") if isinstance(job, dict) else None)
+                    or test_meta.get("contact_person_name")
+                    or None,
                     pipedrive_deal_id=(job.get("pipedrive_deal_id") if isinstance(job, dict) else None),
                     match_score=row.get("match_score", 0.0),
                     status=row.get("current_state", "unknown"),

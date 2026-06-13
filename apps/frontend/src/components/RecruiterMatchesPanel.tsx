@@ -308,6 +308,7 @@ export function RecruiterMatchesPanel({
         </div>
       </td>
       <td className="px-4 py-3 text-gray-300">{m.company || "—"}</td>
+      <td className="px-4 py-3 text-gray-300">{m.contactPersonName || "—"}</td>
       <td className="px-4 py-3 text-gray-400 font-mono">{m.pipedriveDealId ?? "—"}</td>
       <td className="px-4 py-3 text-gray-300">
         {Math.round((m.matchScore || 0) * 100)}%
@@ -505,6 +506,7 @@ export function RecruiterMatchesPanel({
                   <SortHeader label="מועמד" col="candidate" />
                   <SortHeader label="משרה" col="job" />
                   <th className="px-4 py-3 font-semibold">שם לקוח</th>
+                  <th className="px-4 py-3 font-semibold">איש קשר לקוח</th>
                   <th className="px-4 py-3 font-semibold">מספר משרה</th>
                   <SortHeader label="ציון" col="score" />
                   <SortHeader label="מצב נוכחי" col="state" />
@@ -518,7 +520,7 @@ export function RecruiterMatchesPanel({
                   <Fragment key={g.key}>
                     {groupBy !== "none" && (
                       <tr className="bg-gray-700/40">
-                        <td colSpan={9} className="px-4 py-2 text-indigo-200 font-semibold">
+                        <td colSpan={10} className="px-4 py-2 text-indigo-200 font-semibold">
                           {g.label} <span className="text-gray-400 font-normal">({g.rows.length})</span>
                         </td>
                       </tr>

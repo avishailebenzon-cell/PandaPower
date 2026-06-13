@@ -10,6 +10,7 @@ export interface Match {
   candidateName: string;
   jobTitle: string;
   company: string;
+  contactPersonName?: string; // איש קשר לקוח — Pipedrive person on the deal
   pipedriveDealId?: number; // 4-digit Pipedrive job number
   matchScore: number;
   status: string;
@@ -148,6 +149,7 @@ export async function fetchRecruiterMatches(
       candidateName: match.candidate_name,
       jobTitle: match.job_title,
       company: match.company,
+      contactPersonName: match.contact_person_name ?? undefined,
       pipedriveDealId: match.pipedrive_deal_id ?? undefined,
       matchScore: match.match_score,
       status: match.status,
