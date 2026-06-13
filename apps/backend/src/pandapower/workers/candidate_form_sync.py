@@ -51,6 +51,12 @@ CSV_URL_KEY = "candidate_form.csv_url"
 PROCESSED_ROWS_KEY = "candidate_form.processed_rows"
 LAST_RUN_KEY = "candidate_form.last_run_at"
 LAST_TS_KEY = "candidate_form.last_timestamp"
+# One-shot overrides (consumed and cleared on the next run):
+#   force_run       -> bypass the night / 2-day gate for a single run
+#   process_newest  -> process ONLY the newest N rows, then jump the cursor to
+#                      the end (so older rows are never back-filled)
+FORCE_RUN_KEY = "candidate_form.force_run"
+PROCESS_NEWEST_KEY = "candidate_form.process_newest"
 
 # Run at most once every ~2 days, only during the Israeli night.
 MIN_HOURS_BETWEEN_RUNS = 47
@@ -143,17 +149,21 @@ async def sync_candidate_form() -> dict[str, Any]:
     if not settings.PIPEDRIVE_API_TOKEN:
         return {"status": "skipped", "reason": "pipedrive token missing"}
 
-    # Night / cadence guard.
-    if _israel_now().hour not in NIGHT_HOURS_ISRAEL:
-        return {"status": "skipped", "reason": "outside night window"}
-    last_run = await _get_setting(sb, LAST_RUN_KEY)
-    if last_run:
-        try:
-            elapsed = datetime.now(timezone.utc) - datetime.fromisoformat(last_run).replace(tzinfo=timezone.utc)
-            if elapsed < timedelta(hours=MIN_HOURS_BETWEEN_RUNS):
-                return {"status": "skipped", "reason": "ran recently"}
-        except Exception:
-            pass
+    # One-shot force flag bypasses the night/cadence gate (consumed below).
+    force_run = str(await _get_setting(sb, FORCE_RUN_KEY) or "").lower() in ("1", "true", "yes")
+
+    # Night / cadence guard (skipped when forced).
+    if not force_run:
+        if _israel_now().hour not in NIGHT_HOURS_ISRAEL:
+            return {"status": "skipped", "reason": "outside night window"}
+        last_run = await _get_setting(sb, LAST_RUN_KEY)
+        if last_run:
+            try:
+                elapsed = datetime.now(timezone.utc) - datetime.fromisoformat(last_run).replace(tzinfo=timezone.utc)
+                if elapsed < timedelta(hours=MIN_HOURS_BETWEEN_RUNS):
+                    return {"status": "skipped", "reason": "ran recently"}
+            except Exception:
+                pass
 
     try:
         rows = await _fetch_rows(csv_url)
@@ -166,13 +176,29 @@ async def sync_candidate_form() -> dict[str, Any]:
     except (TypeError, ValueError):
         processed = 0
 
-    new_rows = rows[processed:]
+    # One-shot "newest N only": process the last N rows and then jump the cursor
+    # to the end so the older backlog is never back-filled. Consumed below.
+    newest_n = 0
+    try:
+        newest_n = int(await _get_setting(sb, PROCESS_NEWEST_KEY) or 0)
+    except (TypeError, ValueError):
+        newest_n = 0
+
+    if newest_n > 0:
+        new_rows = rows[-newest_n:] if newest_n < len(rows) else rows[:]
+        cursor_after = len(rows)  # skip everything older after this run
+    else:
+        new_rows = rows[processed:]
+        cursor_after = None  # advance incrementally per processed row
+
     if not new_rows:
         await _set_setting(sb, LAST_RUN_KEY, datetime.now(timezone.utc).isoformat())
+        if force_run:
+            await _set_setting(sb, FORCE_RUN_KEY, "")
         return {"status": "completed", "new_rows": 0, "total_rows": len(rows)}
 
     client = PipedriveClient(api_token=settings.PIPEDRIVE_API_TOKEN)
-    created = matched = noted = errors = 0
+    created = matched = noted = errors = done = 0
     try:
         for row in new_rows:
             try:
@@ -189,19 +215,28 @@ async def sync_candidate_form() -> dict[str, Any]:
                     noted += 1
             except Exception as e:
                 errors += 1
-                logger.error("candidate_form_row_failed", name=row, error=str(e))
+                logger.error("candidate_form_row_failed", row=row, error=str(e))
                 # Stop on first error so the cursor doesn't skip an unprocessed row.
                 break
-            processed += 1
+            done += 1
     finally:
         await client.close()
 
-    await _set_setting(sb, PROCESSED_ROWS_KEY, str(processed))
+    # Advance the cursor. In "newest N" mode we only jump to the end once the
+    # whole window succeeded; otherwise we'd skip an older unprocessed backlog.
+    if cursor_after is not None:
+        if errors == 0:
+            await _set_setting(sb, PROCESSED_ROWS_KEY, str(cursor_after))
+        await _set_setting(sb, PROCESS_NEWEST_KEY, "")  # one-shot consumed
+    else:
+        await _set_setting(sb, PROCESSED_ROWS_KEY, str(processed + done))
     await _set_setting(sb, LAST_RUN_KEY, datetime.now(timezone.utc).isoformat())
-    if new_rows:
+    if force_run:
+        await _set_setting(sb, FORCE_RUN_KEY, "")  # one-shot consumed
+    if done:
         ts_col = next(iter(new_rows[0].keys()), None)
         if ts_col:
-            await _set_setting(sb, LAST_TS_KEY, str(new_rows[min(processed, len(new_rows)) - 1].get(ts_col, "")))
+            await _set_setting(sb, LAST_TS_KEY, str(new_rows[done - 1].get(ts_col, "")))
 
     return {
         "status": "completed" if errors == 0 else "partial",
@@ -210,5 +245,5 @@ async def sync_candidate_form() -> dict[str, Any]:
         "created": created,
         "noted": noted,
         "errors": errors,
-        "processed_total": processed,
+        "processed_this_run": done,
     }
