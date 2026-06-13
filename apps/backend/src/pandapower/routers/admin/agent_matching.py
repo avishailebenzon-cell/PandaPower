@@ -148,7 +148,7 @@ def _get_demo_system_status() -> "SystemStatus":
             ),
             AgentStatus(
                 agent_code="gc",
-                agent_name="כללי",
+                agent_name="רון",
                 domain="Generalist Coordinator",
                 status="processing",
                 current_task="Analyzing candidates across multiple positions",

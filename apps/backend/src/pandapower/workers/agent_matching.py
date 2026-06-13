@@ -110,7 +110,7 @@ AGENT_CONFIGS = {
     },
     "gc": {
         "name": "GC (Catch-all)",
-        "name_he": "כללי",
+        "name_he": "רון",
         "domain": "General Domain Coverage",
         "keywords": "Any domain not covered by specialized agents",
         "skill_categories": ["general"],

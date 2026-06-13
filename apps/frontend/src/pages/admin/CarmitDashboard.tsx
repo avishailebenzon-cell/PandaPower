@@ -54,7 +54,7 @@ const AGENT_NAMES: Record<string, string> = {
   ofir: 'אופיר (מערכות)',
   itai: 'איתי (IT)',
   lior: 'ליאור (מכני)',
-  gc: 'כללי',
+  gc: 'רון',
   mani: 'מני (התאמה)',
 };
 

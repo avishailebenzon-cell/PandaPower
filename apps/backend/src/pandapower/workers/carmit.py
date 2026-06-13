@@ -79,7 +79,7 @@ class CarmitOrchestrator:
             "ofir": {"name": "אופיר", "domain": "Systems", "skills": ["Linux", "Networking", "DevOps", "Container"]},
             "itai": {"name": "איתי", "domain": "IT", "skills": ["Infrastructure", "Windows", "Helpdesk", "Networks"]},
             "lior": {"name": "ליאור", "domain": "Mechanical", "skills": ["CAD", "SOLIDWORKS", "FEA", "Manufacturing"]},
-            "gc": {"name": "כללי", "domain": "General", "skills": ["All other domains"]},
+            "gc": {"name": "רון", "domain": "General", "skills": ["All other domains"]},
             "mani": {"name": "מני", "domain": "Security Clearance", "skills": ["רמה 1", "Level 1 Clearance"]},
         }
 

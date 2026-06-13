@@ -51,7 +51,7 @@ export function AppLayout() {
             <li><a href="/admin/departments/ofir" className="block px-3 py-2 rounded text-white hover:bg-gray-700">📊 עופיר (סיסטמים)</a></li>
             <li><a href="/admin/departments/itai" className="block px-3 py-2 rounded text-white hover:bg-gray-700">📊 איתי (IT)</a></li>
             <li><a href="/admin/departments/lior" className="block px-3 py-2 rounded text-white hover:bg-gray-700">📊 ליאור (מכני)</a></li>
-            <li><a href="/admin/departments/gc" className="block px-3 py-2 rounded text-white hover:bg-gray-700">📊 כללי (שונות)</a></li>
+            <li><a href="/admin/departments/gc" className="block px-3 py-2 rounded text-white hover:bg-gray-700">📊 רון (שונות)</a></li>
 
             <li><a href="/admin/pandi" className="block px-3 py-2 rounded text-white hover:bg-gray-700">ניהול Pandi</a></li>
             <li><a href="/admin/analytics" className="block px-3 py-2 rounded text-white hover:bg-gray-700">דוחות ואנליטיקה</a></li>

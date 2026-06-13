@@ -31,7 +31,7 @@ const AGENTS = [
   { code: "ofir", name: "אופיר", domain: "Systems & DevOps" },
   { code: "itai", name: "איתי", domain: "IT & Infrastructure" },
   { code: "lior", name: "ליאור", domain: "Mechanical" },
-  { code: "gc", name: "כללי", domain: "General/Catch-all" },
+  { code: "gc", name: "רון", domain: "General/Catch-all" },
   { code: "mani", name: "מני", domain: "Security Clearance (Level 1)" },
 ];
 
