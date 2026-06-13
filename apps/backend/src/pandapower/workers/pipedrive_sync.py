@@ -18,6 +18,7 @@ from typing import List, Dict, Any, Optional
 from pandapower.core.supabase import get_supabase_client
 from pandapower.core.config import settings
 from pandapower.integrations.pipedrive_client import PipedriveClient
+from pandapower.integrations import hub_read
 
 # Fixed namespace for deterministic UUIDs from Pipedrive org ids
 # Must match the one in scripts/sync_orgs_and_relationships.py
@@ -191,7 +192,10 @@ async def sync_pipedrive_contacts(since: Optional[datetime] = None) -> Dict[str,
         # and orgs are synced before persons, so contact->org links stay valid.
         await _sync_organizations(db, pipedrive, since=since)
 
-        persons = await pipedrive.get_all_persons(since=since)
+        if hub_read.USE_HUB_READS:
+            persons = await hub_read.get_all_persons_from_hub(since=since)
+        else:
+            persons = await pipedrive.get_all_persons(since=since)
         logger.info(f"Fetched {len(persons)} persons from Pipedrive ({sync_mode})")
 
         # Sync summary
@@ -386,7 +390,10 @@ async def _sync_organizations(
     try:
         mode = "delta" if since is not None else "full"
         logger.info(f"Syncing organizations from Pipedrive ({mode})...")
-        orgs = await pipedrive.get_all_organizations(since=since)
+        if hub_read.USE_HUB_READS:
+            orgs = await hub_read.get_all_organizations_from_hub(since=since)
+        else:
+            orgs = await pipedrive.get_all_organizations(since=since)
         logger.info(f"Got {len(orgs)} organizations from Pipedrive")
 
         synced = 0

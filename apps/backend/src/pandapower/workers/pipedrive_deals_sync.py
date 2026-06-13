@@ -23,6 +23,7 @@ from typing import List, Dict, Any, Optional
 from pandapower.core.supabase import get_supabase_client
 from pandapower.core.config import settings
 from pandapower.integrations.pipedrive_client import PipedriveClient
+from pandapower.integrations import hub_read
 
 logger = logging.getLogger(__name__)
 
@@ -258,7 +259,10 @@ async def sync_pipedrive_deals(since: Optional[datetime] = None) -> Dict[str, An
 
         sync_mode = "delta" if since is not None else "full"
         logger.info(f"Starting Pipedrive deals sync ({sync_mode})...")
-        deals = await pipedrive.get_all_deals(since=since)
+        if hub_read.USE_HUB_READS:
+            deals = await hub_read.get_all_deals_from_hub(since=since)
+        else:
+            deals = await pipedrive.get_all_deals(since=since)
         logger.info(f"Fetched {len(deals)} deals from Pipedrive ({sync_mode})")
 
         summary = {
