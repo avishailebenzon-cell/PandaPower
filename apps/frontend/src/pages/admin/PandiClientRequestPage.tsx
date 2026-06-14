@@ -18,7 +18,7 @@ import { MessageCircle } from "lucide-react";
 import { fetchPandiClients, type PandiClient } from "@/api/pandi";
 
 const PANDI_OPENING_GREETING =
-  "היי, אני פנדי סוכנת גיוס בינה מלאכותית של פנדה-טק. " +
+  "היי, אני ליבי סוכנת גיוס בינה מלאכותית של פנדה-טק. " +
   "אני כאן כדי לעזור לך למצוא מועמד מתאים לתפקיד.";
 
 function formatDate(iso?: string): string {
@@ -65,10 +65,10 @@ export const PandiClientRequestPage = () => {
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-3xl font-bold text-white flex items-center gap-2">
-            <span>🐼</span> פנדי — שיחות עם לקוחות
+            <span>🐼</span> ליבי — שיחות עם לקוחות
           </h1>
           <p className="text-gray-400 mt-1">
-            פנדי היא סוכנת WhatsApp חכמה שמטפלת בבקשות לקוחות לאיתור מועמדים. כל השיחות
+            ליבי היא סוכנת WhatsApp חכמה שמטפלת בבקשות לקוחות לאיתור מועמדים. כל השיחות
             המוצגות כאן הן אמיתיות, מהדאטה-בייס של המערכת.
           </p>
         </div>
@@ -83,7 +83,7 @@ export const PandiClientRequestPage = () => {
       {/* Opening greeting card */}
       <div className="bg-gradient-to-l from-cyan-900/40 to-cyan-800/20 border border-cyan-700 rounded-lg p-4">
         <div className="text-xs text-cyan-300 mb-1">
-          💬 הודעת פתיחה — פנדי שולחת אוטומטית למי שיוצר איתה קשר ראשוני:
+          💬 הודעת פתיחה — ליבי שולחת אוטומטית למי שיוצר איתה קשר ראשוני:
         </div>
         <div className="text-white text-sm leading-relaxed">
           {PANDI_OPENING_GREETING}
@@ -186,8 +186,8 @@ function EmptyState() {
     <div className="bg-gray-800 border border-gray-700 rounded-lg p-8 text-center text-gray-300">
       <p className="text-lg mb-2">🐼 אין כרגע שיחות פעילות עם לקוחות</p>
       <p className="text-sm text-gray-400 max-w-xl mx-auto">
-        לקוחות יופיעו כאן ברגע שיתחילו לתכתב עם פנדי דרך WhatsApp. ברגע שלקוח חדש יוצר
-        קשר, פנדי שולחת לו את הודעת הפתיחה שלמעלה ומתחילה את תהליך ה-intake.
+        לקוחות יופיעו כאן ברגע שיתחילו לתכתב עם ליבי דרך WhatsApp. ברגע שלקוח חדש יוצר
+        קשר, ליבי שולחת לו את הודעת הפתיחה שלמעלה ומתחילה את תהליך ה-intake.
       </p>
     </div>
   );

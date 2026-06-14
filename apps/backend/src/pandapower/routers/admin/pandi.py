@@ -104,7 +104,7 @@ async def generate_pandi_invite(
             pandi_number_clean = pandi_number
 
         # Prefilled message for client to send
-        prefilled_msg = f"שלום פנדי! קבלתי את הקישור מ-{contact_name}. רוצה לחקור הזדמנויות חדשות 🐼"
+        prefilled_msg = f"שלום ליבי! קבלתי את הקישור מ-{contact_name}. רוצה לחקור הזדמנויות חדשות 🐼"
         prefilled_msg_encoded = quote(prefilled_msg)
 
         invite_url = f"https://wa.me/{pandi_number_clean}?text={prefilled_msg_encoded}"

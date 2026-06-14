@@ -296,7 +296,7 @@ async def send_campaign(
     raise HTTPException(
         status_code=403,
         detail=(
-            "פנדי היא סוכנת נכנסת (inbound) בלבד ואינה יוזמת פנייה ללקוחות. "
+            "ליבי היא סוכנת נכנסת (inbound) בלבד ואינה יוזמת פנייה ללקוחות. "
             "קמפיינים יוצאים מתבצעים דרך אלעד (Elad)."
         ),
     )

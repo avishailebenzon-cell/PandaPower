@@ -54,7 +54,7 @@ type StepName = 'select' | 'preview' | 'confirm';
 
 const DEFAULT_MESSAGE_TEMPLATE = `שלום {client_name} 👋
 
-אני פנדי, בוט חברה לאיתור מועמדים של {company} 🤖
+אני ליבי, בוט חברה לאיתור מועמדים של {company} 🤖
 
 עוזרת לחברות למצוא מועמדים מתאימים בשניות.
 

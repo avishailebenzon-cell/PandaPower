@@ -48,15 +48,15 @@ const AGENTS: Record<AgentKey, { label: string; props: ConversationsScreenProps 
     },
   },
   pandi: {
-    label: "פנדי",
+    label: "ליבי",
     props: {
       api: pandiConversationsApi,
-      title: "שיחות של פנדי",
+      title: "שיחות של ליבי",
       subtitle:
-        "כל השיחות של פנדי עם הלקוחות. אפשר להתערב ולכתוב בשם פנדי, ולהשבית זמנית את התגובה האוטומטית.",
+        "כל השיחות של ליבי עם הלקוחות. אפשר להתערב ולכתוב בשם ליבי, ולהשבית זמנית את התגובה האוטומטית.",
       backTo: "/recruiting/pandi",
       contactsLabel: "לקוחות",
-      agentName: "פנדי",
+      agentName: "ליבי",
       agentGender: "f",
       agentCode: "pandi",
     },

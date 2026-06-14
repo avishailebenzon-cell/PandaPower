@@ -276,7 +276,7 @@ class NotificationService:
             await resend.send_email(
                 to=[admin_email],
                 from_addr=cfg.RESEND_FROM_EMAIL,
-                subject=notification.get("title") or "Pandi notification",
+                subject=notification.get("title") or "Libi notification",
                 html=html.replace("\n", "<br>"),
             )
             return {"sent": True, "channel": "email"}
@@ -437,7 +437,7 @@ class NotificationService:
         return await self.notify_event(
             event_type=NotificationEvent.FULL_CV_APPROVED,
             title=f"✅ CV של {candidate_number} אושר לשליחה",
-            message=f"פנדי יכול כעת לשלוח את CV המלא ל-{client_name}",
+            message=f"ליבי יכול כעת לשלוח את CV המלא ל-{client_name}",
             context={
                 "candidate_number": candidate_number,
                 "client_name": client_name,
@@ -525,7 +525,7 @@ class NotificationService:
 בואו ניצור עם הלקוח קשר כדי להכיר אותו טוב יותר ולהציע משרות.
 
 ---
-פנדי, סוכנת הבינה המלאכותית של פנדה-טק
+ליבי, סוכנת הבינה המלאכותית של פנדה-טק
                     """.strip()
 
                     from pandapower.core.config import settings as _settings

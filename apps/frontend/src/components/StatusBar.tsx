@@ -77,7 +77,7 @@ const LiveConversationsBadge: React.FC = () => {
   const parts = [
     tal ? `טל ${tal}` : null,
     elad ? `אלעד ${elad}` : null,
-    pandi ? `פנדי ${pandi}` : null,
+    pandi ? `ליבי ${pandi}` : null,
     pandius ? `פנדיוס ${pandius}` : null,
   ].filter(Boolean);
 

@@ -90,7 +90,7 @@ async function fetchSystemStatus(): Promise<SystemStatus[]> {
       const res = await responses[1].value.json();
       statuses.push({
         id: 'pandi',
-        name: 'בוט Pandi WhatsApp',
+        name: 'בוט ליבי WhatsApp',
         status: res && res.length > 0 ? 'active' : 'idle',
         detail: '🤖 פעיל',
       });
@@ -163,7 +163,7 @@ export function useSystemStatus() {
     },
     {
       id: 'pandi',
-      name: 'בוט Pandi WhatsApp',
+      name: 'בוט ליבי WhatsApp',
       status: 'active',
       detail: '🤖 פעיל',
     },

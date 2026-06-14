@@ -169,7 +169,7 @@ export function WorkLayout() {
               {showPandiMenu && (
                 <nav className="space-y-1 mt-2">
                   <a href="/admin/pandi-conversations" className="block px-3 py-2 rounded text-white hover:bg-gray-700 transition text-sm">
-                    💬 פנדי (בקשות לקוחות)
+                    💬 ליבי (בקשות לקוחות)
                   </a>
                   <a href="/recruiting/dana" className="block px-3 py-2 rounded text-white hover:bg-gray-700 transition text-sm">
                     💼 דנה (הזנת משרות)

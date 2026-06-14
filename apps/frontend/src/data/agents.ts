@@ -239,7 +239,7 @@ export function getAllAgents(): Agent[] {
 
 /**
  * Avatar + fallback for agents that don't have a full Agent/Recruiter record
- * but still appear in the UI by code: כרמית (manager) and פנדי (client agent).
+ * but still appear in the UI by code: כרמית (manager) and ליבי (client agent).
  */
 const EXTRA_AVATARS: Record<string, { avatar: string; avatarFallback: string }> = {
   carmit: { avatar: "/avatars/carmit.jpg", avatarFallback: initialsAvatar("כ", "#9333ea") },
@@ -248,7 +248,7 @@ const EXTRA_AVATARS: Record<string, { avatar: string; avatarFallback: string }> 
 
 /**
  * Resolve any agent/recruiter code to its photo URL. Covers the 8 recruitment
- * agents, the 3 recruiters, the sales agent (דנה), plus כרמית and פנדי.
+ * agents, the 3 recruiters, the sales agent (דנה), plus כרמית and ליבי.
  * Returns undefined for unknown codes.
  */
 export function agentAvatar(code: string | null | undefined): string | undefined {
@@ -280,7 +280,7 @@ export function agentAvatarFallback(code: string | null | undefined): string | u
  */
 export function agentNameHe(code: string | null | undefined): string {
   if (!code) return "—";
-  const extra: Record<string, string> = { carmit: "כרמית", pandi: "פנדי", pandius: "פנדיוס" };
+  const extra: Record<string, string> = { carmit: "כרמית", pandi: "ליבי", pandius: "פנדיוס" };
   return (
     RECRUITMENT_AGENTS[code]?.name ||
     RECRUITERS[code]?.name ||

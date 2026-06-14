@@ -32,7 +32,7 @@ class CompanyProfileResponse(BaseModel):
     base_company_profile: str
     base_facility_facts: str
     extra: str
-    agents: list[str] = ["טל", "אלעד", "פנדי", "דנה"]
+    agents: list[str] = ["טל", "אלעד", "ליבי", "דנה"]
 
 
 class UpdateExtraRequest(BaseModel):

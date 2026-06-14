@@ -36,7 +36,7 @@ export function AppLayout() {
             <li><a href="/admin/agents" className="block px-3 py-2 rounded text-white hover:bg-gray-700">סוכנים</a></li>
 
             <li className="pt-2 pb-1 px-3 font-semibold text-blue-400 border-t border-gray-700">סוכנים בחיצוניים</li>
-            <li><a href="/admin/pandi-conversations" className="block px-3 py-2 rounded text-white hover:bg-gray-700">💬 פנדי (בקשות לקוחות)</a></li>
+            <li><a href="/admin/pandi-conversations" className="block px-3 py-2 rounded text-white hover:bg-gray-700">💬 ליבי (בקשות לקוחות)</a></li>
 
             <li className="pt-2 pb-1 px-3 font-semibold text-purple-400 border-t border-gray-700">מנהלת גיוס</li>
             <li><a href="/admin/carmit" className="block px-3 py-2 rounded text-white hover:bg-gray-700">כרמית</a></li>

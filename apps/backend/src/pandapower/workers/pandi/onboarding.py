@@ -105,7 +105,7 @@ async def continue_intake_flow(
         # Tone and wording confirmed by product: keep singular and friendly,
         # no bot disclosure beyond "סוכנת גיוס בינה מלאכותית".
         greeting = (
-            "היי, אני פנדי סוכנת גיוס בינה מלאכותית של פנדה-טק. "
+            "היי, אני ליבי סוכנת גיוס בינה מלאכותית של פנדה-טק. "
             "אני כאן כדי לעזור לך למצוא מועמד מתאים לתפקיד."
         )
 
