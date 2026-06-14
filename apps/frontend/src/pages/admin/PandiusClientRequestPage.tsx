@@ -10,7 +10,9 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { MessageCircle } from "lucide-react";
-import { fetchPandiusClients, type PandiusClient } from "@/api/pandius";
+import { fetchPandiusClients, fetchPandiusClient, type PandiusClient } from "@/api/pandius";
+import { ClientConversationModal } from "@/components/ClientConversationModal";
+import { pandiusConversationsApi } from "@/api/conversationsApi";
 
 const PANDIUS_OPENING_GREETING =
   "היי, אני פנדיוס, סוכן ה-AI של פנדה-טק 🐼. אני כאן כדי לעזור לך למצוא משרה מתאימה אצלנו. " +
@@ -124,6 +126,7 @@ export const PandiusClientRequestPage = () => {
 };
 
 function ClientsTable({ clients }: { clients: PandiusClient[] }) {
+  const [selected, setSelected] = useState<PandiusClient | null>(null);
   return (
     <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
       <table className="w-full text-right text-sm">
@@ -136,6 +139,7 @@ function ClientsTable({ clients }: { clients: PandiusClient[] }) {
             <th className="px-4 py-3 font-semibold">פעיל?</th>
             <th className="px-4 py-3 font-semibold">הודעה ראשונה</th>
             <th className="px-4 py-3 font-semibold">פעילות אחרונה</th>
+            <th className="px-4 py-3 font-semibold">שיחה</th>
           </tr>
         </thead>
         <tbody>
@@ -172,11 +176,28 @@ function ClientsTable({ clients }: { clients: PandiusClient[] }) {
                 </td>
                 <td className="px-4 py-3 text-gray-400 text-xs">{formatDate(c.first_message_at)}</td>
                 <td className="px-4 py-3 text-gray-400 text-xs">{formatDate(c.last_message_at)}</td>
+                <td className="px-4 py-3">
+                  <button
+                    onClick={() => setSelected(c)}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 text-xs rounded bg-teal-600 text-white hover:bg-teal-700 transition"
+                  >
+                    <MessageCircle className="w-3.5 h-3.5" /> צפה בשיחה
+                  </button>
+                </td>
               </tr>
             );
           })}
         </tbody>
       </table>
+      <ClientConversationModal
+        open={!!selected}
+        onClose={() => setSelected(null)}
+        clientId={selected?.id || ""}
+        clientName={selected?.candidate_name || selected?.phone || "מועמד"}
+        agentName="פנדיוס"
+        conversationsApi={pandiusConversationsApi}
+        fetchDetail={fetchPandiusClient}
+      />
     </div>
   );
 }

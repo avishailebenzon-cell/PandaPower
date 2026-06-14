@@ -15,7 +15,9 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { MessageCircle } from "lucide-react";
-import { fetchPandiClients, type PandiClient } from "@/api/pandi";
+import { fetchPandiClients, fetchPandiClient, type PandiClient } from "@/api/pandi";
+import { ClientConversationModal } from "@/components/ClientConversationModal";
+import { pandiConversationsApi } from "@/api/conversationsApi";
 
 const PANDI_OPENING_GREETING =
   "היי, אני ליבי סוכנת גיוס בינה מלאכותית של פנדה-טק. " +
@@ -128,6 +130,7 @@ export const PandiClientRequestPage = () => {
 };
 
 function ClientsTable({ clients }: { clients: PandiClient[] }) {
+  const [selected, setSelected] = useState<PandiClient | null>(null);
   return (
     <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
       <table className="w-full text-right text-sm">
@@ -140,6 +143,7 @@ function ClientsTable({ clients }: { clients: PandiClient[] }) {
             <th className="px-4 py-3 font-semibold">פעיל?</th>
             <th className="px-4 py-3 font-semibold">הודעה ראשונה</th>
             <th className="px-4 py-3 font-semibold">פעילות אחרונה</th>
+            <th className="px-4 py-3 font-semibold">שיחה</th>
           </tr>
         </thead>
         <tbody>
@@ -172,11 +176,28 @@ function ClientsTable({ clients }: { clients: PandiClient[] }) {
                 </td>
                 <td className="px-4 py-3 text-gray-400 text-xs">{formatDate(c.first_message_at)}</td>
                 <td className="px-4 py-3 text-gray-400 text-xs">{formatDate(c.last_message_at)}</td>
+                <td className="px-4 py-3">
+                  <button
+                    onClick={() => setSelected(c)}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 text-xs rounded bg-teal-600 text-white hover:bg-teal-700 transition"
+                  >
+                    <MessageCircle className="w-3.5 h-3.5" /> צפה בשיחה
+                  </button>
+                </td>
               </tr>
             );
           })}
         </tbody>
       </table>
+      <ClientConversationModal
+        open={!!selected}
+        onClose={() => setSelected(null)}
+        clientId={selected?.id || ""}
+        clientName={selected?.contact_name || selected?.phone || "לקוח"}
+        agentName="ליבי"
+        conversationsApi={pandiConversationsApi}
+        fetchDetail={fetchPandiClient}
+      />
     </div>
   );
 }
