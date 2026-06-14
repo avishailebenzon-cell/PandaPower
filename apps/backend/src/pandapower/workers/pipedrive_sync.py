@@ -10,6 +10,7 @@ Also keeps contact-organization relationships in sync:
 - contacts.organization_id: our internal UUID for the org (FK to organizations.id)
 """
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime
@@ -427,23 +428,39 @@ async def _sync_organizations(
         return 0
 
 
-async def _sync_contact(db: Any, person_data: Dict[str, Any]) -> None:
+async def _sync_contact(db: Any, person_data: Dict[str, Any], attempts: int = 3) -> None:
     """
     Sync contact to contacts table using update-or-insert pattern.
     Avoids duplicate creation when pipedrive_person_id already exists.
-    """
-    try:
-        # Try to update existing record first
-        result = await db.table("contacts").update(person_data).eq(
-            "pipedrive_person_id", person_data["pipedrive_person_id"]
-        ).execute()
 
-        # If no records were updated, insert as new record
-        if not result.data or len(result.data) == 0:
-            await db.table("contacts").insert(person_data).execute()
-    except Exception as e:
-        logger.error(f"Failed to sync contact {person_data.get('pipedrive_person_id')}: {str(e)}")
-        raise
+    Retries on transient HTTP/2 errors (e.g. ConnectionTerminated when Supabase
+    recycles a long-lived connection mid-bulk-sync). The update/insert is
+    idempotent — keyed on pipedrive_person_id — so retrying is safe.
+    """
+    last_err: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            # Try to update existing record first
+            result = await db.table("contacts").update(person_data).eq(
+                "pipedrive_person_id", person_data["pipedrive_person_id"]
+            ).execute()
+
+            # If no records were updated, insert as new record
+            if not result.data or len(result.data) == 0:
+                await db.table("contacts").insert(person_data).execute()
+            return
+        except Exception as e:
+            last_err = e
+            # Retry transient connection drops; surface anything else immediately.
+            if "ConnectionTerminated" in str(e) or "ConnectError" in type(e).__name__ or "RemoteProtocolError" in type(e).__name__:
+                await asyncio.sleep(0.5 * (attempt + 1))
+                continue
+            break
+
+    logger.error(
+        f"Failed to sync contact {person_data.get('pipedrive_person_id')}: {str(last_err)}"
+    )
+    raise last_err
 
 
 async def _close_deleted_contacts(db: Any, fetched_ids: set) -> int:
