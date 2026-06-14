@@ -27,6 +27,8 @@ class NotificationEvent(str, Enum):
     QUOTA_WARNING = "quota_warning"
     INAPPROPRIATE_CONTENT = "inappropriate_content"
     CONVERSATION_TRANSFERRED = "conversation_transferred"
+    DELIVERY_FAILED = "delivery_failed"
+    ENGINE_ERROR = "engine_error"
 
     # Admin actions
     FULL_CV_APPROVAL_REQUESTED = "full_cv_approval_requested"
@@ -220,6 +222,8 @@ class NotificationService:
             NotificationEvent.QUOTA_WARNING: "⏰",
             NotificationEvent.INAPPROPRIATE_CONTENT: "🚨",
             NotificationEvent.CONVERSATION_TRANSFERRED: "🔄",
+            NotificationEvent.DELIVERY_FAILED: "📵",
+            NotificationEvent.ENGINE_ERROR: "⚠️",
             NotificationEvent.FULL_CV_APPROVAL_REQUESTED: "📋",
             NotificationEvent.FULL_CV_APPROVED: "✅",
             NotificationEvent.FULL_CV_SENT: "📧",
@@ -409,6 +413,62 @@ class NotificationService:
                 "reason": reason,
             },
             severity="info",
+        )
+
+    async def notify_delivery_failure(
+        self,
+        client_name: str,
+        phone: str,
+        reason: str,
+        response_preview: str = "",
+    ) -> dict:
+        """Notify admin that Libi's reply was generated but NOT delivered to the client.
+
+        This is a safety net: the message is saved in the DB but the client never
+        saw it, so a human must follow up manually before the lead goes cold.
+        """
+        preview = (response_preview or "").strip()
+        if len(preview) > 300:
+            preview = preview[:300] + "…"
+        return await self.notify_event(
+            event_type=NotificationEvent.DELIVERY_FAILED,
+            title=f"📵 הודעה ללקוח {client_name} לא נשלחה",
+            message=(
+                f"ליבי ניסחה תשובה אך השליחה ב-WhatsApp נכשלה — הלקוח לא קיבל אותה. "
+                f"צריך לטפל ידנית.\n\nטלפון: {phone}\nסיבה: {reason}"
+                + (f"\n\nתוכן ההודעה:\n{preview}" if preview else "")
+            ),
+            context={
+                "client_name": client_name,
+                "phone": phone,
+                "reason": reason,
+            },
+            severity="critical",
+        )
+
+    async def notify_engine_error(
+        self,
+        client_name: str,
+        phone: str,
+        reason: str,
+    ) -> dict:
+        """Notify admin that the conversation engine failed to handle a client message.
+
+        Ensures a client message that Libi could not process at all is never lost.
+        """
+        return await self.notify_event(
+            event_type=NotificationEvent.ENGINE_ERROR,
+            title=f"⚠️ שגיאה בטיפול בפניית {client_name}",
+            message=(
+                f"ליבי לא הצליחה לעבד הודעה של לקוח — צריך לבדוק את השיחה ידנית.\n\n"
+                f"טלפון: {phone}\nסיבה: {reason}"
+            ),
+            context={
+                "client_name": client_name,
+                "phone": phone,
+                "reason": reason,
+            },
+            severity="critical",
         )
 
     async def notify_full_cv_approval_requested(

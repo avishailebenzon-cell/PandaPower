@@ -11,6 +11,23 @@ from pandapower.core.phone import to_international, phones_match
 logger = structlog.get_logger(__name__)
 
 
+async def _resolve_pandius_client_name(supabase, pandius_client_id: UUID) -> str:
+    """Best-effort name for a Pandius candidate (for admin alerts).
+
+    Falls back to the phone number, then a generic label, so a notification is
+    never skipped just because the candidate has no name yet.
+    """
+    try:
+        res = await supabase.table("pandius_clients").select(
+            "candidate_name, phone"
+        ).eq("id", str(pandius_client_id)).limit(1).execute()
+        row = (res.data or [{}])[0]
+        return row.get("candidate_name") or row.get("phone") or "מועמד"
+    except Exception as e:  # pragma: no cover - best effort
+        logger.warning("resolve_pandius_client_name_failed", error=str(e))
+        return "מועמד"
+
+
 async def _find_contact_by_phone(supabase, phone: str) -> Optional[dict]:
     """Find a contact matching ``phone`` tolerantly across number formats.
 
@@ -287,6 +304,28 @@ async def handle_transfer_to_recruitment(
         await supabase.table("pandius_conversations").update(
             {"status": "transferred_to_recruitment", "summary": summary}
         ).eq("id", str(conversation_id)).execute()
+
+        # Push an admin alert so a hand-off Pandius could not close himself is
+        # never lost. Best-effort — never block the candidate reply.
+        try:
+            client_name = await _resolve_pandius_client_name(
+                supabase, pandius_client_id
+            )
+            from pandapower.agents.pandi.notification_service import (
+                NotificationService,
+            )
+
+            await NotificationService().notify_conversation_transferred(
+                client_name=client_name,
+                reason=summary,
+            )
+        except Exception as notify_err:  # pragma: no cover - best effort
+            logger.warning(
+                "pandius_transfer_notification_failed",
+                conversation_id=str(conversation_id),
+                error=str(notify_err),
+            )
+
         return {
             "status": "success",
             "message": "העברתי את הפנייה שלך לצוות הגיוס שלנו — הם יחזרו אליך. 🤝",

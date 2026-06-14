@@ -11,6 +11,32 @@ import structlog as _structlog
 logger = _structlog.get_logger(__name__)
 
 
+async def _resolve_client_name(supabase, pandi_client_id: UUID) -> str:
+    """Best-effort human-readable name for a Pandi client (for admin alerts).
+
+    Falls back to the phone number, then a generic label, so a notification is
+    never skipped just because the contact has no name yet.
+    """
+    try:
+        client_res = await supabase.table("pandi_clients").select(
+            "phone, contact_id"
+        ).eq("id", str(pandi_client_id)).limit(1).execute()
+        client = (client_res.data or [{}])[0]
+        contact_id = client.get("contact_id")
+        if contact_id:
+            contact_res = await supabase.table("contacts").select(
+                "name"
+            ).eq("id", contact_id).limit(1).execute()
+            name = (contact_res.data or [{}])[0].get("name")
+            if name:
+                return name
+        if client.get("phone"):
+            return str(client["phone"])
+    except Exception as e:  # pragma: no cover - best effort
+        logger.warning("resolve_client_name_failed", error=str(e))
+    return "לקוח"
+
+
 async def handle_update_job_context(
     conversation_id: UUID,
     pandi_client_id: UUID,
@@ -472,6 +498,25 @@ async def handle_transfer_to_recruitment(
                 conversation_id=str(conversation_id),
                 pandi_client_id=str(pandi_client_id),
             )
+
+            # Push an admin notification so a hand-off Libi could not close
+            # herself is never lost. Best-effort — never block the client reply.
+            try:
+                client_name = await _resolve_client_name(supabase, pandi_client_id)
+                from pandapower.agents.pandi.notification_service import (
+                    NotificationService,
+                )
+
+                await NotificationService().notify_conversation_transferred(
+                    client_name=client_name,
+                    reason=summary,
+                )
+            except Exception as notify_err:  # pragma: no cover - best effort
+                logger.warning(
+                    "transfer_notification_failed",
+                    conversation_id=str(conversation_id),
+                    error=str(notify_err),
+                )
 
             return {
                 "status": "success",
