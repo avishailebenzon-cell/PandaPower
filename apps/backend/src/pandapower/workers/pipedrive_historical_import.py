@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from pandapower.integrations.pipedrive import PipedriveClient
+from pandapower.integrations import hub_read
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +143,11 @@ class PipedriveHistoricalImporter:
         Returns:
             List of deal objects
         """
+        # Hub mirrors ALL deal statuses now → read closed/lost deals from there.
+        if hub_read.USE_HUB_READS:
+            deals = await hub_read.get_all_deals_from_hub()
+            return deals[:limit]
+
         deals = []
         offset = 0
         page_size = 100
@@ -195,15 +201,16 @@ class PipedriveHistoricalImporter:
         }
 
         try:
-            # Get all notes for this deal
-            notes_response = await self.pipedrive_client._make_request(
-                "GET", f"/v1/deals/{deal_id}/notes"
-            )
-
-            if not notes_response.get("success"):
-                return result
-
-            notes = notes_response.get("data", [])
+            # Get all notes for this deal — from the Hub mirror when enabled.
+            if hub_read.USE_HUB_READS:
+                notes = await hub_read.get_deal_notes_from_hub(deal_id)
+            else:
+                notes_response = await self.pipedrive_client._make_request(
+                    "GET", f"/v1/deals/{deal_id}/notes"
+                )
+                if not notes_response.get("success"):
+                    return result
+                notes = notes_response.get("data", [])
 
             # Filter for rejection-related notes
             for note in notes:

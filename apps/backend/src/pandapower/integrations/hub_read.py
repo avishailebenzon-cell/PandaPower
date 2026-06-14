@@ -68,3 +68,10 @@ async def get_all_deals_from_hub(since: Optional[datetime] = None) -> list:
 
 async def get_all_organizations_from_hub(since: Optional[datetime] = None) -> list:
     return await _fetch_raw("pd_organizations", since)
+
+
+async def get_deal_notes_from_hub(deal_id) -> list:
+    """Return the raw Pipedrive note payloads linked to a deal, from the Hub mirror."""
+    hub = _get_hub()
+    resp = await hub.table("pd_notes").select("raw").eq("deal_id", deal_id).execute()
+    return [r["raw"] for r in (resp.data or []) if r.get("raw") is not None]
