@@ -12,6 +12,7 @@ from typing import List, Dict, Any, Optional
 from pandapower.core.supabase import get_supabase_client
 from pandapower.core.config import settings
 from pandapower.integrations.pipedrive_client import PipedriveClient
+from pandapower.integrations import hub_read
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,10 @@ async def sync_pipedrive_contacts_incremental(minutes_back: int = 60) -> Dict[st
         # Build option mapping for professional_domain
         domain_options_map = await _build_domain_options_map(pipedrive)
 
-        persons = await pipedrive.get_all_persons()
+        if hub_read.USE_HUB_READS:
+            persons = await hub_read.get_all_persons_from_hub()
+        else:
+            persons = await pipedrive.get_all_persons()
 
         # Filter to only recently modified
         recent_persons = [p for p in persons if _is_recently_modified(p, since_timestamp)]
