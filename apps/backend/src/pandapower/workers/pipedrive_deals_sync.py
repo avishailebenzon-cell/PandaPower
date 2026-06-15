@@ -87,28 +87,35 @@ def _extract_text(field_value: Any) -> Optional[str]:
     return str(field_value)
 
 
-def _extract_priority(deal: Dict[str, Any]) -> Optional[int]:
-    """Extract priority - convert Pipedrive option id (390-394) to 1-5"""
+DEFAULT_PRIORITY = 5  # jobs the recruiter didn't prioritize in Pipedrive -> lowest (5)
+
+
+def _extract_priority(deal: Dict[str, Any]) -> int:
+    """Extract priority - convert Pipedrive option id (390-394) to 1-5.
+
+    Jobs with no priority set (or an unrecognized option) default to 5 (lowest),
+    so unprioritized jobs are still visible/sortable instead of being NULL.
+    """
     raw = deal.get(FIELD_PRIORITY)
     if raw is None or raw == "":
-        return None
+        return DEFAULT_PRIORITY
 
     try:
         if isinstance(raw, str):
             first = raw.split(",")[0].strip()
             if not first:
-                return None
+                return DEFAULT_PRIORITY
             option_id = int(first)
         elif isinstance(raw, list):
             if not raw:
-                return None
+                return DEFAULT_PRIORITY
             option_id = int(raw[0])
         else:
             option_id = int(raw)
     except (ValueError, TypeError):
-        return None
+        return DEFAULT_PRIORITY
 
-    return PRIORITY_MAPPING.get(option_id)
+    return PRIORITY_MAPPING.get(option_id, DEFAULT_PRIORITY)
 
 
 def _extract_opening_date(deal: Dict[str, Any]) -> Optional[str]:
