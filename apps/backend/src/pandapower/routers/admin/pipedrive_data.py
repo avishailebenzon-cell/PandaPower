@@ -365,6 +365,41 @@ PRIORITY_LABELS = {
 }
 
 
+async def _resolve_org_ids_by_name(db, term: str) -> List[int]:
+    """Return the Pipedrive org ids whose organization name matches `term`.
+
+    Company names live in `organizations`, joined to `jobs.org_id` by a
+    deterministic uuid5 (`pipedrive_org:<id>`) that cannot be reversed. So we
+    match names to org UUIDs, then walk the distinct org_ids present on jobs,
+    recompute each one's uuid, and keep those whose uuid matched by name.
+    """
+    if not term:
+        return []
+    try:
+        import uuid as _uuid
+        _ORG_NS = _uuid.UUID("12345678-1234-5678-1234-567812345678")
+
+        name_match = await db.table("organizations").select("id").ilike(
+            "name", f"%{term}%"
+        ).execute()
+        matched_uuids = {row["id"] for row in (name_match.data or [])}
+        if not matched_uuids:
+            return []
+
+        jobs_orgs = await db.table("jobs").select("org_id").not_.is_(
+            "org_id", "null"
+        ).execute()
+        candidate_ids = {row["org_id"] for row in (jobs_orgs.data or []) if row.get("org_id")}
+
+        return [
+            pdid for pdid in candidate_ids
+            if str(_uuid.uuid5(_ORG_NS, f"pipedrive_org:{pdid}")) in matched_uuids
+        ]
+    except Exception as e:
+        logger.warning(f"Could not resolve org ids by name for '{term}': {e}")
+        return []
+
+
 @router.get("/jobs", response_model=PaginatedResponse)
 async def get_jobs(
     page: int = Query(1, ge=1),
@@ -392,10 +427,39 @@ async def get_jobs(
         }
         sort_column = sort_column_map.get(sort_by, "job_title")
 
+        # Build the search filter. The placeholder promises "title OR company",
+        # so we match across the job title, the placement-job organization_name,
+        # and the linked Pipedrive organization's name. Company names live in the
+        # `organizations` table (joined by a deterministic, non-reversible uuid5),
+        # so we first resolve which org pipedrive-ids match the term by name and
+        # then OR those org_ids into the jobs filter.
+        or_filter: Optional[str] = None
+        if search:
+            term = search.strip()
+            # Strip characters that would break PostgREST's or() grammar.
+            safe_term = term.replace(",", " ").replace("(", " ").replace(")", " ").strip()
+            # PostgREST or() filters use `*` as the ilike wildcard (not `%`).
+            pattern = f"*{safe_term}*"
+            conditions = [
+                f"job_title.ilike.{pattern}",
+                f"organization_name.ilike.{pattern}",
+                f"job_number.ilike.{pattern}",
+            ]
+            # Job code: allow searching by the Pipedrive deal id, accepting an
+            # optional leading '#' (e.g. "#2254" or "2254").
+            digits = safe_term.lstrip("#").strip()
+            if digits.isdigit():
+                conditions.append(f"pipedrive_deal_id.eq.{digits}")
+            matching_org_ids = await _resolve_org_ids_by_name(db, safe_term)
+            if matching_org_ids:
+                ids_csv = ",".join(str(i) for i in matching_org_ids)
+                conditions.append(f"org_id.in.({ids_csv})")
+            or_filter = ",".join(conditions)
+
         # Count query
         count_query = db.table("jobs").select("id", count="exact")
-        if search:
-            count_query = count_query.ilike("job_title", f"%{search}%")
+        if or_filter:
+            count_query = count_query.or_(or_filter)
         if status:
             count_query = count_query.eq("status", status)
         if is_placement is not None:
@@ -409,11 +473,11 @@ async def get_jobs(
             "job_location, job_security_clearance, deadline, priority, classification_level, "
             "status, person_id, org_id, stage_id, "
             "is_placement, job_number, organization_name, placement_contact_name, "
-            "placement_contact_phone, "
+            "placement_contact_phone, placement_external_ref, "
             "created_at, updated_at, pipedrive_last_synced_at"
         )
-        if search:
-            query = query.ilike("job_title", f"%{search}%")
+        if or_filter:
+            query = query.or_(or_filter)
         if status:
             query = query.eq("status", status)
         if is_placement is not None:
@@ -498,6 +562,7 @@ async def get_jobs(
                     f"#{str(row.get('pipedrive_deal_id')).zfill(4)}" if row.get("pipedrive_deal_id") else None
                 ),
                 "placement_contact_phone": row.get("placement_contact_phone"),
+                "placement_external_ref": row.get("placement_external_ref"),
 
                 # Title
                 "title": row.get("job_title"),
