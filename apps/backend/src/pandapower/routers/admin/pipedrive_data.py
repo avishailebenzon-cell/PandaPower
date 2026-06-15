@@ -371,6 +371,7 @@ async def get_jobs(
     limit: int = Query(50, ge=1, le=1000),
     search: Optional[str] = None,
     status: Optional[str] = None,
+    is_placement: Optional[bool] = None,
     sort_by: str = Query("title", regex="^(title|job_title|created_at|posted_date|priority|deadline)$"),
     sort_order: str = Query("asc", regex="^(asc|desc)$"),
 ):
@@ -397,6 +398,8 @@ async def get_jobs(
             count_query = count_query.ilike("job_title", f"%{search}%")
         if status:
             count_query = count_query.eq("status", status)
+        if is_placement is not None:
+            count_query = count_query.eq("is_placement", is_placement)
         count_result = await count_query.execute()
         total = count_result.count if hasattr(count_result, "count") else 0
 
@@ -405,12 +408,16 @@ async def get_jobs(
             "id, pipedrive_deal_id, job_title, job_description, job_qualifications, "
             "job_location, job_security_clearance, deadline, priority, classification_level, "
             "status, person_id, org_id, stage_id, "
+            "is_placement, job_number, organization_name, placement_contact_name, "
+            "placement_contact_phone, "
             "created_at, updated_at, pipedrive_last_synced_at"
         )
         if search:
             query = query.ilike("job_title", f"%{search}%")
         if status:
             query = query.eq("status", status)
+        if is_placement is not None:
+            query = query.eq("is_placement", is_placement)
         query = query.order(sort_column, desc=(sort_order == "desc"))
         response = await query.range(offset, offset + limit - 1).execute()
 
@@ -461,7 +468,11 @@ async def get_jobs(
         normalized = []
         for row in rows:
             org_id = row.get("org_id")
+            is_placement_row = bool(row.get("is_placement"))
             company_name = org_map.get(org_id, "") if org_id else ""
+            # Placement jobs have no Pipedrive org; surface the agency instead.
+            if is_placement_row and not company_name:
+                company_name = row.get("organization_name") or row.get("placement_contact_name") or ""
             priority_raw = row.get("priority")
             try:
                 priority_num = int(priority_raw) if priority_raw is not None and priority_raw != "" else None
@@ -471,11 +482,22 @@ async def get_jobs(
 
             person_id = row.get("person_id")
             contact_name = person_name_by_pid.get(person_id, "") if person_id else ""
+            if is_placement_row and not contact_name:
+                contact_name = row.get("placement_contact_name") or ""
 
             normalized.append({
                 "id": row.get("id"),
                 "pipedrive_deal_id": row.get("pipedrive_deal_id"),
                 "pipedrive_id": str(row.get("pipedrive_deal_id")) if row.get("pipedrive_deal_id") else None,
+
+                # Placement-job flags
+                "is_placement": is_placement_row,
+                "job_number": row.get("job_number"),
+                # Code shown in the UI: PL-#### for placement, #deal_id otherwise
+                "job_code": row.get("job_number") if is_placement_row else (
+                    f"#{str(row.get('pipedrive_deal_id')).zfill(4)}" if row.get("pipedrive_deal_id") else None
+                ),
+                "placement_contact_phone": row.get("placement_contact_phone"),
 
                 # Title
                 "title": row.get("job_title"),

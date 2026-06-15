@@ -15,6 +15,7 @@ export function JobsListPage() {
   const [limit, setLimit] = useState(50);
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
+  const [placementFilter, setPlacementFilter] = useState<'' | 'placement'>('');
   const [sortBy, setSortBy] = useState('title');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [groupBy, setGroupBy] = useState<'' | 'company' | 'contact_person' | 'priority_label'>('');
@@ -28,6 +29,7 @@ export function JobsListPage() {
       limit,
       search,
       status,
+      placementFilter,
       sortBy,
       sortOrder,
       isGrouped,
@@ -41,6 +43,7 @@ export function JobsListPage() {
         status || undefined,
         sortBy,
         sortOrder,
+        placementFilter === 'placement' ? true : undefined,
       ),
     staleTime: 5 * 60 * 1000,
   });
@@ -50,10 +53,28 @@ export function JobsListPage() {
       key: 'pipedrive_deal_id',
       label: 'קוד משרה',
       sortable: false,
-      width: '6%',
-      render: (value: number | null) => (
-        <span className="font-mono text-sm font-bold text-blue-400">
-          {value ? `#${String(value).padStart(4, '0')}` : '-'}
+      width: '8%',
+      render: (value: number | null, row: any) => (
+        <span className="inline-flex items-center gap-1.5">
+          <span
+            className={`font-mono text-sm font-bold ${
+              row.is_placement ? 'text-amber-400' : 'text-blue-400'
+            }`}
+          >
+            {row.is_placement
+              ? row.job_code || row.job_number || 'PL'
+              : value
+              ? `#${String(value).padStart(4, '0')}`
+              : '-'}
+          </span>
+          {row.is_placement && (
+            <span
+              className="placement-badge"
+              title="משרת השמה — נקלטה אוטומטית ממייל"
+            >
+              🔴 השמה
+            </span>
+          )}
         </span>
       ),
     },
@@ -188,6 +209,27 @@ export function JobsListPage() {
 
   return (
     <div className="p-8 bg-gray-900 min-h-screen" dir="rtl">
+      {/* Blinking badge for placement jobs (משרות השמה) */}
+      <style>{`
+        .placement-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          font-size: 11px;
+          font-weight: 700;
+          color: #fca5a5;
+          background: rgba(127, 29, 29, 0.5);
+          border: 1px solid rgba(248, 113, 113, 0.4);
+          border-radius: 9999px;
+          padding: 1px 8px;
+          white-space: nowrap;
+          animation: placement-blink 1.2s ease-in-out infinite;
+        }
+        @keyframes placement-blink {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.3; }
+        }
+      `}</style>
       {/* Header */}
       <div className="space-y-2 mb-8">
         <h1 className="text-3xl font-bold text-white">משרות</h1>
@@ -225,6 +267,23 @@ export function JobsListPage() {
           <option value="contact_person">איש קשר</option>
           <option value="priority_label">עדיפות</option>
         </select>
+
+        <span className="mx-2 h-5 w-px bg-gray-700" />
+        <button
+          type="button"
+          onClick={() => {
+            setPlacementFilter((p) => (p === 'placement' ? '' : 'placement'));
+            setPage(1);
+          }}
+          className={`px-3 py-2 rounded-lg text-sm font-semibold border transition-colors ${
+            placementFilter === 'placement'
+              ? 'bg-red-900/40 border-red-500 text-red-200'
+              : 'bg-gray-800 border-gray-700 text-gray-300 hover:border-red-500/60'
+          }`}
+          title="הצג רק משרות השמה שנקלטו אוטומטית ממייל"
+        >
+          🔴 משרות השמה בלבד
+        </button>
       </div>
 
       {/* Filters */}

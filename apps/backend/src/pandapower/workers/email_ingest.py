@@ -11,6 +11,10 @@ from urllib.parse import quote
 from pandapower.integrations.azure import AzureGraphClient
 from pandapower.integrations.supabase_storage import SupabaseStorageManager
 from pandapower.workers.sender_blocklist import is_likely_candidate_email
+from pandapower.workers.placement_jobs import (
+    create_placement_job_from_email,
+    is_placement_sender,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -451,6 +455,29 @@ class EmailIngestWorker:
                 else:
                     # If different error, re-raise
                     raise
+
+            # Placement-job emails (recruitment agencies, e.g. @adamtotal.co.il):
+            # these describe a vacancy at a CLIENT, not a candidate CV. Parse the
+            # body into an internal job and skip the CV pipeline entirely.
+            if is_placement_sender(email_from):
+                placement = await create_placement_job_from_email(
+                    self.supabase,
+                    message_id=message_id,
+                    email_from=email_from,
+                    subject=subject,
+                    body=body_text,
+                    received_at=received_datetime,
+                )
+                await self.supabase.table("email_intake_log").update(
+                    {
+                        "status": "placement_job"
+                        if placement["created"]
+                        else f"placement_{placement['reason']}",
+                        "cv_files_extracted": 0,
+                        "processing_completed_at": datetime.utcnow().isoformat(),
+                    }
+                ).eq("outlook_message_id", message_id).execute()
+                return result
 
             # Process attachments
             attachments = msg_data.get("attachments", [])

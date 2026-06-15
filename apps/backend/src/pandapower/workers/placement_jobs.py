@@ -1,0 +1,120 @@
+"""Create internal placement jobs ("משרות השמה") from recruitment-agency emails.
+
+Sender domains in settings.PLACEMENT_JOB_SENDER_DOMAINS (default adamtotal.co.il,
+birdaero.comeet-notifications.com) are treated as agency job vacancies rather
+than candidate CVs. We parse the email with Haiku and insert a row into the
+shared `jobs` table flagged is_placement=true / source='email_placement', with
+NO Pipedrive deal. It is inserted unassigned (assigned_agent_code=NULL) so the
+existing Carmit routing task (workers/tasks.py) picks it up automatically.
+"""
+
+import logging
+from typing import Any, Optional
+
+from pandapower.agents.placement.parser import parse_placement_email
+from pandapower.core.config import settings
+
+logger = logging.getLogger(__name__)
+
+
+def is_placement_sender(email_from: Optional[str]) -> bool:
+    """True if the sender address belongs to a configured placement-agency domain."""
+    if not email_from:
+        return False
+    addr = email_from.strip().lower()
+    domains = [
+        d.strip().lower()
+        for d in (settings.PLACEMENT_JOB_SENDER_DOMAINS or "").split(",")
+        if d.strip()
+    ]
+    return any(addr.endswith("@" + d) or addr.endswith("." + d) for d in domains)
+
+
+async def _next_placement_job_number(supabase: Any) -> str:
+    """Sequential internal id PL-#### (best-effort; not strictly gap-free)."""
+    try:
+        resp = await (
+            supabase.table("jobs")
+            .select("job_number")
+            .eq("is_placement", True)
+            .not_.is_("job_number", "null")
+            .order("job_number", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if resp.data and resp.data[0].get("job_number"):
+            last = resp.data[0]["job_number"].split("-")[-1]
+            return f"PL-{int(last) + 1:04d}"
+    except Exception as e:
+        logger.debug(f"placement job_number lookup failed, defaulting: {e}")
+    return "PL-0001"
+
+
+async def create_placement_job_from_email(
+    supabase: Any,
+    *,
+    message_id: str,
+    email_from: str,
+    subject: str,
+    body: str,
+    received_at: Optional[str] = None,
+) -> dict[str, Any]:
+    """Parse an agency email and insert a placement job. Idempotent per message_id.
+
+    Returns {"created": bool, "job_id": str|None, "reason": str}.
+    """
+    # Dedup: one placement job per source email.
+    try:
+        existing = await (
+            supabase.table("jobs")
+            .select("id")
+            .eq("placement_outlook_message_id", message_id)
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            return {"created": False, "job_id": existing.data[0]["id"], "reason": "duplicate"}
+    except Exception as e:
+        logger.debug(f"placement dedup check failed (proceeding): {e}")
+
+    parsed = await parse_placement_email(subject, body)
+    if not parsed:
+        return {"created": False, "job_id": None, "reason": "parse_failed"}
+
+    job_number = await _next_placement_job_number(supabase)
+
+    row = {
+        "source": "email_placement",
+        "is_placement": True,
+        "pipedrive_deal_id": None,
+        "job_number": job_number,
+        "job_title": parsed["job_title"],
+        "job_description": parsed["job_description"],
+        "job_qualifications": parsed["job_qualifications"],
+        "job_location": parsed["job_location"],
+        "job_security_clearance": parsed["job_security_clearance"],
+        "status": "open",
+        "is_active": True,
+        "assigned_agent_code": None,  # Carmit routing task will assign
+        "placement_source_email": email_from,
+        "placement_contact_name": parsed["contact_name"],
+        "placement_contact_phone": parsed["contact_phone"],
+        "placement_outlook_message_id": message_id,
+        "organization_name": parsed["contact_name"],  # agency as the "client" label
+        "last_modified_by": "email_placement_ingest",
+    }
+
+    try:
+        resp = await supabase.table("jobs").insert(row).execute()
+        job_id = resp.data[0]["id"] if resp.data else None
+        logger.info(
+            f"Created placement job {job_number} ({parsed['job_title']!r}) "
+            f"from {email_from} [msg {message_id}]"
+        )
+        return {"created": True, "job_id": job_id, "reason": "created"}
+    except Exception as e:
+        # Unique index race → another run inserted it first; treat as duplicate.
+        if "duplicate key" in str(e).lower() or "uq_jobs_placement_msg" in str(e).lower():
+            return {"created": False, "job_id": None, "reason": "duplicate"}
+        logger.error(f"Failed to insert placement job from {message_id}: {e}", exc_info=True)
+        return {"created": False, "job_id": None, "reason": f"insert_failed: {e}"}

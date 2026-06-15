@@ -79,6 +79,13 @@ class Settings(BaseSettings):
     CV_PARSE_MAX_RETRIES: int = 3
     CV_EXTRACT_TIMEOUT_SECONDS: int = 30
 
+    # Placement jobs ("משרות השמה"): emails from these sender domains are parsed
+    # into internal job vacancies (not candidate CVs, not synced to Pipedrive).
+    # Comma-separated list of domains.
+    PLACEMENT_JOB_SENDER_DOMAINS: str = "adamtotal.co.il,birdaero.comeet-notifications.com"
+    # Model for parsing placement emails into structured job fields (cheap, Haiku).
+    PLACEMENT_PARSE_MODEL: str = "claude-haiku-4-5"
+
     # ConvertAPI (CV text extraction with OCR — convertapi.com)
     CONVERTAPI_SECRET: str = ""
 

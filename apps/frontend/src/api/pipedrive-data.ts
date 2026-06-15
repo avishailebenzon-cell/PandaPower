@@ -138,6 +138,11 @@ export interface JobResponse {
   candidates_count?: number;
   pipedrive_id?: string;
   pipedrive_deal_id?: number;  // 4-digit job code from Pipedrive
+  is_placement?: boolean;       // ingested from a recruitment-agency email (משרת השמה)
+  job_number?: string;          // internal PL-#### code for placement jobs
+  job_code?: string;            // display code: PL-#### or #deal_id
+  placement_contact_phone?: string;
+  contact_person?: string;
   sync_status: string;
   last_synced?: string;
 }
@@ -273,7 +278,8 @@ export async function fetchJobs(
   search?: string,
   status?: string,
   sortBy: string = 'title',
-  sortOrder: 'asc' | 'desc' = 'asc'
+  sortOrder: 'asc' | 'desc' = 'asc',
+  isPlacement?: boolean
 ): Promise<PaginatedResponse<JobResponse>> {
   const params = new URLSearchParams({
     page: String(page),
@@ -287,6 +293,9 @@ export async function fetchJobs(
   }
   if (status) {
     params.append('status', status);
+  }
+  if (isPlacement !== undefined) {
+    params.append('is_placement', String(isPlacement));
   }
 
   const response = await fetch(`${API_BASE}/admin/pipedrive/data/jobs?${params}`);
