@@ -403,7 +403,10 @@ async def _sync_deal(db: Any, deal_data: Dict[str, Any]) -> None:
             "pipedrive_deal_id", deal_data["pipedrive_deal_id"]
         ).maybe_single().execute()
 
-        existing_job = existing_response.data if existing_response.data else None
+        # maybe_single() can return None (not just data=None) on 0 rows, so guard
+        # the whole response — otherwise a brand-new deal crashes with
+        # "'NoneType' object has no attribute 'data'".
+        existing_job = existing_response.data if (existing_response and existing_response.data) else None
 
         # Add tracking fields to deal_data for Phase 4A integration
         deal_data["pipedrive_last_synced_at"] = datetime.utcnow().isoformat()
