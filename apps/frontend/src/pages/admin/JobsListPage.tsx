@@ -203,6 +203,37 @@ export function JobsListPage() {
     },
   ];
 
+  // Placement-specific columns — only meaningful for משרות השמה, shown when the
+  // "placement only" filter is active so the regular Pipedrive view stays clean.
+  if (placementFilter === 'placement') {
+    columns.push(
+      {
+        key: 'placement_contact_phone',
+        label: 'טלפון השמה',
+        width: '8%',
+        render: (value: string) =>
+          value ? (
+            <a href={`tel:${value}`} className="text-amber-400 font-mono text-sm" dir="ltr">
+              {value}
+            </a>
+          ) : (
+            <span className="text-gray-500">-</span>
+          ),
+      } as any,
+      {
+        key: 'placement_external_ref',
+        label: 'מס׳ משרה חיצוני',
+        width: '8%',
+        render: (value: string) =>
+          value ? (
+            <span className="font-mono text-xs text-gray-300">{value}</span>
+          ) : (
+            <span className="text-gray-500">-</span>
+          ),
+      } as any
+    );
+  }
+
   const filterOptions = [
     {
       key: 'status',

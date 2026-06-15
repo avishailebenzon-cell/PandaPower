@@ -142,6 +142,7 @@ export interface JobResponse {
   job_number?: string;          // internal PL-#### code for placement jobs
   job_code?: string;            // display code: PL-#### or #deal_id
   placement_contact_phone?: string;
+  placement_external_ref?: string;  // agency's external job id (e.g. 76047697)
   contact_person?: string;
   sync_status: string;
   last_synced?: string;
