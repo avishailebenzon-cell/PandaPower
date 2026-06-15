@@ -1,0 +1,42 @@
+name: Candidate Form → Pipedrive (manual)
+
+# Manually trigger the candidate-form → Pipedrive contact-note sync.
+# Go to the repo's "Actions" tab → this workflow → "Run workflow",
+# set how many of the newest rows to process (default 10), and run.
+#
+# Prerequisites (otherwise the run returns "skipped"):
+#   • Backend deployed on Render with the latest code
+#   • system_settings.candidate_form.csv_url set to the published-CSV URL
+#   • Pipedrive API credit available
+#
+# Optional: set a repo variable BACKEND_URL to override the default host.
+
+on:
+  workflow_dispatch:
+    inputs:
+      newest:
+        description: 'Process only the newest N rows (0 = process all new rows since last cursor)'
+        required: true
+        default: '10'
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call sync endpoint
+        env:
+          BACKEND_URL: ${{ vars.BACKEND_URL || 'https://pandapower-backend.onrender.com' }}
+          NEWEST: ${{ github.event.inputs.newest }}
+        run: |
+          echo "Triggering candidate-form sync on $BACKEND_URL (newest=$NEWEST)"
+          http_code=$(curl -sS -o response.json -w '%{http_code}' \
+            -X POST "$BACKEND_URL/admin/candidate-form/run" \
+            -H 'Content-Type: application/json' \
+            -d "{\"newest\": $NEWEST}")
+          echo "HTTP $http_code"
+          echo "----- response -----"
+          cat response.json || true
+          echo
+          echo "--------------------"
+          # Fail the job on a non-2xx so the run is clearly red in the UI.
+          [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]
