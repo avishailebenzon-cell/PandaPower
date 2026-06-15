@@ -17,6 +17,7 @@ ALTER TABLE jobs
   ADD COLUMN IF NOT EXISTS placement_contact_name TEXT,        -- agency contact pulled from the body
   ADD COLUMN IF NOT EXISTS placement_contact_phone TEXT,       -- agency contact phone pulled from the body
   ADD COLUMN IF NOT EXISTS placement_outlook_message_id TEXT,  -- dedup: one job per source email
+  ADD COLUMN IF NOT EXISTS placement_external_ref TEXT,        -- agency's job id (e.g. 76047697) — dedup across re-forwards
   ADD COLUMN IF NOT EXISTS job_number TEXT;                    -- internal id (PL-####) used in place of a deal id
 
 -- Each source email yields exactly one placement job (idempotent re-scan).
@@ -27,6 +28,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_jobs_placement_msg
 -- Preserve uniqueness of pipedrive_deal_id only when it is present (the old
 -- column-level UNIQUE NOT NULL would otherwise reject multiple NULL deal ids on
 -- some engines / future tightening).
+-- The original uniqueness on pipedrive_deal_id is a table CONSTRAINT, not a
+-- bare index, so it must be dropped as a constraint.
+ALTER TABLE jobs DROP CONSTRAINT IF EXISTS jobs_pipedrive_deal_id_key;
 DROP INDEX IF EXISTS jobs_pipedrive_deal_id_key;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_jobs_deal_id
   ON jobs (pipedrive_deal_id)

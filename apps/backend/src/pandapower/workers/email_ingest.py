@@ -459,13 +459,28 @@ class EmailIngestWorker:
             # Placement-job emails (recruitment agencies, e.g. @adamtotal.co.il):
             # these describe a vacancy at a CLIENT, not a candidate CV. Parse the
             # body into an internal job and skip the CV pipeline entirely.
-            if is_placement_sender(email_from):
+            # Detect placement emails by the agency domain in the sender OR in the
+            # body (forwarded "FW:" emails carry the original mailer@agency line in
+            # bodyPreview, so this cheap check catches them before any fetch).
+            if is_placement_sender(email_from, body_text):
+                # The incremental scan only carries bodyPreview (~255 chars),
+                # which is too short to parse a full vacancy. Fetch the complete
+                # body for placement emails.
+                placement_body = body_text
+                try:
+                    raw = await self.azure.get_message_raw(message_id)
+                    full_body = (raw.get("body") or {}).get("content") or ""
+                    if full_body:
+                        placement_body = full_body
+                except Exception as e:
+                    logger.warning(f"Could not fetch full body for placement email {message_id}: {e}")
+
                 placement = await create_placement_job_from_email(
                     self.supabase,
                     message_id=message_id,
                     email_from=email_from,
                     subject=subject,
-                    body=body_text,
+                    body=placement_body,
                     received_at=received_datetime,
                 )
                 await self.supabase.table("email_intake_log").update(

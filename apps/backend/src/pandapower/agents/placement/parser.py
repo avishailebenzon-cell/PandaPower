@@ -8,6 +8,7 @@ fields rather than brittle regex, so new agency formats keep working.
 """
 
 import asyncio
+import html as _html
 import json
 import logging
 import re
@@ -77,23 +78,136 @@ def _call_claude(subject: str, body: str) -> str:
     return resp.content[0].text if resp.content else ""
 
 
+def strip_html(body: str) -> str:
+    """Convert an HTML email body to clean plain text."""
+    if not body:
+        return ""
+    t = re.sub(r"<(style|script)[^>]*>.*?</\1>", " ", body, flags=re.S | re.I)
+    t = re.sub(r"<[^>]+>", "\n", t)
+    t = _html.unescape(t)
+    t = re.sub(r"[ \t]+", " ", t)
+    t = re.sub(r"\n\s*\n+", "\n", t)
+    return t.strip()
+
+
+def _clean_title(raw: str) -> str:
+    """Strip 'FW:' prefix and trailing job-number/code noise from a subject."""
+    t = re.sub(r"^\s*(FW|Fwd|RE)\s*:\s*", "", raw or "", flags=re.I).strip()
+    # Drop trailing "(76044340) - 3149 (3140)" style codes.
+    t = re.sub(r"\s*\(\s*\d[\d\-]*\s*\).*$", "", t).strip()
+    t = re.sub(r"\s*[-–]\s*\d[\d\-]*\s*$", "", t).strip()
+    return t
+
+
+_LOC_STOPWORDS = ("נשמח", "אנחנו", "אני", "קו\"ח", 'קו"ח', "מחפשים", "למשרה", "תודה")
+
+
+def _clean_location(raw: str) -> Optional[str]:
+    """Keep just the city: trim at the first stop-word, cap at 3 words."""
+    s = re.split(r"[,•:]", raw.strip(" :•-"))[0].strip()
+    words = s.split()
+    out = []
+    for w in words:
+        if any(sw in w for sw in _LOC_STOPWORDS):
+            break
+        out.append(w)
+        if len(out) >= 3:
+            break
+    loc = " ".join(out).strip()
+    return loc or None
+
+
+def _section(text: str, start: str, ends: list[str]) -> Optional[str]:
+    """Return the block between heading `start` and the next of `ends`."""
+    si = text.find(start)
+    if si == -1:
+        return None
+    si += len(start)
+    end_positions = [text.find(e, si) for e in ends]
+    end_positions = [p for p in end_positions if p != -1]
+    ei = min(end_positions) if end_positions else len(text)
+    block = text[si:ei].strip(" \n:•-")
+    return block.strip() or None
+
+
+def heuristic_parse(subject: str, body: str) -> Optional[dict[str, Any]]:
+    """Parse the consistent agency (adamtotal) layout without an LLM. Used as a
+    fallback when Claude is unavailable (e.g. account usage cap) or fails."""
+    text = strip_html(body)
+    if not text:
+        return None
+
+    # Title: prefer the inner "Subject:" line of a forwarded email, else the
+    # email subject. Both get the same code-stripping cleanup.
+    inner_subj = None
+    m = re.search(r"Subject:\s*\n?([^\n]+)", text)
+    if m:
+        inner_subj = m.group(1).strip()
+    title = _clean_title(inner_subj or subject or "")
+    if not title:
+        return None
+
+    # Contact name from the forwarded "From: <name> <email>" header.
+    contact_name = None
+    fm = re.search(r"From:\s*\n?([^\n<]+?)\s*<", text)
+    if fm:
+        contact_name = fm.group(1).strip() or None
+
+    # Location: "מיקום <X>", else "משרה בהשמה ב<city>". A city is 1-3 words, so
+    # truncate at the first stop-word/punctuation to avoid swallowing the next
+    # sentence when the layout puts the city inline.
+    location = None
+    lm = re.search(r"מיקום\s+([^\n]+)", text)
+    if not lm:
+        lm = re.search(r"משרה\s+בהשמה\s+ב?([^\n]+)", text)
+    if lm:
+        location = _clean_location(lm.group(1))
+
+    description = _section(text, "קצת על התפקיד", ["מה אנחנו מחפשים", "אולי יעניין"])
+    qualifications = _section(text, "מה אנחנו מחפשים", ["אולי יעניין", "תודה רבה"])
+
+    pm = _PHONE_RE.search(text)
+    phone = _normalize_phone(pm.group(0)) if pm else None
+
+    # External ref: the (NNNNNNNN) code in the subject.
+    rm = re.search(r"\((\d{5,})\)", inner_subj or subject or "")
+    external_ref = rm.group(1) if rm else None
+
+    return {
+        "job_title": title,
+        "job_description": description,
+        "job_qualifications": qualifications,
+        "job_location": location,
+        "job_security_clearance": None,
+        "contact_name": contact_name,
+        "contact_phone": phone,
+        "external_job_ref": external_ref,
+    }
+
+
 async def parse_placement_email(subject: str, body: str) -> Optional[dict[str, Any]]:
     """Return structured job fields, or None if parsing fails / yields no title.
 
-    Runs the (synchronous) Anthropic client in a thread so it does not block the
-    email-ingest event loop.
+    Tries Haiku first (handles novel agency formats); on any failure — including
+    the account-level Anthropic usage cap — falls back to a deterministic
+    heuristic parser tuned to the consistent agency layout. Runs the synchronous
+    Anthropic client in a thread so it does not block the ingest event loop.
     """
+    data: Optional[dict[str, Any]] = None
     try:
         raw = await asyncio.to_thread(_call_claude, subject, body)
         data = json.loads(_strip_fences(raw))
     except Exception as e:
-        logger.error(f"Placement email parse failed: {e}", exc_info=True)
+        logger.warning(f"Placement LLM parse unavailable ({e}); using heuristic fallback")
+
+    if not data or not (data.get("job_title") or "").strip():
+        data = heuristic_parse(subject, body)
+
+    if not data or not (data.get("job_title") or "").strip():
+        logger.warning("Placement email produced no job_title (LLM + heuristic); skipping")
         return None
 
     title = (data.get("job_title") or "").strip()
-    if not title:
-        logger.warning("Placement email parsed but produced no job_title; skipping")
-        return None
 
     # Phone fallback: if Claude missed it, grab the first Israeli number in body.
     phone = _normalize_phone(data.get("contact_phone"))

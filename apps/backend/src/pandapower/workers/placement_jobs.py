@@ -9,6 +9,7 @@ existing Carmit routing task (workers/tasks.py) picks it up automatically.
 """
 
 import logging
+import re
 from typing import Any, Optional
 
 from pandapower.agents.placement.parser import parse_placement_email
@@ -16,18 +17,39 @@ from pandapower.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 
-def is_placement_sender(email_from: Optional[str]) -> bool:
-    """True if the sender address belongs to a configured placement-agency domain."""
-    if not email_from:
-        return False
-    addr = email_from.strip().lower()
-    domains = [
+
+def _placement_domains() -> list[str]:
+    return [
         d.strip().lower()
         for d in (settings.PLACEMENT_JOB_SENDER_DOMAINS or "").split(",")
         if d.strip()
     ]
+
+
+def _addr_matches(addr: str, domains: list[str]) -> bool:
+    addr = addr.strip().lower()
     return any(addr.endswith("@" + d) or addr.endswith("." + d) for d in domains)
+
+
+def placement_source_address(email_from: Optional[str], body: Optional[str]) -> Optional[str]:
+    """The agency address driving this email — either the direct sender or, for a
+    forwarded email, the first placement-domain address found in the body."""
+    domains = _placement_domains()
+    if email_from and _addr_matches(email_from, domains):
+        return email_from.strip().lower()
+    for m in _EMAIL_RE.findall(body or ""):
+        if _addr_matches(m, domains):
+            return m.strip().lower()
+    return None
+
+
+def is_placement_sender(email_from: Optional[str], body: Optional[str] = None) -> bool:
+    """True if this is a placement-agency vacancy email — matched either by the
+    sender address (direct) or by a placement-domain address in the body (when
+    the email was forwarded into the mailbox, e.g. 'FW: ...')."""
+    return placement_source_address(email_from, body) is not None
 
 
 async def _next_placement_job_number(supabase: Any) -> str:
@@ -81,7 +103,26 @@ async def create_placement_job_from_email(
     if not parsed:
         return {"created": False, "job_id": None, "reason": "parse_failed"}
 
+    # Dedup across re-forwards of the same vacancy: if the agency's external job
+    # id was already ingested, skip (a single job may be forwarded several times).
+    external_ref = parsed.get("external_job_ref")
+    if external_ref:
+        try:
+            dup = await (
+                supabase.table("jobs")
+                .select("id")
+                .eq("placement_external_ref", external_ref)
+                .limit(1)
+                .execute()
+            )
+            if dup.data:
+                return {"created": False, "job_id": dup.data[0]["id"], "reason": "duplicate_ref"}
+        except Exception as e:
+            logger.debug(f"placement external-ref dedup check failed (proceeding): {e}")
+
     job_number = await _next_placement_job_number(supabase)
+    # Prefer the real agency address (handles forwarded emails) over the sender.
+    source_email = placement_source_address(email_from, body) or email_from
 
     row = {
         "source": "email_placement",
@@ -94,12 +135,12 @@ async def create_placement_job_from_email(
         "job_location": parsed["job_location"],
         "job_security_clearance": parsed["job_security_clearance"],
         "status": "open",
-        "is_active": True,
         "assigned_agent_code": None,  # Carmit routing task will assign
-        "placement_source_email": email_from,
+        "placement_source_email": source_email,
         "placement_contact_name": parsed["contact_name"],
         "placement_contact_phone": parsed["contact_phone"],
         "placement_outlook_message_id": message_id,
+        "placement_external_ref": external_ref,
         "organization_name": parsed["contact_name"],  # agency as the "client" label
         "last_modified_by": "email_placement_ingest",
     }
