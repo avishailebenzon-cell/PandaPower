@@ -301,3 +301,21 @@ export async function fetchJobs(
   const response = await fetch(`${API_BASE}/admin/pipedrive/data/jobs?${params}`);
   return handleApiResponse<PaginatedResponse<JobResponse>>(response, 'Failed to fetch jobs');
 }
+
+export interface PlacementRunResult {
+  status: string;
+  scanned: number;
+  placement_emails_found: number;
+  processed: number;
+  total_placement_jobs: number | null;
+}
+
+/** Trigger on-demand ingestion of placement ("השמה") jobs from agency emails. */
+export async function runPlacementIngest(newest = 30): Promise<PlacementRunResult> {
+  const response = await fetch(`${API_BASE}/admin/placement-jobs/run-now`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ newest }),
+  });
+  return handleApiResponse<PlacementRunResult>(response, 'Failed to run placement ingest');
+}

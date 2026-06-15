@@ -72,6 +72,63 @@ async def _next_placement_job_number(supabase: Any) -> str:
     return "PL-0001"
 
 
+async def _notify_new_placement_job(job_number: str, parsed: dict, source_email: Optional[str]) -> None:
+    """Best-effort admin notification that a new placement vacancy was ingested.
+    Uses a job-unique key so each new job notifies (no cooldown suppression).
+    Never raises — a notification failure must not break ingestion."""
+    try:
+        from pandapower.integrations.alert_service import alert_admin
+
+        loc = parsed.get("job_location") or "—"
+        contact = parsed.get("contact_name") or "—"
+        phone = parsed.get("contact_phone") or "—"
+        await alert_admin(
+            key=f"placement-job-{job_number}",
+            subject=f"🔴 משרת השמה חדשה נקלטה: {parsed.get('job_title')}",
+            details=(
+                f"קוד: {job_number}\n"
+                f"משרה: {parsed.get('job_title')}\n"
+                f"מיקום: {loc}\n"
+                f"חברת השמה: {source_email or '—'}\n"
+                f"איש קשר: {contact} ({phone})\n\n"
+                f"המשרה נכנסה למערכת כמשרת השמה (לא סונכרנה לפייפדרייב) וממתינה לניתוב לסוכן."
+            ),
+            severity="info",
+            include_traceback=False,
+        )
+    except Exception as e:
+        logger.debug(f"placement new-job notification failed (ignored): {e}")
+
+
+# Map the existing-job column → the parsed-dict key, for backfill.
+_BACKFILL_FIELDS = {
+    "job_description": "job_description",
+    "job_qualifications": "job_qualifications",
+    "job_location": "job_location",
+    "job_security_clearance": "job_security_clearance",
+    "placement_contact_name": "contact_name",
+    "placement_contact_phone": "contact_phone",
+}
+
+
+async def _backfill_existing(supabase: Any, existing: dict, parsed: dict) -> str:
+    """Fill columns the existing placement job is missing from a later forward.
+    Returns 'duplicate_ref_backfilled' if anything was written, else 'duplicate_ref'."""
+    updates = {}
+    for col, pkey in _BACKFILL_FIELDS.items():
+        if not existing.get(col) and parsed.get(pkey):
+            updates[col] = parsed[pkey]
+    if not updates:
+        return "duplicate_ref"
+    try:
+        await supabase.table("jobs").update(updates).eq("id", existing["id"]).execute()
+        logger.info(f"Backfilled placement job {existing['id']} fields: {list(updates)}")
+        return "duplicate_ref_backfilled"
+    except Exception as e:
+        logger.debug(f"placement backfill failed: {e}")
+        return "duplicate_ref"
+
+
 async def create_placement_job_from_email(
     supabase: Any,
     *,
@@ -104,19 +161,25 @@ async def create_placement_job_from_email(
         return {"created": False, "job_id": None, "reason": "parse_failed"}
 
     # Dedup across re-forwards of the same vacancy: if the agency's external job
-    # id was already ingested, skip (a single job may be forwarded several times).
+    # id was already ingested, don't create a second job — but backfill any
+    # fields the earlier copy was missing (a later forward may parse cleaner).
     external_ref = parsed.get("external_job_ref")
     if external_ref:
         try:
             dup = await (
                 supabase.table("jobs")
-                .select("id")
+                .select(
+                    "id, job_description, job_qualifications, job_location, "
+                    "job_security_clearance, placement_contact_name, placement_contact_phone"
+                )
                 .eq("placement_external_ref", external_ref)
                 .limit(1)
                 .execute()
             )
             if dup.data:
-                return {"created": False, "job_id": dup.data[0]["id"], "reason": "duplicate_ref"}
+                existing = dup.data[0]
+                reason = await _backfill_existing(supabase, existing, parsed)
+                return {"created": False, "job_id": existing["id"], "reason": reason}
         except Exception as e:
             logger.debug(f"placement external-ref dedup check failed (proceeding): {e}")
 
@@ -152,6 +215,7 @@ async def create_placement_job_from_email(
             f"Created placement job {job_number} ({parsed['job_title']!r}) "
             f"from {email_from} [msg {message_id}]"
         )
+        await _notify_new_placement_job(job_number, parsed, source_email)
         return {"created": True, "job_id": job_id, "reason": "created"}
     except Exception as e:
         # Unique index race → another run inserted it first; treat as duplicate.

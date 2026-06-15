@@ -166,6 +166,16 @@ def heuristic_parse(subject: str, body: str) -> Optional[dict[str, Any]]:
     description = _section(text, "קצת על התפקיד", ["מה אנחנו מחפשים", "אולי יעניין"])
     qualifications = _section(text, "מה אנחנו מחפשים", ["אולי יעניין", "תודה רבה"])
 
+    # Security clearance: explicit "סיווג ..." mention, else a "רמה N" reference.
+    clearance = None
+    cm = re.search(r"סיווג\s*(?:ביטחוני|בטחוני)?\s*[:\-]?\s*([^\n,.]{1,40})", text)
+    if cm and cm.group(1).strip():
+        clearance = cm.group(1).strip(" :•-") or None
+    if not clearance:
+        rm2 = re.search(r"(רמה\s*[123]\b(?:\s*\+?\s*שוס)?)", text)
+        if rm2:
+            clearance = rm2.group(1).strip()
+
     pm = _PHONE_RE.search(text)
     phone = _normalize_phone(pm.group(0)) if pm else None
 
@@ -178,7 +188,7 @@ def heuristic_parse(subject: str, body: str) -> Optional[dict[str, Any]]:
         "job_description": description,
         "job_qualifications": qualifications,
         "job_location": location,
-        "job_security_clearance": None,
+        "job_security_clearance": clearance,
         "contact_name": contact_name,
         "contact_phone": phone,
         "external_job_ref": external_ref,

@@ -4,11 +4,11 @@
  */
 
 import React, { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { PipedriveDataTable } from '@/components/PipedriveDataTable';
 import { DataFilterPanel } from '@/components/DataFilterPanel';
 import { SyncStatusIndicator } from '@/components/SyncStatusIndicator';
-import { fetchJobs, JobResponse } from '@/api/pipedrive-data';
+import { fetchJobs, runPlacementIngest, JobResponse } from '@/api/pipedrive-data';
 
 export function JobsListPage() {
   const [page, setPage] = useState(1);
@@ -19,8 +19,28 @@ export function JobsListPage() {
   const [sortBy, setSortBy] = useState('title');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [groupBy, setGroupBy] = useState<'' | 'company' | 'contact_person' | 'priority_label'>('');
+  const [placementRunning, setPlacementRunning] = useState(false);
+  const [placementMsg, setPlacementMsg] = useState<string | null>(null);
 
+  const queryClient = useQueryClient();
   const isGrouped = groupBy !== '';
+
+  const handleRunPlacement = async () => {
+    setPlacementRunning(true);
+    setPlacementMsg(null);
+    try {
+      const r = await runPlacementIngest(30);
+      setPlacementMsg(
+        `נסרקו ${r.scanned} מיילים, נמצאו ${r.placement_emails_found} משרות השמה. ` +
+          `סה"כ משרות השמה במערכת: ${r.total_placement_jobs ?? '—'}.`
+      );
+      queryClient.invalidateQueries({ queryKey: ['pipedrive-jobs'] });
+    } catch (e) {
+      setPlacementMsg(`שגיאה בקליטה: ${(e as Error).message}`);
+    } finally {
+      setPlacementRunning(false);
+    }
+  };
 
   const { data, isLoading, error } = useQuery({
     queryKey: [
@@ -284,7 +304,23 @@ export function JobsListPage() {
         >
           🔴 משרות השמה בלבד
         </button>
+
+        <button
+          type="button"
+          onClick={handleRunPlacement}
+          disabled={placementRunning}
+          className="px-3 py-2 rounded-lg text-sm font-semibold border bg-gray-800 border-gray-700 text-gray-300 hover:border-amber-500/60 disabled:opacity-50"
+          title="סרוק עכשיו את המיילים האחרונים וקלוט משרות השמה חדשות"
+        >
+          {placementRunning ? '⏳ סורק…' : '⟳ סרוק משרות השמה עכשיו'}
+        </button>
       </div>
+
+      {placementMsg && (
+        <div className="mb-4 text-sm text-amber-300 bg-amber-900/20 border border-amber-700/40 rounded-lg px-4 py-2">
+          {placementMsg}
+        </div>
+      )}
 
       {/* Filters */}
       <div className="mb-6">
