@@ -299,7 +299,7 @@ class RecruiterChatEngine:
                 "carmit_review_notes, carmit_blocked_reason, "
                 "candidates(name, clearance_level), "
                 "jobs(job_title, job_description, job_qualifications, "
-                "job_location, job_security_clearance, organization_name)"
+                "job_location, job_security_clearance, organization_name, is_placement)"
             ).eq("id", str(match_id)).limit(1).execute()
             if res.data:
                 row = res.data[0]
@@ -357,6 +357,18 @@ class RecruiterChatEngine:
             lines.append(f"תיאור המשרה: {str(desc)[:600]}")
         if quals:
             lines.append(f"דרישות: {str(quals)[:600]}")
+
+        # Placement ("השמה") job: the hired candidate becomes the CLIENT's
+        # employee, not a PandaTech employee. Tal MUST disclose this to the
+        # candidate (it changes who they'd be employed by). For regular jobs this
+        # block is absent and Tal says nothing different.
+        is_placement = bool(field("is_placement", job, "is_placement"))
+        if is_placement:
+            lines.append(
+                "סוג המשרה: משרת השמה. ⚠️ הנחיה: עליך לציין למפורש בפני המועמד שמדובר "
+                "במשרת השמה — כלומר אם יתקבל, הוא יהיה עובד של הלקוח ולא עובד של פנדה-טק. "
+                "ציין זאת בבירור ובטבעיות כחלק מהצגת המשרה (במשרות רגילות אין צורך לומר דבר כזה)."
+            )
 
         # The gaps Tal must clarify with the candidate.
         gaps = []

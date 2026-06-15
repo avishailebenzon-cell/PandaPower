@@ -301,6 +301,14 @@ export function RecruiterMatchesPanel({
       <td className="px-4 py-3 text-gray-300">
         <div className="flex flex-col gap-1.5">
           <span>{m.jobTitle}</span>
+          {m.isPlacement && (
+            <span
+              className="inline-flex items-center gap-1 self-start px-2 py-0.5 rounded-full text-[11px] font-bold text-red-200 bg-red-900/50 border border-red-500/40 animate-pulse"
+              title="משרת השמה — אם יתקבל, העובד יהיה עובד של הלקוח ולא של פנדה-טק"
+            >
+              🔴 השמה{m.jobNumber ? ` ${m.jobNumber}` : ""}
+            </span>
+          )}
           <GeoMismatchBadge
             mismatch={m.geographicMismatch}
             reason={m.geographicMismatchReason}

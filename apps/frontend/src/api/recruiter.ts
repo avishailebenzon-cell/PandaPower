@@ -25,6 +25,10 @@ export interface Match {
   isStarred?: boolean;
   /** Candidate is a current company employee — shown tagged, never sent to Tal. */
   isCompanyEmployee?: boolean;
+  /** Placement ("השמה") job — hired candidate becomes the client's employee, not PandaTech's. */
+  isPlacement?: boolean;
+  /** Internal PL-#### code for placement jobs. */
+  jobNumber?: string;
 }
 
 export interface StatusMetrics {
@@ -163,6 +167,8 @@ export async function fetchRecruiterMatches(
       geographicMismatchReason: match.geographic_mismatch_reason ?? undefined,
       isStarred: match.is_starred ?? false,
       isCompanyEmployee: match.is_company_employee ?? false,
+      isPlacement: match.is_placement ?? false,
+      jobNumber: match.job_number ?? undefined,
     })),
     total: data.total,
     page: data.page,

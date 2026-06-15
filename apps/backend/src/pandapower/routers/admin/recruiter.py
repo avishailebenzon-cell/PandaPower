@@ -98,6 +98,11 @@ class MatchInfo(BaseModel):
     # "עובד חברה"). Such matches are shown in Carmit (tagged) but never sent to
     # Tal — we don't approach our own staff about company jobs.
     is_company_employee: bool = False
+    # Placement ("השמה") job — ingested from a recruitment-agency email; the hired
+    # candidate becomes the CLIENT's employee, not PandaTech's. Shown with a
+    # blinking "השמה" badge in every recruiter queue.
+    is_placement: bool = False
+    job_number: Optional[str] = None  # internal PL-#### code for placement jobs
 
 
 class MatchDetailInfo(BaseModel):
@@ -318,7 +323,7 @@ async def get_recruiter_matches(
         query = supabase.table("matches").select(
             "id, candidate_id, job_id, current_state, match_score, created_at, updated_at, "
             "geographic_mismatch, geographic_mismatch_reason, is_starred, is_company_employee, "
-            "candidates(name), jobs(job_title, organization_name, contact_person_name, pipedrive_deal_id)"
+            "candidates(name), jobs(job_title, organization_name, contact_person_name, pipedrive_deal_id, is_placement, job_number)"
         ).in_("current_state", states).eq("is_valid", True)
         if favorites_only:
             query = query.eq("is_starred", True)
@@ -400,6 +405,8 @@ async def get_recruiter_matches(
                     geographic_mismatch_reason=row.get("geographic_mismatch_reason"),
                     is_starred=bool(row.get("is_starred")),
                     is_company_employee=bool(row.get("is_company_employee")),
+                    is_placement=bool(job.get("is_placement")) if isinstance(job, dict) else False,
+                    job_number=(job.get("job_number") if isinstance(job, dict) else None),
                 )
                 matches.append(match_info)
 
