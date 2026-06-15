@@ -206,7 +206,7 @@ async def _fetch_contacts_by_status(
 @router.get("/employees", response_model=PaginatedResponse)
 async def get_employees(
     page: int = Query(1, ge=1),
-    limit: int = Query(50, ge=1, le=100),
+    limit: int = Query(50, ge=1, le=1000),
     search: Optional[str] = None,
     sort_by: str = Query("name", regex="^(name|email|created_at)$"),
     sort_order: str = Query("asc", regex="^(asc|desc)$"),
@@ -225,7 +225,7 @@ async def get_employees(
 @router.get("/clients", response_model=PaginatedResponse)
 async def get_clients(
     page: int = Query(1, ge=1),
-    limit: int = Query(50, ge=1, le=100),
+    limit: int = Query(50, ge=1, le=1000),
     search: Optional[str] = None,
     status: Optional[str] = None,
     sort_by: str = Query("name", regex="^(name|email|created_at)$"),
@@ -245,7 +245,7 @@ async def get_clients(
 @router.get("/potential-clients", response_model=PaginatedResponse)
 async def get_potential_clients(
     page: int = Query(1, ge=1),
-    limit: int = Query(50, ge=1, le=100),
+    limit: int = Query(50, ge=1, le=1000),
     search: Optional[str] = None,
     interest_level: Optional[str] = None,
     sort_by: str = Query("name", regex="^(name|email|created_at)$"),
@@ -265,7 +265,7 @@ async def get_potential_clients(
 @router.get("/organizations", response_model=PaginatedResponse)
 async def get_organizations(
     page: int = Query(1, ge=1),
-    limit: int = Query(50, ge=1, le=100),
+    limit: int = Query(50, ge=1, le=1000),
     search: Optional[str] = None,
     industry: Optional[str] = None,
     sort_by: str = Query("name", regex="^(name|created_at)$"),
@@ -368,7 +368,7 @@ PRIORITY_LABELS = {
 @router.get("/jobs", response_model=PaginatedResponse)
 async def get_jobs(
     page: int = Query(1, ge=1),
-    limit: int = Query(50, ge=1, le=100),
+    limit: int = Query(50, ge=1, le=1000),
     search: Optional[str] = None,
     status: Optional[str] = None,
     sort_by: str = Query("title", regex="^(title|job_title|created_at|posted_date|priority|deadline)$"),
